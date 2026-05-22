@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
 
         # --- Tab 1: Képböngésző ---
         self._image_browser = ImageBrowserPanel(config=self._config)
+        self._image_browser.person_data_changed.connect(self._refresh_persons)
         self._tabs.addTab(self._image_browser, "🗂 Képböngésző")
 
         # --- Tab 2: Kollázs nézet ---
@@ -562,6 +563,7 @@ class MainWindow(QMainWindow):
             IdentityService(session).rename_person(self._current_person_id, new_name)
 
         self._refresh_persons()
+        self._image_browser._reload_current_face_data()
 
     @Slot()
     def _on_merge(self) -> None:
@@ -595,6 +597,7 @@ class MainWindow(QMainWindow):
         self._cluster_panel.clear()
         self._preview_panel.clear()
         self._refresh_persons()
+        self._image_browser._reload_current_face_data()
 
     @Slot()
     def _on_delete_person(self) -> None:
@@ -628,6 +631,7 @@ class MainWindow(QMainWindow):
         self._merge_btn.setEnabled(False)
         self._person_info_btn.setEnabled(False)
         self._refresh_persons()
+        self._image_browser._reload_current_face_data()
         log.info("Person '%s' deleted.", name)
 
     @Slot()

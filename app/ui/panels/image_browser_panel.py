@@ -56,26 +56,71 @@ def _bgr_to_qpixmap(img_bgr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
+def _get_pil_font(size: int):
+    """Return a truetype font that supports UTF-8; falls back to PIL default."""
+    import sys
+    from PIL import ImageFont
+
+    if sys.platform == "darwin":
+        candidates = [
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Arial.ttf",
+        ]
+    elif sys.platform == "win32":
+        candidates = [
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/tahoma.ttf",
+        ]
+    else:
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
 def _draw_faces(
     img_bgr: np.ndarray,
     faces: List[_FaceData],
     selected_id: Optional[int],
 ) -> np.ndarray:
+    from PIL import Image as PILImage, ImageDraw
+
     img = img_bgr.copy()
-    for face_id, x, y, w, h, person_name, _ in faces:
+
+    # Draw rectangles with OpenCV (fast, no encoding issues)
+    for face_id, x, y, w, h, _, _ in faces:
         selected = face_id == selected_id
         color = (50, 220, 50) if selected else (180, 180, 180)
         thickness = 3 if selected else 2
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
 
+    # Use PIL for text so UTF-8 / accented characters render correctly
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    pil_img = PILImage.fromarray(img_rgb)
+    draw = ImageDraw.Draw(pil_img)
+
+    for face_id, x, y, w, h, person_name, _ in faces:
+        selected = face_id == selected_id
+        color_rgb = (50, 220, 50) if selected else (180, 180, 180)
         name = person_name or "?"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = max(0.4, min(1.1, w / 80))
-        (tw, th), bl = cv2.getTextSize(name, font, scale, 2)
+        font_size = max(12, min(28, int(w / 5)))
+        font = _get_pil_font(font_size)
+
+        bbox = draw.textbbox((0, 0), name, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
         ty = max(y - 6, th + 6)
-        cv2.rectangle(img, (x, ty - th - bl - 4), (x + tw + 6, ty + 2), (20, 20, 20), -1)
-        cv2.putText(img, name, (x + 3, ty - bl), font, scale, color, 2)
-    return img
+
+        draw.rectangle([x, ty - th - 4, x + tw + 6, ty + 2], fill=(20, 20, 20))
+        draw.text((x + 3, ty - th - 2), name, font=font, fill=color_rgb)
+
+    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
 def _hline() -> QFrame:
@@ -192,6 +237,8 @@ class _DrawableImageLabel(QLabel):
 class ImageBrowserPanel(QWidget):
     """Browse all scanned images; click a face to identify or categorise it."""
 
+    person_data_changed = Signal()  # emitted after any rename / assign / create
+
     def __init__(self, config=None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._config = config            # AppConfig | None
@@ -206,6 +253,7 @@ class ImageBrowserPanel(QWidget):
         self._detection_done: bool = False             # whether current image was processed
         self._orig_img_bgr: Optional[np.ndarray] = None
         self._full_pixmap: Optional[QPixmap] = None
+        self._recent_assignment_person_ids: List[int] = []
         # Fullscreen state
         self._fs_hidden_widgets: List[QWidget] = []
         self._fs_was_maximized: bool = False
@@ -439,7 +487,6 @@ class ImageBrowserPanel(QWidget):
         self._current_index = min(self._current_index, count - 1)
         self._load_current_image()
         self._update_nav_buttons()
-        self._reload_persons_combo()
 
     # ──────────────────────────────────────────────────────────────────
     # Navigation
@@ -516,6 +563,7 @@ class ImageBrowserPanel(QWidget):
         self._orig_img_bgr = img_bgr
         self._redraw_faces()
         self._clear_face_panel()
+        self._reload_persons_combo()
 
     def _update_scaled_pixmap(self) -> None:
         if self._full_pixmap is None:
@@ -594,7 +642,6 @@ class ImageBrowserPanel(QWidget):
             self._update_face_bbox(edited_id, ix, iy, iw, ih)
             self._editing_face_id = None
             self._draw_hint.setText(self._HINT_ADD)
-            self._draw_mode_btn.setChecked(False)
             self._reload_current_face_data()
             self._selected_face_id = edited_id
             self._redraw_faces()
@@ -603,7 +650,6 @@ class ImageBrowserPanel(QWidget):
             # Add mode — create new manual face
             img_id = self._image_ids[self._current_index]
             new_face_id = self._save_manual_face(img_id, ix, iy, iw, ih)
-            self._draw_mode_btn.setChecked(False)
             self._reload_current_face_data()
             if new_face_id is not None:
                 self._selected_face_id = new_face_id
@@ -887,6 +933,7 @@ class ImageBrowserPanel(QWidget):
         log.info("Person %d renamed to %r", person_id, new_name)
         self._reload_current_face_data()
         self._reload_persons_combo()
+        self.person_data_changed.emit()
 
     # ──────────────────────────────────────────────────────────────────
     # Person combo
@@ -896,8 +943,55 @@ class ImageBrowserPanel(QWidget):
         self._person_combo.clear()
         with session_scope() as session:
             persons = session.query(Person).order_by(Person.name).all()
+            recent_rank = self._recent_person_rank(session)
+            persons.sort(
+                key=lambda p: (
+                    recent_rank.get(p.id, len(recent_rank) + 10_000),
+                    p.name.casefold(),
+                )
+            )
             for p in persons:
                 self._person_combo.addItem(p.name, userData=p.id)
+
+    def _recent_person_rank(self, session) -> dict[int, int]:
+        """Rank assignment targets by recent use and nearby previous images."""
+        rank: dict[int, int] = {}
+
+        for person_id in self._recent_assignment_person_ids:
+            if person_id not in rank:
+                rank[person_id] = len(rank)
+
+        if self._current_index <= 0 or not self._image_ids:
+            return rank
+
+        window_start = max(0, self._current_index - 50)
+        nearby_image_ids = self._image_ids[window_start:self._current_index]
+        if not nearby_image_ids:
+            return rank
+
+        rows = (
+            session.query(Face.image_id, Face.person_id)
+            .filter(Face.image_id.in_(nearby_image_ids))
+            .filter(Face.person_id.isnot(None))
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .all()
+        )
+        persons_by_image: dict[int, set[int]] = {}
+        for image_id, person_id in rows:
+            if person_id is not None:
+                persons_by_image.setdefault(image_id, set()).add(person_id)
+
+        for image_id in reversed(nearby_image_ids):
+            for person_id in sorted(persons_by_image.get(image_id, set())):
+                if person_id not in rank:
+                    rank[person_id] = len(rank)
+        return rank
+
+    def _remember_recent_person(self, person_id: int) -> None:
+        self._recent_assignment_person_ids = [
+            person_id,
+            *(pid for pid in self._recent_assignment_person_ids if pid != person_id),
+        ][:20]
 
     # ──────────────────────────────────────────────────────────────────
     # Assign / create actions
@@ -911,8 +1005,10 @@ class ImageBrowserPanel(QWidget):
             return
         with session_scope() as session:
             IdentityService(session).reassign_face(self._selected_face_id, person_id)
+        self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
+        self.person_data_changed.emit()
 
     def _on_create_and_assign(self) -> None:
         if self._selected_face_id is None:
@@ -927,9 +1023,11 @@ class ImageBrowserPanel(QWidget):
             session.flush()
             person_id = person.id
             IdentityService(session).reassign_face(self._selected_face_id, person_id)
+        self._remember_recent_person(person_id)
         self._new_name_edit.clear()
         self._reload_current_face_data()
         self._reload_persons_combo()
+        self.person_data_changed.emit()
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image without re-reading from disk."""
