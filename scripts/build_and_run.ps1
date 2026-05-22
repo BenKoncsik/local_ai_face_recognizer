@@ -14,12 +14,17 @@ Push-Location $RepoRoot
 Write-Host '==> Checking Python...'
 
 $Python = $null
-foreach ($cmd in @('python3.13','python3.12','python3.11','python3','python')) {
+foreach ($cmd in @('python3.13','python3.12','python3.12.6','python3.11','python3','python')) {
     if ($Python) { break }
     $exe = Get-Command $cmd -ErrorAction SilentlyContinue
     if (-not $exe) { continue }
-    $ok = & $exe.Source -c "import sys; print('ok' if sys.version_info >= (3,11) else 'old')" 2>$null
-    if ($ok -eq 'ok') { $Python = $exe.Source }
+    try {
+        $ok = & $exe.Source -c "import sys; print('ok' if sys.version_info >= (3,11) else 'old')" 2>$null
+    } catch {
+        # Failed to run this candidate (e.g. App Execution Alias or launcher); skip it
+        continue
+    }
+    if ($ok -and $ok.ToString().Trim() -eq 'ok') { $Python = $exe.Source }
 }
 
 if (-not $Python) {
