@@ -13,6 +13,7 @@ env:
   PYTHON_VERSION: "3.11"
   APP_NAME: Face-Local
   OWNER: ${{ github.repository_owner }}
+  ARTIFACT_REPO: ${{ github.repository_owner }}/private_artifact
 
 jobs:
   pick-runner:
@@ -290,17 +291,51 @@ jobs:
             "release/Face-Local-macOS-installer-${{ needs.prepare.outputs.package_version }}.dmg"
           rm -rf release/dmg-root
 
-      - name: Upload macOS assets to GitHub release
+      - name: Upload macOS artifact
+        id: upload_macos
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: face-local-macos-${{ needs.prepare.outputs.tag }}
+          path: release/*.dmg
+          if-no-files-found: error
+
+      - name: Fallback upload macOS artifact to private repo
+        if: ${{ steps.upload_macos.outcome == 'failure' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
         shell: bash
         run: |
-          python scripts/github_release.py upload \
-            --repo "$GITHUB_REPOSITORY" \
-            --tag "${{ needs.prepare.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
-            --name "${{ needs.prepare.outputs.release_name }}" \
-            "release/*.dmg"
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          if ! command -v gh >/dev/null 2>&1; then
+            command -v brew >/dev/null 2>&1 || {
+              echo "gh CLI not found and Homebrew is unavailable." >&2
+              exit 1
+            }
+            brew install gh
+          fi
+
+          shopt -s nullglob
+          assets=(release/*.dmg)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No macOS artifact found in release/." >&2
+            exit 1
+          fi
+
+          tag="artifact-release-${{ needs.prepare.outputs.package_version }}"
+          if ! gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "${{ env.ARTIFACT_REPO }}" \
+              --title "CI artifact ${{ needs.prepare.outputs.tag }}" \
+              --notes "CI artifact fallback [run ${{ github.run_number }}]" \
+              --prerelease \
+              || gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null
+          fi
+
+          gh release upload "$tag" "${assets[@]}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --clobber
 
   build-windows:
     needs:
@@ -395,11 +430,13 @@ jobs:
         shell: powershell
         run: New-Item -ItemType Directory -Force -Path release | Out-Null
 
-      - name: Package Windows installer
+      - name: Package Windows assets
         env:
           IS_SELF_HOSTED_WINDOWS: ${{ contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
         shell: powershell
         run: |
+          Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
+
           $isccCandidates = @(
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
             "C:\Program Files\Inno Setup 6\ISCC.exe"
@@ -407,28 +444,72 @@ jobs:
           $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) {
             if ($env:IS_SELF_HOSTED_WINDOWS -eq "true") {
-              Write-Error "Inno Setup 6 ISCC.exe not found. Install Inno Setup once on the self-hosted Windows runner, then rerun the workflow."
-              exit 1
+              Write-Warning "Inno Setup 6 ISCC.exe not found. Skipping Windows installer; portable zip was created. Install Inno Setup once on the self-hosted Windows runner to also publish the .exe installer."
+              exit 0
             }
             choco install innosetup --no-progress -y
             $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
           if (-not $iscc) { Write-Error "Inno Setup 6 ISCC.exe not found after Chocolatey installation."; exit 1 }
           & $iscc "/DAppVersion=${{ needs.prepare.outputs.package_version }}" "scripts\build_windows_installer.iss"
-          Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
 
-      - name: Upload Windows assets to GitHub release
+      - name: Upload Windows artifact
+        id: upload_windows
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: face-local-windows-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/*.zip
+            release/*.exe
+          if-no-files-found: error
+
+      - name: Fallback upload Windows artifact to private repo
+        if: ${{ steps.upload_windows.outcome == 'failure' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
         shell: powershell
         run: |
-          python scripts/github_release.py upload \
-            --repo "$GITHUB_REPOSITORY" \
-            --tag "${{ needs.prepare.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
-            --name "${{ needs.prepare.outputs.release_name }}" \
-            "release/*.zip" \
-            "release/*.exe"
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            $ErrorActionPreference = "Stop"
+            $GhVersion = (Invoke-RestMethod "https://api.github.com/repos/cli/cli/releases/latest").tag_name.TrimStart('v')
+            $GhZip = Join-Path $env:RUNNER_TEMP "gh_windows_amd64.zip"
+            $GhDir = Join-Path $env:RUNNER_TEMP "gh-bin"
+            Invoke-WebRequest -Uri "https://github.com/cli/cli/releases/download/v${GhVersion}/gh_${GhVersion}_windows_amd64.zip" -OutFile $GhZip
+            Expand-Archive -Path $GhZip -DestinationPath $GhDir -Force
+            $GhExe = Get-ChildItem -Path $GhDir -Filter "gh.exe" -Recurse | Select-Object -First 1
+            if ($null -eq $GhExe) { throw "gh.exe not found after extraction in $GhDir" }
+            $env:PATH = "$($GhExe.DirectoryName);$env:PATH"
+          }
+
+          $Assets = @()
+          $Assets += Get-ChildItem -Path "release" -Filter "*.zip" -File | ForEach-Object { $_.FullName }
+          $Assets += Get-ChildItem -Path "release" -Filter "*.exe" -File | ForEach-Object { $_.FullName }
+          if ($Assets.Count -eq 0) { throw "No Windows artifacts found in release/." }
+
+          $Tag = "artifact-release-${{ needs.prepare.outputs.package_version }}"
+
+          $ErrorActionPreference = "SilentlyContinue"
+          $null = gh release view $Tag --repo "${{ env.ARTIFACT_REPO }}" 2>&1
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = "Stop"
+
+          if (-not $releaseExists) {
+            gh release create $Tag `
+              --repo "${{ env.ARTIFACT_REPO }}" `
+              --title "CI artifact ${{ needs.prepare.outputs.tag }}" `
+              --notes "CI artifact fallback [run ${{ github.run_number }}]" `
+              --prerelease
+            if ($LASTEXITCODE -ne 0) {
+              gh release view $Tag --repo "${{ env.ARTIFACT_REPO }}"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+
+          gh release upload $Tag @Assets `
+            --repo "${{ env.ARTIFACT_REPO }}" `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   build-linux-arm64:
     needs: prepare
@@ -450,8 +531,23 @@ jobs:
       - name: Install Linux packaging dependencies
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dpkg-dev libgl1 libglib2.0-0 libxkbcommon-x11-0 libxcb-cursor0
+          set -euo pipefail
+          packages=(dpkg-dev libgl1 libglib2.0-0 libxkbcommon-x11-0 libxcb-cursor0)
+          missing=()
+          for package in "${packages[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
+              missing+=("$package")
+            fi
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "Linux packaging dependencies are already installed."
+          elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y "${missing[@]}"
+          else
+            echo "::warning::Missing Linux packages: ${missing[*]}. This self-hosted runner cannot run sudo without a password, so continuing without apt install. Install these packages once on the runner if the build fails."
+          fi
 
       - name: Install Python dependencies
         shell: bash
@@ -473,18 +569,49 @@ jobs:
           chmod +x scripts/build_linux_deb.sh
           scripts/build_linux_deb.sh "${{ needs.prepare.outputs.package_version }}"
 
-      - name: Upload Linux assets to GitHub release
+      - name: Upload Linux ARM64 artifact
+        id: upload_linux_arm64
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: face-local-linux-arm64-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/*.deb
+            release/*.tar.gz
+          if-no-files-found: error
+
+      - name: Fallback upload Linux ARM64 artifact to private repo
+        if: ${{ steps.upload_linux_arm64.outcome == 'failure' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
         shell: bash
         run: |
-          python scripts/github_release.py upload \
-            --repo "$GITHUB_REPOSITORY" \
-            --tag "${{ needs.prepare.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
-            --name "${{ needs.prepare.outputs.release_name }}" \
-            "release/*.deb" \
-            "release/*.tar.gz"
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback uploads." >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          assets=(release/*.deb release/*.tar.gz)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No Linux ARM64 artifacts found in release/." >&2
+            exit 1
+          fi
+
+          tag="artifact-release-${{ needs.prepare.outputs.package_version }}"
+          if ! gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "${{ env.ARTIFACT_REPO }}" \
+              --title "CI artifact ${{ needs.prepare.outputs.tag }}" \
+              --notes "CI artifact fallback [run ${{ github.run_number }}]" \
+              --prerelease \
+              || gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null
+          fi
+
+          gh release upload "$tag" "${assets[@]}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --clobber
 
   build-linux-x64:
     needs: prepare
@@ -526,18 +653,49 @@ jobs:
           chmod +x scripts/build_linux_deb.sh
           scripts/build_linux_deb.sh "${{ needs.prepare.outputs.package_version }}"
 
-      - name: Upload Linux x64 assets to GitHub release
+      - name: Upload Linux x64 artifact
+        id: upload_linux_x64
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: face-local-linux-x64-${{ needs.prepare.outputs.tag }}
+          path: |
+            release/*.deb
+            release/*.tar.gz
+          if-no-files-found: error
+
+      - name: Fallback upload Linux x64 artifact to private repo
+        if: ${{ steps.upload_linux_x64.outcome == 'failure' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
         shell: bash
         run: |
-          python3 scripts/github_release.py upload \
-            --repo "$GITHUB_REPOSITORY" \
-            --tag "${{ needs.prepare.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
-            --name "${{ needs.prepare.outputs.release_name }}" \
-            "release/*.deb" \
-            "release/*.tar.gz"
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback uploads." >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          assets=(release/*.deb release/*.tar.gz)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No Linux x64 artifacts found in release/." >&2
+            exit 1
+          fi
+
+          tag="artifact-release-${{ needs.prepare.outputs.package_version }}"
+          if ! gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "${{ env.ARTIFACT_REPO }}" \
+              --title "CI artifact ${{ needs.prepare.outputs.tag }}" \
+              --notes "CI artifact fallback [run ${{ github.run_number }}]" \
+              --prerelease \
+              || gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null
+          fi
+
+          gh release upload "$tag" "${assets[@]}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --clobber
 
   release:
     if: >-
@@ -563,6 +721,164 @@ jobs:
       - ARM64
     steps:
       - uses: actions/checkout@v6
+
+      - name: Download macOS artifact
+        id: download_macos
+        if: ${{ needs.build-macos.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: face-local-macos-${{ needs.prepare.outputs.tag }}
+          path: release
+
+      - name: Fallback download macOS artifact from private repo
+        if: ${{ needs.build-macos.result == 'success' && steps.download_macos.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
+            exit 1
+          fi
+          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --pattern "Face-Local-macOS-installer-${{ needs.prepare.outputs.package_version }}.dmg" \
+            --dir release
+
+      - name: Download Windows artifact
+        id: download_windows
+        if: ${{ needs.build-windows.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: face-local-windows-${{ needs.prepare.outputs.tag }}
+          path: release
+
+      - name: Fallback download Windows artifact from private repo
+        if: ${{ needs.build-windows.result == 'success' && steps.download_windows.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
+            exit 1
+          fi
+          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --pattern "Face-Local-windows-*-${{ needs.prepare.outputs.package_version }}.*" \
+            --dir release
+
+      - name: Download Linux ARM64 artifact
+        id: download_linux_arm64
+        if: ${{ needs.build-linux-arm64.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: face-local-linux-arm64-${{ needs.prepare.outputs.tag }}
+          path: release
+
+      - name: Fallback download Linux ARM64 artifact from private repo
+        if: ${{ needs.build-linux-arm64.result == 'success' && steps.download_linux_arm64.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
+            exit 1
+          fi
+          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --pattern "Face-Local-linux-arm64-*-${{ needs.prepare.outputs.package_version }}.*" \
+            --dir release
+
+      - name: Download Linux x64 artifact
+        id: download_linux_x64
+        if: ${{ needs.build-linux-x64.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: face-local-linux-x64-${{ needs.prepare.outputs.tag }}
+          path: release
+
+      - name: Fallback download Linux x64 artifact from private repo
+        if: ${{ needs.build-linux-x64.result == 'success' && steps.download_linux_x64.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
+            exit 1
+          fi
+          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --pattern "Face-Local-linux-x64-*-${{ needs.prepare.outputs.package_version }}.*" \
+            --dir release
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.package_version }}"
+          missing=0
+
+          require_file() {
+            local path="$1"
+            if [ ! -f "$path" ]; then
+              echo "Required artifact not found: $path" >&2
+              missing=1
+            fi
+          }
+
+          if [ "${{ needs.build-macos.result }}" = "success" ]; then
+            require_file "release/Face-Local-macOS-installer-${version}.dmg"
+          fi
+          if [ "${{ needs.build-windows.result }}" = "success" ]; then
+            require_file "release/Face-Local-windows-portable-${version}.zip"
+            if [ ! -f "release/Face-Local-windows-installer-${version}.exe" ]; then
+              echo "::warning::Windows installer is missing; publishing portable zip only."
+            fi
+          fi
+          if [ "${{ needs.build-linux-arm64.result }}" = "success" ]; then
+            require_file "release/Face-Local-linux-arm64-installer-${version}.deb"
+            require_file "release/Face-Local-linux-arm64-portable-${version}.tar.gz"
+          fi
+          if [ "${{ needs.build-linux-x64.result }}" = "success" ]; then
+            require_file "release/Face-Local-linux-x64-installer-${version}.deb"
+            require_file "release/Face-Local-linux-x64-portable-${version}.tar.gz"
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            ls -la release || true
+            exit 1
+          fi
+
+      - name: Upload assets to GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 scripts/github_release.py upload \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --target "$GITHUB_SHA" \
+            --name "${{ needs.prepare.outputs.release_name }}" \
+            "release/*.dmg" \
+            "release/*.zip" \
+            "release/*.exe" \
+            "release/*.deb" \
+            "release/*.tar.gz"
 
       - name: Update GitHub release notes
         env:
