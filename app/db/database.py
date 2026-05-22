@@ -62,11 +62,43 @@ def init_db(db_path: Path | str) -> Engine:
     # Create all tables that don't exist yet (idempotent)
     Base.metadata.create_all(engine)
 
+    # Add columns introduced in later versions to existing databases
+    _migrate_add_columns(engine)
+
     _engine = engine
     _SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
 
     log.info("Database ready: %s tables", len(Base.metadata.tables))
     return engine
+
+
+def _migrate_add_columns(engine: Engine) -> None:
+    """Add columns that didn't exist in older schema versions (idempotent)."""
+    new_columns = {
+        "persons": [
+            ("last_name",   "VARCHAR(255)"),
+            ("first_name",  "VARCHAR(255)"),
+            ("second_name", "VARCHAR(255)"),
+            ("birth_place", "VARCHAR(512)"),
+            ("birth_date",  "VARCHAR(64)"),
+        ],
+        "images": [
+            ("photo_date", "VARCHAR(128)"),
+        ],
+    }
+    with engine.connect() as conn:
+        for table, cols in new_columns.items():
+            existing = {
+                row[1]
+                for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            }
+            for col_name, col_type in cols:
+                if col_name not in existing:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    )
+                    log.info("Migration: added column %s.%s", table, col_name)
+        conn.commit()
 
 
 def get_engine() -> Engine:

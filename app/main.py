@@ -84,8 +84,9 @@ def main() -> None:
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # Dark palette
-    _apply_dark_palette(app)
+    # Theme (palette + QSS)
+    from app.ui.theme import apply_theme
+    apply_theme(app)
 
     from app.ui.main_window import MainWindow
 
@@ -94,37 +95,6 @@ def main() -> None:
 
     log.info("GUI ready")
     sys.exit(app.exec())
-
-
-def _apply_dark_palette(app) -> None:  # noqa: ANN001
-    """Apply a system-consistent dark color palette."""
-    from PySide6.QtGui import QPalette, QColor
-    from PySide6.QtCore import Qt
-
-    palette = QPalette()
-    dark = QColor(45, 45, 48)
-    mid_dark = QColor(60, 60, 63)
-    light = QColor(210, 210, 215)
-    highlight = QColor(86, 138, 242)
-    link = QColor(100, 160, 255)
-
-    palette.setColor(QPalette.Window, dark)
-    palette.setColor(QPalette.WindowText, light)
-    palette.setColor(QPalette.Base, QColor(30, 30, 32))
-    palette.setColor(QPalette.AlternateBase, mid_dark)
-    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 220))
-    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
-    palette.setColor(QPalette.Text, light)
-    palette.setColor(QPalette.Button, mid_dark)
-    palette.setColor(QPalette.ButtonText, light)
-    palette.setColor(QPalette.BrightText, QColor(255, 80, 80))
-    palette.setColor(QPalette.Highlight, highlight)
-    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-    palette.setColor(QPalette.Link, link)
-    palette.setColor(QPalette.Disabled, QPalette.Text, QColor(120, 120, 120))
-    palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(120, 120, 120))
-
-    app.setPalette(palette)
 
 
 if __name__ == "__main__":

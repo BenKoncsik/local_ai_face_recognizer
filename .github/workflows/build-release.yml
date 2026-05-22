@@ -268,6 +268,31 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
 
+      - name: Download embedding models
+        shell: bash
+        run: |
+          mkdir -p models
+          if [ ! -f models/mobilefacenet.tflite ]; then
+            mirrors=(
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+            )
+            for url in "${mirrors[@]}"; do
+              if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
+                echo "Downloaded mobilefacenet.tflite from $url"
+                break
+              fi
+            done
+            [ -f models/mobilefacenet.tflite ] || { echo "ERROR: Failed to download mobilefacenet.tflite"; exit 1; }
+          fi
+          if [ ! -f models/face_recognition_sface_2021dec.onnx ]; then
+            curl -fsSL --retry 3 \
+              -o models/face_recognition_sface_2021dec.onnx \
+              "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx" \
+              || echo "WARNING: SFace model download failed (non-fatal)"
+          fi
+
       - name: Build bundled app
         shell: bash
         run: python scripts/package_app.py --version "${{ needs.prepare.outputs.package_version }}"
@@ -422,6 +447,35 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
 
+      - name: Download embedding models
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          $facenet = "models\mobilefacenet.tflite"
+          if (-not (Test-Path $facenet)) {
+            $mirrors = @(
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite",
+              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite",
+              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+            )
+            $ok = $false
+            foreach ($url in $mirrors) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $facenet -UseBasicParsing -ErrorAction Stop
+                Write-Host "Downloaded mobilefacenet.tflite from $url"
+                $ok = $true
+                break
+              } catch { Write-Warning "Mirror failed: $url" }
+            }
+            if (-not $ok) { throw "ERROR: Failed to download mobilefacenet.tflite from all mirrors" }
+          }
+          $sface = "models\face_recognition_sface_2021dec.onnx"
+          if (-not (Test-Path $sface)) {
+            try {
+              Invoke-WebRequest -Uri "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx" -OutFile $sface -UseBasicParsing -ErrorAction Stop
+            } catch { Write-Warning "SFace model download failed (non-fatal)" }
+          }
+
       - name: Build bundled app
         shell: powershell
         run: python scripts/package_app.py --version "${{ needs.prepare.outputs.package_version }}"
@@ -555,6 +609,31 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
 
+      - name: Download embedding models
+        shell: bash
+        run: |
+          mkdir -p models
+          if [ ! -f models/mobilefacenet.tflite ]; then
+            mirrors=(
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+            )
+            for url in "${mirrors[@]}"; do
+              if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
+                echo "Downloaded mobilefacenet.tflite from $url"
+                break
+              fi
+            done
+            [ -f models/mobilefacenet.tflite ] || { echo "ERROR: Failed to download mobilefacenet.tflite"; exit 1; }
+          fi
+          if [ ! -f models/face_recognition_sface_2021dec.onnx ]; then
+            curl -fsSL --retry 3 \
+              -o models/face_recognition_sface_2021dec.onnx \
+              "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx" \
+              || echo "WARNING: SFace model download failed (non-fatal)"
+          fi
+
       - name: Build bundled app
         shell: bash
         run: python scripts/package_app.py --version "${{ needs.prepare.outputs.package_version }}"
@@ -638,6 +717,31 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
+
+      - name: Download embedding models
+        shell: bash
+        run: |
+          mkdir -p models
+          if [ ! -f models/mobilefacenet.tflite ]; then
+            mirrors=(
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
+              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+            )
+            for url in "${mirrors[@]}"; do
+              if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
+                echo "Downloaded mobilefacenet.tflite from $url"
+                break
+              fi
+            done
+            [ -f models/mobilefacenet.tflite ] || { echo "ERROR: Failed to download mobilefacenet.tflite"; exit 1; }
+          fi
+          if [ ! -f models/face_recognition_sface_2021dec.onnx ]; then
+            curl -fsSL --retry 3 \
+              -o models/face_recognition_sface_2021dec.onnx \
+              "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx" \
+              || echo "WARNING: SFace model download failed (non-fatal)"
+          fi
 
       - name: Build bundled app
         shell: bash

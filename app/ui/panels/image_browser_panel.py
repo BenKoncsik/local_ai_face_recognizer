@@ -198,6 +198,7 @@ class ImageBrowserPanel(QWidget):
         self._image_ids: List[int] = []
         self._current_index: int = 0
         self._current_path: str = ""
+        self._current_image_id: Optional[int] = None
         self._face_data: List[_FaceData] = []
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None   # face being bbox-edited
@@ -308,6 +309,26 @@ class ImageBrowserPanel(QWidget):
         self._folder_label.setWordWrap(True)
         self._folder_label.setStyleSheet("color: #88aaff; font-size: 11px;")
         info_layout.addWidget(self._folder_label)
+
+        info_layout.addWidget(_hline())
+
+        date_hdr = QLabel("Kép dátuma / időszaka:")
+        date_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(date_hdr)
+
+        date_row = QHBoxLayout()
+        date_row.setSpacing(4)
+        self._photo_date_edit = QLineEdit()
+        self._photo_date_edit.setPlaceholderText(
+            "pl. 1954  vagy  1954.03.12  vagy  1930-as évek"
+        )
+        self._photo_date_edit.setToolTip(
+            "A kép készítésének dátuma vagy időszaka (szabad szöveg)"
+        )
+        self._photo_date_edit.returnPressed.connect(self._save_photo_date)
+        self._photo_date_edit.editingFinished.connect(self._save_photo_date)
+        date_row.addWidget(self._photo_date_edit, stretch=1)
+        info_layout.addLayout(date_row)
 
         info_layout.addWidget(_hline())
 
@@ -460,6 +481,8 @@ class ImageBrowserPanel(QWidget):
                 _ = f.person
             self._current_path = img.file_path
             self._detection_done = img.detection_done
+            self._current_image_id = img_id
+            photo_date = img.photo_date or ""
             self._face_data = [
                 (
                     f.id,
@@ -470,6 +493,10 @@ class ImageBrowserPanel(QWidget):
                 for f in img.faces
                 if not f.is_excluded
             ]
+
+        self._photo_date_edit.blockSignals(True)
+        self._photo_date_edit.setText(photo_date)
+        self._photo_date_edit.blockSignals(False)
 
         self._counter_label.setText(
             f"{self._current_index + 1} / {len(self._image_ids)}"
@@ -782,6 +809,21 @@ class ImageBrowserPanel(QWidget):
         self._assign_btn.setEnabled(False)
         self._create_btn.setEnabled(False)
         self._new_name_edit.clear()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Photo date save
+    # ──────────────────────────────────────────────────────────────────
+
+    def _save_photo_date(self) -> None:
+        if self._current_image_id is None:
+            return
+        value = self._photo_date_edit.text().strip() or None
+        with session_scope() as session:
+            img = session.get(Image, self._current_image_id)
+            if img is None:
+                return
+            img.photo_date = value
+        log.debug("photo_date saved for image %d: %r", self._current_image_id, value)
 
     # ──────────────────────────────────────────────────────────────────
     # Inline person rename

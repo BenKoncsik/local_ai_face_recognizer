@@ -57,6 +57,10 @@ class Image(Base):
     width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Flexible date string for when the photo was taken:
+    # e.g. "1930-as évek", "1954", "1954.03.12", "kb. 1930"
+    photo_date: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
     # True once detection + embedding have been attempted for this file
     detection_done: Mapped[bool] = mapped_column(Boolean, default=False)
     embedding_done: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -94,6 +98,14 @@ class Person(Base):
 
     # Representative thumbnail path (one crop selected to stand for the person)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Structured personal data
+    last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    second_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    birth_place: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Flexible date string: "1930-as évek", "1954", "1954.03.12", etc.
+    birth_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Notes / comments entered by the user
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -38,6 +38,7 @@ from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.update_dialog import UpdateDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
+from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 from app.ui.dialogs.rename_dialog import RenameDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.i18n import t
@@ -122,7 +123,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._folder_btn)
 
         self._folder_label = QLabel()
-        self._folder_label.setStyleSheet("color: #888;")
+        self._folder_label.setStyleSheet("color: #A6ADC8;")
         self._folder_label.setMaximumWidth(380)
         tb.addWidget(self._folder_label)
 
@@ -254,7 +255,11 @@ class MainWindow(QMainWindow):
 
         self._delete_person_btn = QPushButton()
         self._delete_person_btn.setEnabled(False)
-        self._delete_person_btn.setStyleSheet("color: #e57373;")
+        self._delete_person_btn.setStyleSheet(
+            "QPushButton { color: #F38BA8; border-color: #6B3040; }"
+            "QPushButton:hover { background-color: #3D2030; border-color: #F38BA8; }"
+            "QPushButton:disabled { color: #6C7086; border-color: #313244; }"
+        )
         self._delete_person_btn.clicked.connect(self._on_delete_person)
         layout.addWidget(self._delete_person_btn)
 
@@ -267,6 +272,14 @@ class MainWindow(QMainWindow):
         self._reassign_btn.setEnabled(False)
         self._reassign_btn.clicked.connect(self._on_reassign_face)
         layout.addWidget(self._reassign_btn)
+
+        self._person_info_btn = QPushButton("👤 Személyadatok")
+        self._person_info_btn.setEnabled(False)
+        self._person_info_btn.setToolTip(
+            "Vezetéknév, keresztnév, születési adatok és megjegyzés szerkesztése"
+        )
+        self._person_info_btn.clicked.connect(self._on_person_info)
+        layout.addWidget(self._person_info_btn)
 
         layout.addStretch()
         return layout
@@ -508,6 +521,7 @@ class MainWindow(QMainWindow):
         self._delete_person_btn.setEnabled(True)
         self._remove_face_btn.setEnabled(False)
         self._reassign_btn.setEnabled(False)
+        self._person_info_btn.setEnabled(True)
 
     @Slot(int)
     def _on_face_selected(self, face_id: int) -> None:
@@ -612,6 +626,7 @@ class MainWindow(QMainWindow):
         self._delete_person_btn.setEnabled(False)
         self._rename_btn.setEnabled(False)
         self._merge_btn.setEnabled(False)
+        self._person_info_btn.setEnabled(False)
         self._refresh_persons()
         log.info("Person '%s' deleted.", name)
 
@@ -660,6 +675,30 @@ class MainWindow(QMainWindow):
 
         if self._current_person_id:
             self._on_person_selected(self._current_person_id)
+
+    @Slot()
+    def _on_person_info(self) -> None:
+        if self._current_person_id is None:
+            return
+
+        with session_scope() as session:
+            person = session.get(Person, self._current_person_id)
+            if person is None:
+                return
+            dlg = PersonInfoDialog(person, parent=self)
+            if dlg.exec() != PersonInfoDialog.Accepted:
+                return
+            person.last_name = dlg.last_name() or None
+            person.first_name = dlg.first_name() or None
+            person.second_name = dlg.second_name() or None
+            person.birth_place = dlg.birth_place() or None
+            person.birth_date = dlg.birth_date() or None
+            person.notes = dlg.notes() or None
+
+        log.info(
+            "Személyadatok mentve: %s %s",
+            dlg.last_name(), dlg.first_name()
+        )
 
     @Slot()
     def _on_recluster(self) -> None:
@@ -847,7 +886,8 @@ class MainWindow(QMainWindow):
         self._pending_release = release
         self._update_btn.setText(f"🆕 Frissítés: v{release.version}")
         self._update_btn.setStyleSheet(
-            "QPushButton { color: #ffcc00; font-weight: bold; }"
+            "QPushButton { color: #F9E2AF; font-weight: bold; "
+            "background-color: #3D3020; border-color: #F9E2AF; }"
         )
         self._status_label.setText(
             f"Új verzió elérhető: v{release.version}  —  kattints a frissítésre"
@@ -890,7 +930,8 @@ class MainWindow(QMainWindow):
         self._pending_release = release
         self._update_btn.setText(f"🆕 Frissítés: v{release.version}")
         self._update_btn.setStyleSheet(
-            "QPushButton { color: #ffcc00; font-weight: bold; }"
+            "QPushButton { color: #F9E2AF; font-weight: bold; "
+            "background-color: #3D3020; border-color: #F9E2AF; }"
         )
         dlg = UpdateDialog(release, parent=self)
         dlg.exec()
