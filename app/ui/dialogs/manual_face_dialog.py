@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QPoint, QRect, Signal
-from PySide6.QtGui import QImage, QMouseEvent, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QPoint, QRect, QSize, Signal
+from PySide6.QtGui import QIcon, QImage, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -208,6 +208,23 @@ class ManualMarkDialog(QDialog):
         return self._saved
 
 
+_THUMB_SIZE = 64
+
+
+def _make_thumbnail_icon(file_path: str) -> Optional[QIcon]:
+    """Load and scale an image to a small icon for list display."""
+    img = load_image_bgr(file_path)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    scale = _THUMB_SIZE / max(w, h)
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    qimg = QImage(rgb.data, nw, nh, 3 * nw, QImage.Format_RGB888)
+    return QIcon(QPixmap.fromImage(qimg.copy()))
+
+
 # ── No-face image list dialog ────────────────────────────────────────────────
 
 class NoFaceImagesDialog(QDialog):
@@ -231,6 +248,7 @@ class NoFaceImagesDialog(QDialog):
 
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
+        self._list.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
         self._list.itemDoubleClicked.connect(self._on_open_marker)
         layout.addWidget(self._list)
 
@@ -265,6 +283,9 @@ class NoFaceImagesDialog(QDialog):
                 item = QListWidgetItem(Path(img.file_path).name)
                 item.setData(Qt.UserRole, img.id)
                 item.setToolTip(img.file_path)
+                icon = _make_thumbnail_icon(img.file_path)
+                if icon:
+                    item.setIcon(icon)
                 self._list.addItem(item)
 
     def _on_open_marker(self, item: QListWidgetItem) -> None:

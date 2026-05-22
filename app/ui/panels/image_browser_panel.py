@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QPoint, QRect, Signal
+from PySide6.QtCore import Qt, QPoint, QRect, QEvent, Signal
 from PySide6.QtGui import (
     QImage,
     QKeySequence,
@@ -83,6 +83,25 @@ def _hline() -> QFrame:
     line.setFrameShape(QFrame.HLine)
     line.setStyleSheet("color: #3a3a3a;")
     return line
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Line edit that emits signals on focus-out and Escape for inline rename
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _FocusLineEdit(QLineEdit):
+    focus_lost = Signal()
+    escape_pressed = Signal()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.focus_lost.emit()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.escape_pressed.emit()
+        else:
+            super().keyPressEvent(event)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -182,6 +201,8 @@ class ImageBrowserPanel(QWidget):
         self._face_data: List[_FaceData] = []
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None   # face being bbox-edited
+        self._renaming: bool = False                   # inline rename in progress
+        self._detection_done: bool = False             # whether current image was processed
         self._orig_img_bgr: Optional[np.ndarray] = None
         self._full_pixmap: Optional[QPixmap] = None
         # Fullscreen state
@@ -234,8 +255,8 @@ class ImageBrowserPanel(QWidget):
         self._fs_btn.clicked.connect(self._enter_fullscreen)
         nav.addWidget(self._fs_btn)
 
-        self._exit_fs_btn = QPushButton("✕  Kilépés")
-        self._exit_fs_btn.setToolTip("Kilépés a teljes képernyős nézetből (Esc / F11)")
+        self._exit_fs_btn = QPushButton("✕  Kilépés a teljes képernyőből")
+        self._exit_fs_btn.setToolTip("Kilépés a teljes képernyős nézetből (F11)")
         self._exit_fs_btn.setStyleSheet("QPushButton { color: #ff8888; font-weight: bold; }")
         self._exit_fs_btn.clicked.connect(self._exit_fullscreen)
         self._exit_fs_btn.setVisible(False)
@@ -299,13 +320,33 @@ class ImageBrowserPanel(QWidget):
         self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         info_layout.addWidget(self._face_status_label)
 
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+
         self._person_name_label = QLabel("")
         self._person_name_label.setWordWrap(True)
         self._person_name_label.setStyleSheet(
             "font-size: 15px; font-weight: bold; color: #88ee88; padding: 4px 0px;"
         )
         self._person_name_label.setVisible(False)
-        info_layout.addWidget(self._person_name_label)
+        name_row.addWidget(self._person_name_label, stretch=1)
+
+        self._rename_btn = QPushButton("✏")
+        self._rename_btn.setFixedSize(26, 26)
+        self._rename_btn.setToolTip("Személy átnevezése")
+        self._rename_btn.setVisible(False)
+        self._rename_btn.clicked.connect(self._start_rename)
+        name_row.addWidget(self._rename_btn)
+
+        info_layout.addLayout(name_row)
+
+        self._rename_edit = _FocusLineEdit()
+        self._rename_edit.setPlaceholderText("Új név…")
+        self._rename_edit.setVisible(False)
+        self._rename_edit.returnPressed.connect(self._commit_rename)
+        self._rename_edit.focus_lost.connect(self._commit_rename)
+        self._rename_edit.escape_pressed.connect(self._cancel_rename)
+        info_layout.addWidget(self._rename_edit)
 
         info_layout.addWidget(_hline())
 
@@ -350,7 +391,6 @@ class ImageBrowserPanel(QWidget):
         QShortcut(QKeySequence(Qt.Key_Left), self, self._on_prev)
         QShortcut(QKeySequence(Qt.Key_Right), self, self._on_next)
         QShortcut(QKeySequence(Qt.Key_F11), self, self._toggle_fullscreen)
-        QShortcut(QKeySequence(Qt.Key_Escape), self, self._on_escape)
 
     # ──────────────────────────────────────────────────────────────────
     # Public API
@@ -419,6 +459,7 @@ class ImageBrowserPanel(QWidget):
             for f in img.faces:
                 _ = f.person
             self._current_path = img.file_path
+            self._detection_done = img.detection_done
             self._face_data = [
                 (
                     f.id,
@@ -468,6 +509,10 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _on_image_clicked(self, lx: int, ly: int) -> None:
+        # Clear focus from any active text inputs so they commit or deactivate
+        self._new_name_edit.clearFocus()
+        self._rename_edit.clearFocus()
+
         if self._full_pixmap is None:
             return
 
@@ -715,16 +760,91 @@ class ImageBrowserPanel(QWidget):
             self._face_status_label.setText("Beazonosított személy:")
             self._person_name_label.setText(person_name)
             self._person_name_label.setVisible(True)
+            self._rename_btn.setVisible(True)
         else:
             self._face_status_label.setText("Ez az arc nincs kategorizálva")
             self._person_name_label.setVisible(False)
+            self._rename_btn.setVisible(False)
+        self._rename_edit.setVisible(False)
 
     def _clear_face_panel(self) -> None:
-        self._face_status_label.setText("Kattints egy arcra a képen")
+        self._cancel_rename()
+        if self._detection_done and not self._face_data:
+            self._face_status_label.setText("Nincs felismert arc ezen a képen")
+            self._face_status_label.setStyleSheet(
+                "color: #ffaa44; font-size: 11px; font-style: italic;"
+            )
+        else:
+            self._face_status_label.setText("Kattints egy arcra a képen")
+            self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self._person_name_label.setVisible(False)
+        self._rename_btn.setVisible(False)
         self._assign_btn.setEnabled(False)
         self._create_btn.setEnabled(False)
         self._new_name_edit.clear()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Inline person rename
+    # ──────────────────────────────────────────────────────────────────
+
+    def _start_rename(self) -> None:
+        if self._selected_face_id is None:
+            return
+        entry = next((f for f in self._face_data if f[0] == self._selected_face_id), None)
+        if entry is None or not entry[5]:
+            return
+        self._renaming = True
+        self._person_name_label.setVisible(False)
+        self._rename_btn.setVisible(False)
+        self._rename_edit.setText(entry[5])
+        self._rename_edit.setVisible(True)
+        self._rename_edit.setFocus()
+        self._rename_edit.selectAll()
+
+    def _commit_rename(self) -> None:
+        if not self._renaming:
+            return
+        self._renaming = False
+        new_name = self._rename_edit.text().strip()
+        self._rename_edit.setVisible(False)
+        if new_name:
+            self._save_person_rename(new_name)
+        if self._selected_face_id is not None:
+            entry = next((f for f in self._face_data if f[0] == self._selected_face_id), None)
+            if entry and entry[5]:
+                self._person_name_label.setVisible(True)
+                self._rename_btn.setVisible(True)
+
+    def _cancel_rename(self) -> None:
+        if not self._renaming:
+            return
+        self._renaming = False
+        self._rename_edit.setVisible(False)
+        self._rename_edit.clear()
+        if self._selected_face_id is not None:
+            entry = next((f for f in self._face_data if f[0] == self._selected_face_id), None)
+            if entry and entry[5]:
+                self._person_name_label.setVisible(True)
+                self._rename_btn.setVisible(True)
+
+    def _save_person_rename(self, new_name: str) -> None:
+        if self._selected_face_id is None:
+            return
+        entry = next((f for f in self._face_data if f[0] == self._selected_face_id), None)
+        if entry is None:
+            return
+        person_id = entry[6]
+        if person_id is None:
+            return
+        with session_scope() as session:
+            person = session.get(Person, person_id)
+            if person is None:
+                return
+            person.name = new_name
+            person.is_auto_named = False
+        log.info("Person %d renamed to %r", person_id, new_name)
+        self._reload_current_face_data()
+        self._reload_persons_combo()
 
     # ──────────────────────────────────────────────────────────────────
     # Person combo
@@ -803,10 +923,6 @@ class ImageBrowserPanel(QWidget):
             self._exit_fullscreen()
         else:
             self._enter_fullscreen()
-
-    def _on_escape(self) -> None:
-        if self._exit_fs_btn.isVisible():
-            self._exit_fullscreen()
 
     def _enter_fullscreen(self) -> None:
         main_win = self.window()

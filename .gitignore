@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -225,8 +225,6 @@ venv/
 __pycache__/
 *.pyc
 
-### Local model assets
-models/sface.onnx
 # Object files
 *.o
 *.obj

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -37,23 +38,31 @@ def _parse_version(v: str) -> tuple[int, ...]:
 
 
 def _pick_asset(assets: list[dict]) -> Optional[dict]:
-    """Return the best asset for the running OS, or None."""
-    platform = sys.platform
+    """Return the best asset for the running OS and architecture, or None."""
+    os_platform = sys.platform
+    machine = platform.machine().lower()
+    is_arm = machine in ("arm64", "aarch64")
 
     def score(a: dict) -> int:
         n = a["name"].lower()
-        if platform == "darwin":
-            # prefer installer DMG over zip
+        if os_platform == "darwin":
             if n.endswith(".dmg") and "macos" in n:
                 return 2
             if n.endswith(".zip") and "macos" in n:
                 return 1
-        elif platform == "win32":
+        elif os_platform == "win32":
             if n.endswith(".exe") and "windows" in n:
                 return 2
             if n.endswith(".zip") and "windows" in n:
                 return 1
         else:
+            # Linux: match architecture
+            arch_tag = "arm64" if is_arm else "x64"
+            if n.endswith(".deb") and "linux" in n and arch_tag in n:
+                return 4
+            if n.endswith(".tar.gz") and "linux" in n and arch_tag in n:
+                return 3
+            # fallback: any linux asset (no arch tag in name)
             if n.endswith(".deb") and "linux" in n:
                 return 2
             if n.endswith(".tar.gz") and "linux" in n:
