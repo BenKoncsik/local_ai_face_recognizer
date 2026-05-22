@@ -182,10 +182,9 @@ jobs:
             }
           }
 
-          SHIM_DIR="${RUNNER_TEMP}/python-shims"
-          mkdir -p "$SHIM_DIR"
-          ln -sf "$PY_BIN" "$SHIM_DIR/python"
-          echo "$SHIM_DIR" >> "$GITHUB_PATH"
+          VENV_DIR="${RUNNER_TEMP}/venv"
+          "$PY_BIN" -m venv "$VENV_DIR"
+          echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
           echo "MACOS_PYTHON_BIN=$PY_BIN" >> "$GITHUB_ENV"
           "$PY_BIN" --version
 
@@ -248,7 +247,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Selected Windows runner
-        shell: pwsh
+        shell: powershell
         run: echo "${{ needs.pick-runner.outputs.windows_runner_note }}"
 
       - uses: actions/setup-python@v6
@@ -260,17 +259,17 @@ jobs:
             requirements.txt
 
       - name: Install Python dependencies
-        shell: pwsh
+        shell: powershell
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
 
       - name: Build bundled app
-        shell: pwsh
+        shell: powershell
         run: python scripts/package_app.py --version "${{ needs.prepare.outputs.package_version }}"
 
       - name: Create release directory
-        shell: pwsh
+        shell: powershell
         run: New-Item -ItemType Directory -Force -Path release | Out-Null
 
       - name: Package Windows installer
@@ -283,7 +282,7 @@ jobs:
       - name: Upload Windows assets to GitHub release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        shell: pwsh
+        shell: powershell
         run: |
           python scripts/github_release.py upload \
             --repo "$GITHUB_REPOSITORY" \
