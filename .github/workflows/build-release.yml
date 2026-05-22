@@ -363,13 +363,16 @@ jobs:
             & $uv --version
             & $uv python install 3.11
             if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to install Python 3.11"; exit 1 }
-            & $uv venv $venvDir --python 3.11
+            & $uv venv --seed $venvDir --python 3.11
             if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to create Python virtual environment"; exit 1 }
           }
 
           Add-Content $env:GITHUB_PATH (Join-Path $venvDir "Scripts")
           Add-Content $env:GITHUB_ENV "VIRTUAL_ENV=$venvDir"
-          & (Join-Path $venvDir "Scripts\python.exe") --version
+          $venvPython = Join-Path $venvDir "Scripts\python.exe"
+          & $venvPython --version
+          & $venvPython -m pip --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "pip is not available in the Python virtual environment"; exit 1 }
 
       - uses: actions/setup-python@v6
         if: ${{ !contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
