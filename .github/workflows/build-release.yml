@@ -17,7 +17,11 @@ env:
 jobs:
   pick-runner:
     name: Pick build runner
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
     outputs:
       mac_runner: ${{ steps.pick_mac.outputs.runner }}
       mac_runner_note: ${{ steps.pick_mac.outputs.runner_note }}
@@ -28,10 +32,39 @@ jobs:
         id: pick_mac
         env:
           GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN }}
+          RUNNER_NAME: Koncsik-MacBook-Air
         shell: bash
         run: |
-          STATUS=$(gh api "orgs/${{ env.OWNER }}/actions/runners" \
-            --jq '.runners[] | select(.name == "Koncsik-MacBook-Air") | .status' 2>/dev/null || echo "")
+          PYTHON_BIN="$(command -v python3 || command -v python || true)"
+          STATUS=""
+          if [ -n "$PYTHON_BIN" ]; then
+            STATUS=$("$PYTHON_BIN" - <<'PY' 2>/dev/null || true
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ.get("GH_TOKEN", "")
+          if not token:
+              raise SystemExit(0)
+
+          request = urllib.request.Request(
+              f"https://api.github.com/orgs/{os.environ['OWNER']}/actions/runners",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request) as response:
+              payload = json.load(response)
+
+          for runner in payload.get("runners", []):
+              if runner.get("name") == os.environ["RUNNER_NAME"]:
+                  print(runner.get("status", ""))
+                  break
+          PY
+            )
+          fi
 
           if [ "$STATUS" = "online" ]; then
             echo 'runner=["self-hosted", "macOS", "ARM64"]' >> "$GITHUB_OUTPUT"
@@ -45,10 +78,39 @@ jobs:
         id: pick_windows
         env:
           GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN }}
+          RUNNER_NAME: nagy_gep_windows
         shell: bash
         run: |
-          STATUS=$(gh api "orgs/${{ env.OWNER }}/actions/runners" \
-            --jq '.runners[] | select(.name == "nagy_gep_windows") | .status' 2>/dev/null || echo "")
+          PYTHON_BIN="$(command -v python3 || command -v python || true)"
+          STATUS=""
+          if [ -n "$PYTHON_BIN" ]; then
+            STATUS=$("$PYTHON_BIN" - <<'PY' 2>/dev/null || true
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ.get("GH_TOKEN", "")
+          if not token:
+              raise SystemExit(0)
+
+          request = urllib.request.Request(
+              f"https://api.github.com/orgs/{os.environ['OWNER']}/actions/runners",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request) as response:
+              payload = json.load(response)
+
+          for runner in payload.get("runners", []):
+              if runner.get("name") == os.environ["RUNNER_NAME"]:
+                  print(runner.get("status", ""))
+                  break
+          PY
+            )
+          fi
 
           if [ "$STATUS" = "online" ]; then
             echo 'runner=["self-hosted", "Windows", "X64"]' >> "$GITHUB_OUTPUT"
@@ -59,7 +121,11 @@ jobs:
           fi
 
   prepare:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
     outputs:
       base_version: ${{ steps.meta.outputs.base_version }}
       package_version: ${{ steps.meta.outputs.package_version }}
@@ -363,9 +429,13 @@ jobs:
             "release/*.zip" \
             "release/*.exe"
 
-  build-linux:
+  build-linux-arm64:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
     steps:
       - uses: actions/checkout@v6
 
@@ -416,6 +486,84 @@ jobs:
             "release/*.deb" \
             "release/*.tar.gz"
 
+  build-linux-x64:
+    needs: prepare
+    continue-on-error: true
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Enable amd64 Docker emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64
+
+      - name: Build Linux x64 assets in Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v docker >/dev/null || {
+            echo "Docker is required for the emulated Linux x64 build on the ARM64 runner." >&2
+            exit 1
+          }
+
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            --platform linux/amd64 \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -e PACKAGE_VERSION="${{ needs.prepare.outputs.package_version }}" \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            ubuntu:24.04 \
+            bash -lc '
+              set -euo pipefail
+              cleanup() {
+                chown -R "$HOST_UID:$HOST_GID" build dist release app/__init__.py 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              apt-get update
+              apt-get install -y \
+                build-essential \
+                dpkg-dev \
+                libgl1 \
+                libglib2.0-0 \
+                libxkbcommon-x11-0 \
+                libxcb-cursor0 \
+                python3 \
+                python3-dev \
+                python3-pip \
+                python3-venv
+
+              python3 -m venv /tmp/face-local-venv
+              . /tmp/face-local-venv/bin/activate
+              python -m pip install --upgrade pip setuptools wheel
+              python -m pip install . pyinstaller
+              python scripts/package_app.py --version "$PACKAGE_VERSION"
+              mkdir -p release
+              bash scripts/build_linux_deb.sh "$PACKAGE_VERSION"
+            '
+
+      - name: Upload Linux x64 assets to GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 scripts/github_release.py upload \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --target "$GITHUB_SHA" \
+            --name "${{ needs.prepare.outputs.release_name }}" \
+            "release/*.deb" \
+            "release/*.tar.gz"
+
   release:
     if: >-
       ${{
@@ -423,7 +571,8 @@ jobs:
         (
           needs.build-macos.result == 'success' ||
           needs.build-windows.result == 'success' ||
-          needs.build-linux.result == 'success'
+          needs.build-linux-arm64.result == 'success' ||
+          needs.build-linux-x64.result == 'success'
         )
       }}
     needs:
@@ -431,8 +580,13 @@ jobs:
       - pick-runner
       - build-macos
       - build-windows
-      - build-linux
-    runs-on: ubuntu-latest
+      - build-linux-arm64
+      - build-linux-x64
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
     steps:
       - uses: actions/checkout@v6
 
@@ -450,7 +604,8 @@ jobs:
           notes+="- Windows runner: ${{ needs.pick-runner.outputs.windows_runner_note }}"$'\n'
           notes+="- macOS build: ${{ needs.build-macos.result }}"$'\n'
           notes+="- Windows build: ${{ needs.build-windows.result }}"$'\n'
-          notes+="- Linux build: ${{ needs.build-linux.result }}"$'\n'
+          notes+="- Linux ARM64 build: ${{ needs.build-linux-arm64.result }}"$'\n'
+          notes+="- Linux x64 build on ARM64 runner: ${{ needs.build-linux-x64.result }}"$'\n'
           python3 scripts/github_release.py update-notes \
             --repo "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \
@@ -464,9 +619,14 @@ jobs:
       - prepare
       - build-macos
       - build-windows
-      - build-linux
+      - build-linux-arm64
+      - build-linux-x64
       - release
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - ubuntu
     steps:
       - uses: actions/checkout@v6
 
@@ -489,4 +649,5 @@ jobs:
             --release-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
             --platform "macOS=${{ needs.build-macos.result }}" \
             --platform "Windows=${{ needs.build-windows.result }}" \
-            --platform "Linux=${{ needs.build-linux.result }}"
+            --platform "Linux ARM64=${{ needs.build-linux-arm64.result }}" \
+            --platform "Linux x64=${{ needs.build-linux-x64.result }}"

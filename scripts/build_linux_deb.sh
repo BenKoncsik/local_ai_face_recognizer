@@ -9,6 +9,10 @@ RELEASE_DIR="${3:-release}"
 APP_SLUG="face-local"
 APP_NAME="Face-Local"
 ARCH="$(dpkg --print-architecture)"
+case "$ARCH" in
+    amd64) ASSET_ARCH="x64" ;;
+    *) ASSET_ARCH="$ARCH" ;;
+esac
 PKG_DIR="$RELEASE_DIR/${APP_SLUG}_${VERSION}_${ARCH}"
 INSTALL_DIR="$PKG_DIR/opt/$APP_SLUG"
 
@@ -46,6 +50,6 @@ install -m 644 "assets/icons/app-icon-512.png" \
     "$PKG_DIR/usr/share/icons/hicolor/512x512/apps/face-local.png"
 
 dpkg-deb --build --root-owner-group "$PKG_DIR"
-mv "$PKG_DIR.deb" "$RELEASE_DIR/${APP_NAME}-linux-installer-${VERSION}.deb"
+mv "$PKG_DIR.deb" "$RELEASE_DIR/${APP_NAME}-linux-${ASSET_ARCH}-installer-${VERSION}.deb"
 
-tar -C dist -czf "$RELEASE_DIR/${APP_NAME}-linux-portable-${VERSION}.tar.gz" "$APP_NAME"
+tar -C dist -czf "$RELEASE_DIR/${APP_NAME}-linux-${ASSET_ARCH}-portable-${VERSION}.tar.gz" "$APP_NAME"
