@@ -267,15 +267,20 @@ jobs:
           $pyBin = $null
           foreach ($c in $candidates) {
             $bin = if ($c -notmatch '[\\/]') {
-              (Get-Command $c -ErrorAction SilentlyContinue)?.Source
+              $cmd = Get-Command $c -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($cmd) { $cmd.Source } else { $null }
             } elseif (Test-Path $c) { $c } else { $null }
             if (-not $bin) { continue }
             & $bin -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>$null
             if ($LASTEXITCODE -eq 0) { $pyBin = $bin; break }
           }
           if (-not $pyBin) { Write-Error "Python 3.11+ not found on self-hosted runner"; exit 1 }
-          $pyDir = Split-Path $pyBin
-          Add-Content $env:GITHUB_PATH $pyDir
+          $venvDir = Join-Path $env:RUNNER_TEMP "face-local-venv"
+          if (Test-Path $venvDir) { Remove-Item $venvDir -Recurse -Force }
+          & $pyBin -m venv $venvDir
+          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create Python virtual environment"; exit 1 }
+          Add-Content $env:GITHUB_PATH (Join-Path $venvDir "Scripts")
+          Add-Content $env:GITHUB_ENV "VIRTUAL_ENV=$venvDir"
           & $pyBin --version
 
       - uses: actions/setup-python@v6
@@ -302,10 +307,25 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path release | Out-Null
 
       - name: Package Windows installer
+        env:
+          IS_SELF_HOSTED_WINDOWS: ${{ contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
         shell: powershell
         run: |
-          choco install innosetup --no-progress -y
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ needs.prepare.outputs.package_version }}" "scripts\build_windows_installer.iss"
+          $isccCandidates = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            if ($env:IS_SELF_HOSTED_WINDOWS -eq "true") {
+              Write-Error "Inno Setup 6 ISCC.exe not found. Install Inno Setup once on the self-hosted Windows runner, then rerun the workflow."
+              exit 1
+            }
+            choco install innosetup --no-progress -y
+            $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { Write-Error "Inno Setup 6 ISCC.exe not found after Chocolatey installation."; exit 1 }
+          & $iscc "/DAppVersion=${{ needs.prepare.outputs.package_version }}" "scripts\build_windows_installer.iss"
           Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
 
       - name: Upload Windows assets to GitHub release
