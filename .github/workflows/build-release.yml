@@ -250,7 +250,36 @@ jobs:
         shell: powershell
         run: echo "${{ needs.pick-runner.outputs.windows_runner_note }}"
 
+      - name: Select local Python on self-hosted Windows
+        if: ${{ contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
+        shell: powershell
+        run: |
+          $candidates = @(
+            "python", "python3",
+            "C:\Python313\python.exe", "C:\Python312\python.exe", "C:\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "C:\Program Files\Python313\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files\Python311\python.exe"
+          )
+          $pyBin = $null
+          foreach ($c in $candidates) {
+            $bin = if ($c -notmatch '[\\/]') {
+              (Get-Command $c -ErrorAction SilentlyContinue)?.Source
+            } elseif (Test-Path $c) { $c } else { $null }
+            if (-not $bin) { continue }
+            & $bin -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>$null
+            if ($LASTEXITCODE -eq 0) { $pyBin = $bin; break }
+          }
+          if (-not $pyBin) { Write-Error "Python 3.11+ not found on self-hosted runner"; exit 1 }
+          $pyDir = Split-Path $pyBin
+          Add-Content $env:GITHUB_PATH $pyDir
+          & $pyBin --version
+
       - uses: actions/setup-python@v6
+        if: ${{ !contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
