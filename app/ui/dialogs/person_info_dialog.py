@@ -19,7 +19,7 @@ from app.db.models import Person
 
 
 class PersonInfoDialog(QDialog):
-    """Edit Vezetéknév / Keresztnév / Születési adatok / Megjegyzés for a person."""
+    """Edit structured personal data for a person."""
 
     def __init__(self, person: Person, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -49,6 +49,14 @@ class PersonInfoDialog(QDialog):
         self._second_name.setPlaceholderText("pl. István  (opcionális)")
         form.addRow("Keresztnév 2:", self._second_name)
 
+        self._nickname = QLineEdit(person.nickname or "")
+        self._nickname.setPlaceholderText("pl. Jani  (opcionális)")
+        form.addRow("Becenév:", self._nickname)
+
+        self._married_name = QLineEdit(person.married_name or "")
+        self._married_name.setPlaceholderText("pl. Kovács Jánosné  (opcionális)")
+        form.addRow("Férjezett név:", self._married_name)
+
         self._birth_place = QLineEdit(person.birth_place or "")
         self._birth_place.setPlaceholderText("pl. Budapest")
         form.addRow("Születési hely:", self._birth_place)
@@ -56,6 +64,18 @@ class PersonInfoDialog(QDialog):
         self._birth_date = QLineEdit(person.birth_date or "")
         self._birth_date.setPlaceholderText("pl. 1954  vagy  1954.03.12  vagy  1930-as évek")
         form.addRow("Születési idő:", self._birth_date)
+
+        separator = QLabel(" ")
+        separator.setFixedHeight(4)
+        form.addRow(separator)
+
+        self._death_date = QLineEdit(person.death_date or "")
+        self._death_date.setPlaceholderText("pl. 2001  vagy  2001.11.23")
+        form.addRow("Halálozás ideje:", self._death_date)
+
+        self._death_place = QLineEdit(person.death_place or "")
+        self._death_place.setPlaceholderText("pl. Debrecen")
+        form.addRow("Halálozás helye:", self._death_place)
 
         layout.addLayout(form)
 
@@ -86,11 +106,23 @@ class PersonInfoDialog(QDialog):
     def second_name(self) -> str:
         return self._second_name.text().strip()
 
+    def nickname(self) -> str:
+        return self._nickname.text().strip()
+
+    def married_name(self) -> str:
+        return self._married_name.text().strip()
+
     def birth_place(self) -> str:
         return self._birth_place.text().strip()
 
     def birth_date(self) -> str:
         return self._birth_date.text().strip()
+
+    def death_date(self) -> str:
+        return self._death_date.text().strip()
+
+    def death_place(self) -> str:
+        return self._death_place.text().strip()
 
     def notes(self) -> str:
         return self._notes.toPlainText().strip()

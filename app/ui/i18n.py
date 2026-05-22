@@ -80,8 +80,14 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                           "hu": "Újra csoportosítás kész: {n} személy"},
 
     # ── Dialogs — rename ─────────────────────────────────────────────────────
-    "empty_name_title": {"en": "Empty Name", "hu": "Üres név"},
-    "empty_name_msg":   {"en": "Name cannot be empty.", "hu": "A név nem lehet üres."},
+    "empty_name_title":     {"en": "Empty Name", "hu": "Üres név"},
+    "empty_name_msg":       {"en": "Name cannot be empty.", "hu": "A név nem lehet üres."},
+    "protected_rename_title": {"en": "Cannot Rename", "hu": "Nem átnevezhető"},
+    "protected_rename_msg":   {"en": "'Ismeretlen' is a protected category and cannot be renamed.",
+                                "hu": "Az 'Ismeretlen' egy védett kategória, nem nevezhető át."},
+    "protected_delete_title": {"en": "Cannot Delete", "hu": "Nem törölhető"},
+    "protected_delete_msg":   {"en": "'Ismeretlen' is a protected category and cannot be deleted.",
+                                "hu": "Az 'Ismeretlen' egy védett kategória, nem törölhető."},
 
     # ── Dialogs — remove face ─────────────────────────────────────────────────
     "remove_face_title": {"en": "Remove Face", "hu": "Arc eltávolítása"},
@@ -148,6 +154,37 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                           "hu": "Húzd az egeret a képen az arc jelöléséhez."},
     "mark_face_saved":   {"en": "Face saved. Assign it to a person from the sidebar.",
                           "hu": "Arc mentve. Rendeld személyhez az oldalsávból."},
+
+    # ── Name suggestions ──────────────────────────────────────────────────
+    "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},
+    "suggestions_title": {"en": "Name Suggestions — Unknown → Known",
+                          "hu": "Névajánlatok — Ismeretlen → Ismert"},
+    "suggestions_intro": {"en": "Unknown people whose faces resemble an already-named "
+                                "person. Approve to merge, or reject to never suggest "
+                                "the pair again. Nothing is merged without your approval.",
+                          "hu": "Ismeretlen személyek, akiknek arca egy már elnevezett "
+                                "személyre hasonlít. Jóváhagyással összevonod, "
+                                "elutasítással többé nem ajánlja a párost. Összevonás "
+                                "csak a te jóváhagyásoddal történik."},
+    "suggestions_threshold": {"en": "Similarity threshold:", "hu": "Hasonlósági küszöb:"},
+    "suggestions_count":     {"en": "{n} suggestion(s)", "hu": "{n} ajánlat"},
+    "suggestions_empty":     {"en": "No suggestions above the current threshold.",
+                              "hu": "Nincs a jelenlegi küszöb feletti ajánlat."},
+    "suggestions_approve":   {"en": "Approve", "hu": "Jóváhagyás"},
+    "suggestions_reject":    {"en": "Reject", "hu": "Elutasítás"},
+    "suggestions_similarity": {"en": "{pct}% match", "hu": "{pct}% egyezés"},
+    "suggestions_faces":     {"en": "{n} face(s)", "hu": "{n} arc"},
+    "suggestions_approve_confirm": {
+        "en": "Merge '{cand}' into '{target}'?\n"
+              "All faces of '{cand}' will be reassigned to '{target}'.",
+        "hu": "Összevonod '{cand}' személyt ezzel: '{target}'?\n"
+              "'{cand}' összes arca átkerül ide: '{target}'.",
+    },
+    "suggestions_found_title": {"en": "Name Suggestions", "hu": "Névajánlatok"},
+    "suggestions_found_msg":   {"en": "Found {n} possible name match(es) for unknown "
+                                      "people.\nReview them now?",
+                                "hu": "{n} lehetséges névegyezés található ismeretlen "
+                                      "személyekhez.\nÁtnézed őket most?"},
 }
 
 

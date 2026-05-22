@@ -64,9 +64,10 @@ local_ai_face_recognizer/
 │   │   ├── embedding_service.py   # Runs embedder, saves embeddings
 │   │   ├── clustering_service.py  # Runs DBSCAN, assigns Person IDs
 │   │   ├── identity_service.py    # Rename / merge / delete person, reassign face
+│   │   ├── suggestion_service.py  # Matches Unknown persons to named-person profiles
 │   │   └── export_service.py      # CSV export, image export by person
 │   ├── workers/
-│   │   └── pipeline_worker.py     # QThread: scan → detect → embed → cluster
+│   │   └── pipeline_worker.py     # QThread: scan → detect → embed → cluster → suggest
 │   └── ui/
 │       ├── i18n.py                # All UI strings (EN + HU), t(key) helper
 │       ├── main_window.py         # Main QMainWindow
@@ -79,7 +80,8 @@ local_ai_face_recognizer/
 │           ├── settings_dialog.py # Language, database, TPU status
 │           ├── tpu_status_dialog.py # TPU probe + auto-fix
 │           ├── rename_dialog.py
-│           └── merge_dialog.py
+│           ├── merge_dialog.py
+│           └── suggestion_dialog.py # Review/approve Unknown → Known name suggestions
 ├── models/                        # Downloaded model files (gitignored)
 │   ├── deploy.prototxt
 │   ├── res10_300x300_ssd_iter_140000.caffemodel
@@ -184,6 +186,10 @@ embedding:
 clustering:
   epsilon: 0.4       # DBSCAN cosine distance threshold
   min_samples: 2     # Min faces to form a cluster
+
+suggestions:
+  similarity_threshold: 0.5       # Min cosine similarity to suggest a match
+  max_suggestions_per_person: 3   # Ranked targets proposed per unknown person
 
 storage:
   db_path: data/faces.db

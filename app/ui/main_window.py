@@ -12,12 +12,12 @@ from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
     QFileDialog,
+    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QLabel,
-    QHBoxLayout,
     QSplitter,
     QStatusBar,
     QSystemTrayIcon,
@@ -28,19 +28,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import AppConfig, save_db_path
-from app.paths import app_icon_path
-from app.db.database import init_db, session_scope
+from app.db.database import ensure_unknown_person, init_db, session_scope
 from app.db.models import Face, Person
 from app.logging_setup import QLogHandler
+from app.paths import app_icon_path
 from app.services.clustering_service import ClusteringService
 from app.services.identity_service import IdentityService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
-from app.ui.dialogs.update_dialog import UpdateDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
 from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 from app.ui.dialogs.rename_dialog import RenameDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
+from app.ui.dialogs.suggestion_dialog import SuggestionDialog
+from app.ui.dialogs.update_dialog import UpdateDialog
 from app.ui.i18n import t
 from app.ui.panels.cluster_panel import ClusterPanel
 from app.ui.panels.collage_panel import CollagePanel
@@ -79,12 +80,14 @@ class MainWindow(QMainWindow):
         self._worker: Optional[PipelineWorker] = None
         self._current_person_id: Optional[int] = None
         self._current_face_id: Optional[int] = None
+        self._pending_suggestion_count: int = 0
         self._db_path: str = str(config.db_path_resolved)
         self._pending_release = None
 
         self._apply_window_icon()
 
         init_db(config.db_path_resolved)
+        ensure_unknown_person()
 
         self._build_ui()
         self._connect_log_handler()
@@ -161,6 +164,16 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        self._suggestions_btn = QPushButton()
+        self._suggestions_btn.setToolTip(
+            "Ismeretlen személyek összevetése az elnevezett személyekkel / "
+            "Match unknown people against named people"
+        )
+        self._suggestions_btn.clicked.connect(self._on_show_suggestions)
+        tb.addWidget(self._suggestions_btn)
+
+        tb.addSeparator()
+
         self._settings_btn = QPushButton()
         self._settings_btn.clicked.connect(self._on_settings)
         tb.addWidget(self._settings_btn)
@@ -220,6 +233,13 @@ class MainWindow(QMainWindow):
 
         self._preview_panel = PreviewPanel()
         self._preview_panel.setMinimumWidth(280)
+        self._preview_panel.face_selected.connect(self._on_preview_face_selected)
+        self._preview_panel.face_assign_requested.connect(self._on_preview_face_assign)
+        self._preview_panel.face_delete_requested.connect(self._on_preview_face_delete)
+        self._preview_panel.face_create_requested.connect(self._on_preview_face_create)
+        self._preview_panel.face_bbox_update_requested.connect(
+            self._on_preview_face_bbox_update
+        )
         splitter.addWidget(self._preview_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -321,6 +341,7 @@ class MainWindow(QMainWindow):
         self._export_btn.setText("📤  Export")
         self._force_rescan_btn.setText(t("force_rescan"))
         self._no_face_btn.setText(t("view_no_face"))
+        self._suggestions_btn.setText(t("suggestions_btn"))
         self._settings_btn.setText(t("settings"))
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
@@ -385,7 +406,7 @@ class MainWindow(QMainWindow):
             return
 
         with session_scope() as session:
-            from app.db.models import Image, Face
+            from app.db.models import Face, Image
             n_images = session.query(Image).count()
 
         reply = QMessageBox.question(
@@ -398,7 +419,7 @@ class MainWindow(QMainWindow):
             return
 
         with session_scope() as session:
-            from app.db.models import Image, Face
+            from app.db.models import Face, Image
             session.query(Face).delete()
             session.query(Image).update({"detection_done": False, "embedding_done": False})
 
@@ -426,8 +447,10 @@ class MainWindow(QMainWindow):
             config=self._config,
             parent=self,
         )
+        self._pending_suggestion_count = 0
         self._worker.progress.connect(self._on_progress)
         self._worker.log_message.connect(self._log_panel.append_plain)
+        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
         self._worker.finished.connect(self._on_pipeline_finished)
         self._worker.error.connect(self._on_pipeline_error)
         self._worker.start()
@@ -446,6 +469,15 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     @Slot()
+    def _on_show_suggestions(self) -> None:
+        dlg = SuggestionDialog(self._config.suggestions, parent=self)
+        dlg.data_changed.connect(self._refresh_persons)
+        dlg.data_changed.connect(self._image_browser._reload_current_face_data)
+        dlg.exec()
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+
+    @Slot()
     def _on_settings(self) -> None:
         dlg = SettingsDialog(current_db_path=self._db_path, parent=self)
         if dlg.exec() != SettingsDialog.Accepted:
@@ -458,6 +490,7 @@ class MainWindow(QMainWindow):
             self._config.storage.db_path = new_db
             save_db_path(new_db)
             init_db(new_db)
+            ensure_unknown_person()
             self._current_person_id = None
             self._current_face_id = None
             self._cluster_panel.clear()
@@ -482,6 +515,10 @@ class MainWindow(QMainWindow):
             self._progress_bar.setValue(int(current / total * 100))
         self._status_label.setText(f"{stage}: {detail}")
 
+    @Slot(int)
+    def _on_suggestions_ready(self, count: int) -> None:
+        self._pending_suggestion_count = count
+
     @Slot(bool, str)
     def _on_pipeline_finished(self, success: bool, summary: str) -> None:
         self._set_scanning_state(False)
@@ -491,6 +528,18 @@ class MainWindow(QMainWindow):
         self._image_browser.refresh()
         if not success:
             QMessageBox.warning(self, t("warning"), summary)
+            return
+
+        if self._pending_suggestion_count > 0:
+            reply = QMessageBox.question(
+                self,
+                t("suggestions_found_title"),
+                t("suggestions_found_msg", n=self._pending_suggestion_count),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._on_show_suggestions()
+        self._pending_suggestion_count = 0
 
     @Slot(str)
     def _on_pipeline_error(self, message: str) -> None:
@@ -506,28 +555,37 @@ class MainWindow(QMainWindow):
         self._current_person_id = person_id
         self._current_face_id = None
 
+        is_protected = False
         with session_scope() as session:
             svc = IdentityService(session)
             person = session.get(Person, person_id)
             faces = svc.get_faces_for_person(person_id)
             if person is None:
                 return
+            is_protected = person.is_protected
             for f in faces:
                 _ = f.image  # noqa: F841
             self._cluster_panel.show_person(person.name, faces)
             self._preview_panel.clear()
 
-        self._rename_btn.setEnabled(True)
+        self._rename_btn.setEnabled(not is_protected)
         self._merge_btn.setEnabled(True)
-        self._delete_person_btn.setEnabled(True)
+        self._delete_person_btn.setEnabled(not is_protected)
         self._remove_face_btn.setEnabled(False)
         self._reassign_btn.setEnabled(False)
-        self._person_info_btn.setEnabled(True)
+        self._person_info_btn.setEnabled(not is_protected)
 
     @Slot(int)
     def _on_face_selected(self, face_id: int) -> None:
         self._current_face_id = face_id
 
+        self._show_face_in_preview(face_id)
+
+        self._remove_face_btn.setEnabled(True)
+        self._reassign_btn.setEnabled(True)
+
+    def _show_face_in_preview(self, face_id: int) -> None:
+        """Reload the preview image and select *face_id*."""
         with session_scope() as session:
             face = session.get(Face, face_id)
             if face:
@@ -537,8 +595,153 @@ class MainWindow(QMainWindow):
                         _ = f.person
                 self._preview_panel.show_face(face)
 
+    @Slot(int)
+    def _on_preview_face_selected(self, face_id: int) -> None:
+        """Handle a face click directly in the preview image (not from the thumbnail grid)."""
+        self._current_face_id = face_id
+
+        with session_scope() as session:
+            face = session.get(Face, face_id)
+            if face and face.person_id:
+                self._current_person_id = face.person_id
+
         self._remove_face_btn.setEnabled(True)
         self._reassign_btn.setEnabled(True)
+
+    @Slot(int)
+    def _on_preview_face_assign(self, face_id: int) -> None:
+        """Handle 'Személyhez adás' from the preview panel."""
+        self._on_preview_face_selected(face_id)
+        self._on_reassign_face()
+
+    @Slot(int)
+    def _on_preview_face_delete(self, face_id: int) -> None:
+        """Handle 'Arc törlése' from the preview panel context menu (hard delete)."""
+        reply = QMessageBox.question(
+            self,
+            t("remove_face_title"),
+            t("remove_face_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        with session_scope() as session:
+            face = session.get(Face, face_id)
+            if face is None:
+                return
+            session.delete(face)
+
+        log.info("Face %d deleted from preview panel.", face_id)
+        self._preview_panel.clear()
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+        self._image_browser._reload_current_face_data()
+
+    @Slot(int, int, int, int, int)
+    def _on_preview_face_create(
+        self, image_id: int, x: int, y: int, w: int, h: int
+    ) -> None:
+        """Save a manually marked face from the face-recognition preview."""
+        new_face_id: Optional[int] = None
+        with session_scope() as session:
+            from app.db.models import Image
+            from app.detectors.base import Detection
+            from app.utils.image_utils import load_image_bgr, save_face_crop
+
+            image = session.get(Image, image_id)
+            if image is None:
+                return
+            img_bgr = load_image_bgr(image.file_path)
+            if img_bgr is None:
+                return
+
+            detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(
+                img_bgr.shape[1], img_bgr.shape[0]
+            )
+            existing = session.query(Face).filter(Face.image_id == image_id).count()
+            crops_dir = self._config.crops_dir_resolved
+            crops_dir.mkdir(parents=True, exist_ok=True)
+            crop_path = save_face_crop(
+                img_bgr=img_bgr,
+                detection=detection,
+                crops_dir=crops_dir,
+                image_id=image_id,
+                thumbnail_size=self._config.scan.thumbnail_size,
+                face_index=existing,
+            )
+            face = Face(
+                image_id=image_id,
+                bbox_x=detection.x,
+                bbox_y=detection.y,
+                bbox_w=detection.w,
+                bbox_h=detection.h,
+                confidence=1.0,
+                detector_backend="manual",
+                crop_path=str(crop_path) if crop_path else None,
+            )
+            session.add(face)
+            session.flush()
+            new_face_id = face.id
+
+        if new_face_id is None:
+            return
+
+        log.info(
+            "Manual face added from preview: image_id=%d face_id=%d (%d,%d,%d,%d)",
+            image_id, new_face_id, x, y, w, h,
+        )
+        self._current_face_id = new_face_id
+        self._show_face_in_preview(new_face_id)
+        self._remove_face_btn.setEnabled(True)
+        self._reassign_btn.setEnabled(True)
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+
+    @Slot(int, int, int, int, int)
+    def _on_preview_face_bbox_update(
+        self, face_id: int, x: int, y: int, w: int, h: int
+    ) -> None:
+        """Update a face bounding box redrawn in the face-recognition preview."""
+        with session_scope() as session:
+            from app.detectors.base import Detection
+            from app.utils.image_utils import load_image_bgr, save_face_crop
+
+            face = session.get(Face, face_id)
+            if face is None or face.image is None:
+                return
+            img_bgr = load_image_bgr(face.image.file_path)
+            if img_bgr is None:
+                return
+
+            detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(
+                img_bgr.shape[1], img_bgr.shape[0]
+            )
+            face.bbox_x = detection.x
+            face.bbox_y = detection.y
+            face.bbox_w = detection.w
+            face.bbox_h = detection.h
+
+            crops_dir = self._config.crops_dir_resolved
+            crops_dir.mkdir(parents=True, exist_ok=True)
+            crop_path = save_face_crop(
+                img_bgr=img_bgr,
+                detection=detection,
+                crops_dir=crops_dir,
+                image_id=face.image_id,
+                thumbnail_size=self._config.scan.thumbnail_size,
+                face_index=face.id,
+            )
+            if crop_path is not None:
+                face.crop_path = str(crop_path)
+
+        log.info("Face %d bbox updated from preview to (%d,%d,%d,%d)", face_id, x, y, w, h)
+        self._current_face_id = face_id
+        self._show_face_in_preview(face_id)
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+            self._show_face_in_preview(face_id)
+        self._image_browser._reload_current_face_data()
 
     # ------------------------------------------------------------------
     # Identity actions
@@ -552,6 +755,9 @@ class MainWindow(QMainWindow):
         with session_scope() as session:
             person = session.get(Person, self._current_person_id)
             if person is None:
+                return
+            if person.is_protected:
+                QMessageBox.warning(self, t("protected_rename_title"), t("protected_rename_msg"))
                 return
             dlg = RenameDialog(person.name, parent=self)
             if dlg.exec() != RenameDialog.Accepted:
@@ -607,6 +813,9 @@ class MainWindow(QMainWindow):
         with session_scope() as session:
             person = session.get(Person, self._current_person_id)
             if person is None:
+                return
+            if person.is_protected:
+                QMessageBox.warning(self, t("protected_delete_title"), t("protected_delete_msg"))
                 return
             name = person.name
 
@@ -679,6 +888,8 @@ class MainWindow(QMainWindow):
 
         if self._current_person_id:
             self._on_person_selected(self._current_person_id)
+        self._show_face_in_preview(self._current_face_id)
+        self._image_browser._reload_current_face_data()
 
     @Slot()
     def _on_person_info(self) -> None:
@@ -695,8 +906,12 @@ class MainWindow(QMainWindow):
             person.last_name = dlg.last_name() or None
             person.first_name = dlg.first_name() or None
             person.second_name = dlg.second_name() or None
+            person.nickname = dlg.nickname() or None
+            person.married_name = dlg.married_name() or None
             person.birth_place = dlg.birth_place() or None
             person.birth_date = dlg.birth_date() or None
+            person.death_date = dlg.death_date() or None
+            person.death_place = dlg.death_place() or None
             person.notes = dlg.notes() or None
 
         log.info(
@@ -752,7 +967,7 @@ class MainWindow(QMainWindow):
             _save_dir("paths/last_search_root", search_root)
         search_roots = [search_root] if search_root else []
 
-        imported, skipped, errors = 0, 0, []
+        imported, errors = 0, []
         for fpath in files:
             try:
                 with session_scope() as session:
@@ -871,8 +1086,8 @@ class MainWindow(QMainWindow):
 
     def _start_update_check(self) -> None:
         """Background thread — check GitHub releases without blocking the UI."""
-        from app.services.update_service import fetch_latest_release, is_newer
         from app import __version__
+        from app.services.update_service import fetch_latest_release, is_newer
 
         signal = self._update_ready
 
@@ -903,8 +1118,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_check_update_manual(self) -> None:
-        from app.services.update_service import fetch_latest_release, is_newer
         from app import __version__
+        from app.services.update_service import fetch_latest_release, is_newer
 
         self._update_btn.setEnabled(False)
         self._update_btn.setText("⏳ Ellenőrzés…")

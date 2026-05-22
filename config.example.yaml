@@ -72,6 +72,17 @@ clustering:
   # Distance metric for DBSCAN
   metric: cosine
 
+suggestions:
+  # Unknown-person name suggestions: compares auto-named ("Unknown N")
+  # persons against the embedding profiles of manually-named persons.
+
+  # Minimum cosine similarity [0.0 – 1.0] for a match to be suggested.
+  # Below this value nothing is proposed. Higher → stricter.
+  similarity_threshold: 0.5
+
+  # Maximum number of ranked target candidates proposed per unknown person.
+  max_suggestions_per_person: 3
+
 storage:
   # SQLite database file path
   db_path: data/faces.db

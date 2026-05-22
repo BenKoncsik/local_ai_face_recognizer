@@ -103,12 +103,20 @@ class Person(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     second_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    nickname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    married_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     birth_place: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     # Flexible date string: "1930-as évek", "1954", "1954.03.12", etc.
     birth_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    death_place: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    death_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     # Notes / comments entered by the user
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # System-managed persons (e.g. "Ismeretlen") that must not be renamed or deleted
+    is_protected: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

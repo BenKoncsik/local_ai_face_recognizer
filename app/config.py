@@ -74,6 +74,23 @@ class ClusteringConfig:
 
 
 @dataclass
+class SuggestionConfig:
+    """Parameters for the unknown-person name-suggestion feature.
+
+    The feature compares automatically-named ("Unknown N") persons against
+    the embedding profiles of manually-named persons and proposes likely
+    identity matches.  No merge happens without explicit user approval.
+    """
+
+    # Minimum cosine similarity [0.0 – 1.0] for a match to be suggested.
+    # Below this value nothing is proposed.  Higher → stricter.
+    similarity_threshold: float = 0.5
+
+    # Maximum number of ranked target candidates proposed per unknown person.
+    max_suggestions_per_person: int = 3
+
+
+@dataclass
 class StorageConfig:
     """Paths for persistent data."""
 
@@ -107,6 +124,7 @@ class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
 
@@ -209,6 +227,17 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             epsilon=clu.get("epsilon", cfg.clustering.epsilon),
             min_samples=clu.get("min_samples", cfg.clustering.min_samples),
             metric=clu.get("metric", cfg.clustering.metric),
+        )
+
+        sug = raw.get("suggestions", {})
+        cfg.suggestions = SuggestionConfig(
+            similarity_threshold=sug.get(
+                "similarity_threshold", cfg.suggestions.similarity_threshold
+            ),
+            max_suggestions_per_person=sug.get(
+                "max_suggestions_per_person",
+                cfg.suggestions.max_suggestions_per_person,
+            ),
         )
 
         sto = raw.get("storage", {})

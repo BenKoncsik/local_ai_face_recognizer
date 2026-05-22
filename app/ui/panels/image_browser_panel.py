@@ -105,20 +105,49 @@ def _draw_faces(
     pil_img = PILImage.fromarray(img_rgb)
     draw = ImageDraw.Draw(pil_img)
 
+    image_h, image_w = img.shape[:2]
+    font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
+
     for face_id, x, y, w, h, person_name, _ in faces:
         selected = face_id == selected_id
         color_rgb = (50, 220, 50) if selected else (180, 180, 180)
         name = person_name or "?"
-        font_size = max(12, min(28, int(w / 5)))
-        font = _get_pil_font(font_size)
+        label_font_size = font_size
+        font = _get_pil_font(label_font_size)
 
         bbox = draw.textbbox((0, 0), name, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
-        ty = max(y - 6, th + 6)
+        pad_x = max(8, label_font_size // 4)
+        pad_y = max(5, label_font_size // 7)
+        max_label_w = max(80, image_w - 8)
+        while tw + 2 * pad_x > max_label_w and label_font_size > 26:
+            label_font_size -= 2
+            font = _get_pil_font(label_font_size)
+            bbox = draw.textbbox((0, 0), name, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            pad_x = max(8, label_font_size // 4)
+            pad_y = max(5, label_font_size // 7)
 
-        draw.rectangle([x, ty - th - 4, x + tw + 6, ty + 2], fill=(20, 20, 20))
-        draw.text((x + 3, ty - th - 2), name, font=font, fill=color_rgb)
+        label_w = min(tw + 2 * pad_x, image_w)
+        label_h = th + 2 * pad_y
+        label_x = min(max(x, 0), max(0, image_w - label_w))
+        label_y = y - label_h - 6
+        if label_y < 0:
+            label_y = y + h + 6
+        label_y = min(max(label_y, 0), max(0, image_h - label_h))
+
+        draw.rectangle(
+            [label_x, label_y, label_x + label_w, label_y + label_h],
+            fill=(20, 20, 20),
+        )
+        draw.text(
+            (label_x + pad_x, label_y + pad_y),
+            name,
+            font=font,
+            fill=color_rgb,
+        )
 
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 

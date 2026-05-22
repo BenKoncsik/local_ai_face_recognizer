@@ -70,6 +70,7 @@ class ClusteringService:
         )
 
         n_persons = self._assign_persons(face_ids, label_map)
+        self._delete_orphan_auto_persons()
         self._session.commit()
         log.info("Clustering assigned %d person(s)", n_persons)
         return n_persons
@@ -185,6 +186,29 @@ class ClusteringService:
                 face.person_id = label_to_person[label]
 
         return len(label_to_person)
+
+    def _delete_orphan_auto_persons(self) -> int:
+        """Delete auto-named persons left with no faces after re-clustering.
+
+        Every clustering run creates a fresh set of "Unknown N" persons and
+        reassigns faces to them.  Persons from previous runs would otherwise
+        accumulate as face-less rows that render as blank "?" entries in the
+        UI.  Manually-named persons are never touched, even when face-less.
+
+        Returns:
+            Number of orphaned persons removed.
+        """
+        orphans: List[Person] = (
+            self._session.query(Person)
+            .filter(Person.is_auto_named == True)  # noqa: E712
+            .filter(~Person.faces.any())
+            .all()
+        )
+        for person in orphans:
+            self._session.delete(person)
+        if orphans:
+            log.info("Removed %d orphaned auto-named person(s)", len(orphans))
+        return len(orphans)
 
     def _get_or_create_person(self, label: int, auto_counter: int) -> Person:
         """Return an existing auto Person for *label* or create a new one."""

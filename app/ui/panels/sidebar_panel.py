@@ -211,10 +211,14 @@ class PersonListItem(QListWidgetItem):
 
     def __init__(self, person: Person) -> None:
         face_count = len(person.faces)
-        label = f"{person.name}  ({face_count})"
+        prefix = "🔒 " if person.is_protected else ""
+        label = f"{prefix}{person.name}  ({face_count})"
         super().__init__(label)
         self.person_id = person.id
         self.person_name = person.name
+        if person.is_protected:
+            from PySide6.QtGui import QColor
+            self.setForeground(QColor("#A6ADC8"))
 
 
 class SidebarPanel(QWidget):

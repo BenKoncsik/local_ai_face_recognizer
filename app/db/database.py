@@ -76,11 +76,16 @@ def _migrate_add_columns(engine: Engine) -> None:
     """Add columns that didn't exist in older schema versions (idempotent)."""
     new_columns = {
         "persons": [
-            ("last_name",   "VARCHAR(255)"),
-            ("first_name",  "VARCHAR(255)"),
-            ("second_name", "VARCHAR(255)"),
-            ("birth_place", "VARCHAR(512)"),
-            ("birth_date",  "VARCHAR(64)"),
+            ("last_name",    "VARCHAR(255)"),
+            ("first_name",   "VARCHAR(255)"),
+            ("second_name",  "VARCHAR(255)"),
+            ("nickname",     "VARCHAR(255)"),
+            ("married_name",  "VARCHAR(255)"),
+            ("birth_place",  "VARCHAR(512)"),
+            ("birth_date",   "VARCHAR(64)"),
+            ("death_place",  "VARCHAR(512)"),
+            ("death_date",   "VARCHAR(64)"),
+            ("is_protected", "BOOLEAN NOT NULL DEFAULT 0"),
         ],
         "images": [
             ("photo_date", "VARCHAR(128)"),
@@ -99,6 +104,30 @@ def _migrate_add_columns(engine: Engine) -> None:
                     )
                     log.info("Migration: added column %s.%s", table, col_name)
         conn.commit()
+
+
+UNKNOWN_PERSON_NAME = "Ismeretlen"
+
+
+def ensure_unknown_person() -> None:
+    """Create the protected 'Ismeretlen' person if it does not yet exist."""
+    from app.db.models import Person
+
+    with session_scope() as session:
+        existing = (
+            session.query(Person)
+            .filter(Person.is_protected == True)  # noqa: E712
+            .first()
+        )
+        if existing is None:
+            session.add(
+                Person(
+                    name=UNKNOWN_PERSON_NAME,
+                    is_auto_named=False,
+                    is_protected=True,
+                )
+            )
+            log.info("Created protected person: '%s'", UNKNOWN_PERSON_NAME)
 
 
 def get_engine() -> Engine:

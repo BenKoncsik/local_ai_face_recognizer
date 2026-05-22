@@ -45,6 +45,8 @@ class IdentityService:
             The updated :class:`Person` row.
         """
         person = self._require_person(person_id)
+        if person.is_protected:
+            raise ValueError(f"'{person.name}' is a protected person and cannot be renamed.")
         old_name = person.name
         person.name = new_name.strip()
         person.is_auto_named = False
@@ -93,6 +95,11 @@ class IdentityService:
             for b in target_faces[:5]:  # sample — avoid O(n²) explosion
                 self._record_correction(a, b, same_person=True)
 
+        # The bulk UPDATE above moved the faces in the DB, but ``source.faces``
+        # is a stale loaded collection.  Expire it so deleting ``source`` does
+        # not nullify the FK of faces that now belong to ``target``.
+        self._session.expire(source, ["faces"])
+
         self._session.delete(source)
         self._session.commit()
         return target
@@ -100,6 +107,8 @@ class IdentityService:
     def delete_person(self, person_id: int) -> None:
         """Un-assign all faces from *person_id* and delete the person row."""
         person = self._require_person(person_id)
+        if person.is_protected:
+            raise ValueError(f"'{person.name}' is a protected person and cannot be deleted.")
         self._session.query(Face).filter(Face.person_id == person_id).update(
             {Face.person_id: None}, synchronize_session="fetch"
         )

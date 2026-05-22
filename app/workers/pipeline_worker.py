@@ -1,7 +1,8 @@
 """Background pipeline worker.
 
-Runs the full scan → detect → embed → cluster pipeline in a QThread so the
-GUI remains responsive.  Progress is communicated via Qt signals.
+Runs the full scan → detect → embed → cluster → suggest pipeline in a
+QThread so the GUI remains responsive.  Progress is communicated via Qt
+signals.
 
 Usage::
 
@@ -29,6 +30,7 @@ from app.services.clustering_service import ClusteringService
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
 from app.services.scan_service import ScanService
+from app.services.suggestion_service import SuggestionService
 
 log = logging.getLogger(__name__)
 
@@ -37,14 +39,16 @@ class PipelineWorker(QThread):
     """QThread that runs the complete processing pipeline.
 
     Signals:
-        progress:    ``(current: int, total: int, stage: str, detail: str)``
-        log_message: ``(message: str)``
-        finished:    ``(success: bool, summary: str)``
-        error:       ``(message: str)``
+        progress:          ``(current: int, total: int, stage: str, detail: str)``
+        log_message:       ``(message: str)``
+        suggestions_ready: ``(count: int)`` — number of name suggestions found
+        finished:          ``(success: bool, summary: str)``
+        error:             ``(message: str)``
     """
 
     progress = Signal(int, int, str, str)
     log_message = Signal(str)
+    suggestions_ready = Signal(int)
     finished = Signal(bool, str)
     error = Signal(str)
 
@@ -90,7 +94,7 @@ class PipelineWorker(QThread):
         # --- Stage 2: Detection ---
         all_pending = self._get_pending_detection_ids()
         self.log_message.emit(
-            f"Stage 2/4: Detecting faces in {len(all_pending)} image(s) …"
+            f"Stage 2/5: Detecting faces in {len(all_pending)} image(s) …"
         )
         total_faces = self._run_detection(all_pending)
         if self._abort:
@@ -98,21 +102,29 @@ class PipelineWorker(QThread):
             return
 
         # --- Stage 3: Embedding ---
-        self.log_message.emit("Stage 3/4: Generating face embeddings …")
+        self.log_message.emit("Stage 3/5: Generating face embeddings …")
         embedded = self._run_embedding()
         if self._abort:
             self.finished.emit(False, "Aborted after embedding")
             return
 
         # --- Stage 4: Clustering ---
-        self.log_message.emit("Stage 4/4: Clustering faces into identities …")
+        self.log_message.emit("Stage 4/5: Clustering faces into identities …")
         n_persons = self._run_clustering()
+
+        # --- Stage 5: Name suggestions ---
+        self.log_message.emit(
+            "Stage 5/5: Matching unknown faces against named people …"
+        )
+        n_suggestions = self._run_suggestions()
+        self.suggestions_ready.emit(n_suggestions)
 
         summary = (
             f"Done — {len(new_ids)} new image(s), "
             f"{total_faces} face(s) detected, "
             f"{embedded} embedded, "
-            f"{n_persons} person cluster(s)"
+            f"{n_persons} person cluster(s), "
+            f"{n_suggestions} name suggestion(s)"
         )
         self.log_message.emit(summary)
         self.finished.emit(True, summary)
@@ -200,3 +212,18 @@ class PipelineWorker(QThread):
             n = svc.run()
             self.progress.emit(1, 1, "Clustering", f"{n} person(s)")
             return n
+
+    def _run_suggestions(self) -> int:
+        """Compute name suggestions; never aborts the pipeline on failure."""
+        try:
+            with session_scope() as session:
+                svc = SuggestionService(
+                    session=session,
+                    config=self._config.suggestions,
+                )
+                n = svc.count_suggestions()
+                self.progress.emit(1, 1, "Suggestions", f"{n} match(es)")
+                return n
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Suggestion stage failed: %s", exc)
+            return 0
