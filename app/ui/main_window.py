@@ -43,6 +43,7 @@ from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.i18n import t
 from app.ui.panels.cluster_panel import ClusterPanel
 from app.ui.panels.collage_panel import CollagePanel
+from app.ui.panels.image_browser_panel import ImageBrowserPanel
 from app.ui.panels.log_panel import LogPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
@@ -90,6 +91,7 @@ class MainWindow(QMainWindow):
         self._retranslate()
         self._restore_last_folder()
         self._setup_tray()
+        self._image_browser.refresh()
 
         self.resize(1280, 780)
         self._update_ready.connect(self._on_update_found)
@@ -227,7 +229,11 @@ class MainWindow(QMainWindow):
         face_layout.addWidget(splitter)
         self._tabs.addTab(face_widget, "👤 Arcfelismerés")
 
-        # --- Tab 1: Kollázs nézet ---
+        # --- Tab 1: Képböngésző ---
+        self._image_browser = ImageBrowserPanel(config=self._config)
+        self._tabs.addTab(self._image_browser, "🗂 Képböngésző")
+
+        # --- Tab 2: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, "🖼 Kollázs")
 
@@ -443,6 +449,7 @@ class MainWindow(QMainWindow):
             self._cluster_panel.clear()
             self._preview_panel.clear()
             self._refresh_persons()
+            self._image_browser.refresh()
             QMessageBox.information(self, t("settings_title"), t("db_switched"))
             log.info("Database switched to: %s", new_db)
 
@@ -467,6 +474,7 @@ class MainWindow(QMainWindow):
         self._status_label.setText(summary)
         self._progress_bar.setValue(100)
         self._refresh_persons()
+        self._image_browser.refresh()
         if not success:
             QMessageBox.warning(self, t("warning"), summary)
 
@@ -721,7 +729,7 @@ class MainWindow(QMainWindow):
 
         # Switch to collage tab and refresh
         self._collage_panel.refresh_collage_list()
-        self._tabs.setCurrentIndex(1)
+        self._tabs.setCurrentIndex(2)
 
         msg = f"{imported} kollázs importálva."
         if errors:

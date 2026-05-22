@@ -140,24 +140,46 @@ jobs:
         shell: bash
         run: |
           find_python() {
-            for candidate in python3.11 python3.12 python3.13 python3 python; do
-              if command -v "$candidate" >/dev/null 2>&1; then
-                if "$candidate" - <<'PY' >/dev/null 2>&1
+            for candidate in python3.13 python3.12 python3.11 python3 python; do
+              local bin
+              bin="$(command -v "$candidate" 2>/dev/null)" || continue
+              if "$bin" - <<'PY' >/dev/null 2>&1
           import sys
           raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
           PY
-                then
-                  command -v "$candidate"
-                  return 0
-                fi
+              then
+                echo "$bin"
+                return 0
+              fi
+            done
+            # also check well-known Homebrew locations not always on PATH
+            for candidate in \
+              /opt/homebrew/bin/python3.13 \
+              /opt/homebrew/bin/python3.12 \
+              /opt/homebrew/bin/python3.11 \
+              /usr/local/bin/python3.13 \
+              /usr/local/bin/python3.12 \
+              /usr/local/bin/python3.11; do
+              [ -x "$candidate" ] || continue
+              if "$candidate" - <<'PY' >/dev/null 2>&1
+          import sys
+          raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+          PY
+              then
+                echo "$candidate"
+                return 0
               fi
             done
             return 1
           }
 
           PY_BIN="$(find_python)" || {
-            echo "Python 3.11+ was not found on the self-hosted macOS runner." >&2
-            exit 1
+            echo "Python 3.11+ not found — installing via Homebrew..." >&2
+            brew install python@3.11 >&2
+            PY_BIN="$(find_python)" || {
+              echo "Python 3.11+ was not found even after Homebrew install." >&2
+              exit 1
+            }
           }
 
           SHIM_DIR="${RUNNER_TEMP}/python-shims"
@@ -226,7 +248,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Selected Windows runner
-        shell: bash
+        shell: pwsh
         run: echo "${{ needs.pick-runner.outputs.windows_runner_note }}"
 
       - uses: actions/setup-python@v6
@@ -238,18 +260,18 @@ jobs:
             requirements.txt
 
       - name: Install Python dependencies
-        shell: bash
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
 
       - name: Build bundled app
-        shell: bash
+        shell: pwsh
         run: python scripts/package_app.py --version "${{ needs.prepare.outputs.package_version }}"
 
       - name: Create release directory
-        shell: bash
-        run: mkdir -p release
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path release | Out-Null
 
       - name: Package Windows installer
         shell: powershell
@@ -261,7 +283,7 @@ jobs:
       - name: Upload Windows assets to GitHub release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: pwsh
         run: |
           python scripts/github_release.py upload \
             --repo "$GITHUB_REPOSITORY" \
