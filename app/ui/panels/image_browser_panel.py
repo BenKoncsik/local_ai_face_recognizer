@@ -154,19 +154,16 @@ class _FocusLineEdit(QLineEdit):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class _DrawableImageLabel(QLabel):
-    """QLabel that can either emit a click position or a drawn rectangle.
-
-    In click mode (default): left-click emits ``clicked(x, y)`` in label coords.
-    In draw mode: mouse drag emits ``rect_drawn(QRect)`` in label coords;
-                  a yellow dashed rectangle is rendered live while dragging.
-    """
+    """QLabel supporting click-to-select, draw-mode, wheel zoom, and middle-drag pan."""
 
     clicked = Signal(int, int)
     rect_drawn = Signal(QRect)
     right_clicked = Signal(int, int)
+    wheel_zoomed = Signal(int, int, int)   # angle_delta_y, widget_x, widget_y
+    pan_moved = Signal(int, int)           # dx, dy in widget pixels
 
     _BORDER_NORMAL = "QLabel { background: #1a1a1a; }"
-    _BORDER_DRAW = "QLabel { background: #1a1a1a; border: 2px solid #ffcc00; }"
+    _BORDER_DRAW   = "QLabel { background: #1a1a1a; border: 2px solid #ffcc00; }"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -174,9 +171,24 @@ class _DrawableImageLabel(QLabel):
         self._draw_mode = False
         self._start: Optional[QPoint] = None
         self._end: Optional[QPoint] = None
+        self._mid_start: Optional[QPoint] = None
+        self._source_pix: Optional[QPixmap] = None
+        self._zoom: float = 1.0
+        self._pan_x: float = 0.0
+        self._pan_y: float = 0.0
         self.setStyleSheet(self._BORDER_NORMAL)
 
     # ── Public ────────────────────────────────────────────────────────
+
+    def set_source_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        self._source_pix = pixmap
+        self.update()
+
+    def set_zoom_pan(self, zoom: float, pan_x: float, pan_y: float) -> None:
+        self._zoom = zoom
+        self._pan_x = pan_x
+        self._pan_y = pan_y
+        self.update()
 
     def set_draw_mode(self, enabled: bool) -> None:
         self._draw_mode = enabled
@@ -188,6 +200,10 @@ class _DrawableImageLabel(QLabel):
     # ── Mouse events ─────────────────────────────────────────────────
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MiddleButton:
+            self._mid_start = event.position().toPoint()
+            self.setCursor(Qt.ClosedHandCursor)
+            return
         if event.button() != Qt.LeftButton:
             return
         if self._draw_mode:
@@ -199,11 +215,20 @@ class _DrawableImageLabel(QLabel):
             self.clicked.emit(pos.x(), pos.y())
 
     def mouseMoveEvent(self, event) -> None:
+        if self._mid_start is not None:
+            cur = event.position().toPoint()
+            self.pan_moved.emit(cur.x() - self._mid_start.x(), cur.y() - self._mid_start.y())
+            self._mid_start = cur
+            return
         if self._draw_mode and self._start is not None:
             self._end = event.position().toPoint()
             self.update()
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MiddleButton:
+            self._mid_start = None
+            self.setCursor(Qt.CrossCursor)
+            return
         if not self._draw_mode or self._start is None or event.button() != Qt.LeftButton:
             return
         end = event.position().toPoint()
@@ -219,12 +244,39 @@ class _DrawableImageLabel(QLabel):
     def contextMenuEvent(self, event) -> None:
         self.right_clicked.emit(event.pos().x(), event.pos().y())
 
-    # ── Paint rubber-band rect ────────────────────────────────────────
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta != 0:
+            pos = event.position().toPoint()
+            self.wheel_zoomed.emit(delta, pos.x(), pos.y())
+        event.accept()
+
+    # ── Paint ────────────────────────────────────────────────────────
 
     def paintEvent(self, event) -> None:
-        super().paintEvent(event)
+        painter = QPainter(self)
+        cr = self.contentsRect()
+        painter.fillRect(cr, Qt.black)
+
+        if self._source_pix is not None:
+            lw, lh = cr.width(), cr.height()
+            pw, ph = self._source_pix.width(), self._source_pix.height()
+            if pw > 0 and ph > 0:
+                base_scale = min(lw / pw, lh / ph)
+                eff = base_scale * self._zoom
+                disp_w = pw * eff
+                disp_h = ph * eff
+                ox = cr.x() + (lw - disp_w) / 2 + self._pan_x
+                oy = cr.y() + (lh - disp_h) / 2 + self._pan_y
+                painter.drawPixmap(
+                    QRect(int(ox), int(oy), int(disp_w), int(disp_h)),
+                    self._source_pix,
+                )
+        else:
+            painter.setPen(Qt.gray)
+            painter.drawText(cr, Qt.AlignCenter | Qt.TextWordWrap, self.text())
+
         if self._draw_mode and self._start is not None and self._end is not None:
-            painter = QPainter(self)
             pen = QPen(Qt.yellow, 2, Qt.DashLine)
             painter.setPen(pen)
             painter.drawRect(QRect(self._start, self._end).normalized())
@@ -254,6 +306,9 @@ class ImageBrowserPanel(QWidget):
         self._orig_img_bgr: Optional[np.ndarray] = None
         self._full_pixmap: Optional[QPixmap] = None
         self._recent_assignment_person_ids: List[int] = []
+        self._zoom: float = 1.0
+        self._pan_x: float = 0.0
+        self._pan_y: float = 0.0
         # Fullscreen state
         self._fs_hidden_widgets: List[QWidget] = []
         self._fs_was_maximized: bool = False
@@ -339,6 +394,8 @@ class ImageBrowserPanel(QWidget):
         self._image_label.clicked.connect(self._on_image_clicked)
         self._image_label.rect_drawn.connect(self._on_rect_drawn)
         self._image_label.right_clicked.connect(self._on_image_right_clicked)
+        self._image_label.wheel_zoomed.connect(self._on_wheel_zoom)
+        self._image_label.pan_moved.connect(self._on_pan_moved)
         splitter.addWidget(self._image_label)
 
         # Right: info panel
@@ -478,6 +535,8 @@ class ImageBrowserPanel(QWidget):
         count = len(self._image_ids)
         if count == 0:
             self._counter_label.setText("0 / 0")
+            self._full_pixmap = None
+            self._image_label.set_source_pixmap(None)
             self._image_label.setText("Nincs kép az adatbázisban")
             self._folder_label.setText("")
             self._clear_face_panel()
@@ -496,6 +555,7 @@ class ImageBrowserPanel(QWidget):
         if self._current_index > 0:
             self._current_index -= 1
             self._selected_face_id = None
+            self._reset_zoom()
             self._load_current_image()
             self._update_nav_buttons()
 
@@ -503,6 +563,7 @@ class ImageBrowserPanel(QWidget):
         if self._current_index < len(self._image_ids) - 1:
             self._current_index += 1
             self._selected_face_id = None
+            self._reset_zoom()
             self._load_current_image()
             self._update_nav_buttons()
 
@@ -556,6 +617,7 @@ class ImageBrowserPanel(QWidget):
         if img_bgr is None:
             self._orig_img_bgr = None
             self._full_pixmap = None
+            self._image_label.set_source_pixmap(None)
             self._image_label.setText(f"Nem tölthető be:\n{self._current_path}")
             self._clear_face_panel()
             return
@@ -565,19 +627,9 @@ class ImageBrowserPanel(QWidget):
         self._clear_face_panel()
         self._reload_persons_combo()
 
-    def _update_scaled_pixmap(self) -> None:
-        if self._full_pixmap is None:
-            return
-        lw = self._image_label.width()
-        lh = self._image_label.height()
-        if lw <= 0 or lh <= 0:
-            return
-        scaled = self._full_pixmap.scaled(lw, lh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._image_label.setPixmap(scaled)
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._update_scaled_pixmap()
+        self._image_label.update()
 
     # ──────────────────────────────────────────────────────────────────
     # Face click → select
@@ -772,25 +824,25 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _label_to_image(self, lx: int, ly: int) -> Tuple[int, int]:
-        """Convert label (display) coordinates to original image pixel coordinates."""
+        """Convert label (widget) coordinates to original image pixel coordinates."""
         if self._full_pixmap is None:
             return -1, -1
-        pw = self._full_pixmap.width()
-        ph = self._full_pixmap.height()
-        lw = self._image_label.width()
-        lh = self._image_label.height()
+        cr = self._image_label.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
         if pw == 0 or ph == 0:
             return -1, -1
-        scale = min(lw / pw, lh / ph)
-        disp_w = pw * scale
-        disp_h = ph * scale
-        offset_x = (lw - disp_w) / 2.0
-        offset_y = (lh - disp_h) / 2.0
-        rx = lx - offset_x
-        ry = ly - offset_y
+        base_scale = min(lw / pw, lh / ph)
+        eff = base_scale * self._zoom
+        disp_w = pw * eff
+        disp_h = ph * eff
+        ox = cr.x() + (lw - disp_w) / 2 + self._pan_x
+        oy = cr.y() + (lh - disp_h) / 2 + self._pan_y
+        rx = lx - ox
+        ry = ly - oy
         if rx < 0 or ry < 0 or rx >= disp_w or ry >= disp_h:
             return -1, -1
-        return int(rx / scale), int(ry / scale)
+        return int(rx / eff), int(ry / eff)
 
     def _label_rect_to_image(self, rect: QRect) -> Optional[Tuple[int, int, int, int]]:
         """Convert a label-space QRect to (x, y, w, h) in original image coordinates."""
@@ -816,7 +868,59 @@ class ImageBrowserPanel(QWidget):
             return
         annotated = _draw_faces(self._orig_img_bgr, self._face_data, self._selected_face_id)
         self._full_pixmap = _bgr_to_qpixmap(annotated)
-        self._update_scaled_pixmap()
+        self._image_label.set_source_pixmap(self._full_pixmap)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Zoom / pan
+    # ──────────────────────────────────────────────────────────────────
+
+    def _on_wheel_zoom(self, delta: int, lx: int, ly: int) -> None:
+        factor = 1.15 if delta > 0 else 1.0 / 1.15
+        new_zoom = max(1.0, min(10.0, self._zoom * factor))
+        if new_zoom == self._zoom:
+            return
+        if self._full_pixmap is not None:
+            cr = self._image_label.contentsRect()
+            lw, lh = cr.width(), cr.height()
+            pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
+            base_scale = min(lw / pw, lh / ph)
+            old_eff = base_scale * self._zoom
+            new_eff = base_scale * new_zoom
+            old_ox = cr.x() + (lw - pw * old_eff) / 2 + self._pan_x
+            old_oy = cr.y() + (lh - ph * old_eff) / 2 + self._pan_y
+            ix = (lx - old_ox) / old_eff
+            iy = (ly - old_oy) / old_eff
+            self._pan_x = lx - (cr.x() + (lw - pw * new_eff) / 2) - ix * new_eff
+            self._pan_y = ly - (cr.y() + (lh - ph * new_eff) / 2) - iy * new_eff
+        self._zoom = new_zoom
+        self._clamp_pan()
+        self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
+
+    def _on_pan_moved(self, dx: int, dy: int) -> None:
+        self._pan_x += dx
+        self._pan_y += dy
+        self._clamp_pan()
+        self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
+
+    def _clamp_pan(self) -> None:
+        if self._full_pixmap is None:
+            self._pan_x = self._pan_y = 0.0
+            return
+        cr = self._image_label.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
+        base_scale = min(lw / pw, lh / ph)
+        eff = base_scale * self._zoom
+        max_x = max(0.0, (pw * eff - lw) / 2)
+        max_y = max(0.0, (ph * eff - lh) / 2)
+        self._pan_x = max(-max_x, min(max_x, self._pan_x))
+        self._pan_y = max(-max_y, min(max_y, self._pan_y))
+
+    def _reset_zoom(self) -> None:
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._image_label.set_zoom_pan(1.0, 0.0, 0.0)
 
     # ──────────────────────────────────────────────────────────────────
     # Face info panel
