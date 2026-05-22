@@ -59,8 +59,11 @@ python -m pip install --upgrade pip setuptools wheel --quiet
 python -m pip install -e ".[dev]" --quiet
 
 Write-Host '==> Trying optional TPU packages (ai-edge-litert)...'
-python -m pip install -e ".[tflite]" --quiet 2>$null
-if ($LASTEXITCODE -ne 0) {
+try {
+    # Run pip install for optional tflite extras. Some Python versions (or pip/resolution)
+    # may return a non-zero exit code; don't let that stop the whole script.
+    & python -m pip install -e ".[tflite]" --quiet 2>$null
+} catch {
     Write-Host "    WARNING: TPU support unavailable for Python $PyVer."
 }
 
