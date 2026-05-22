@@ -22,6 +22,7 @@ import cv2
 from sqlalchemy.orm import Session
 
 from app.db.models import Collage, CollageNode, Face, Image, Person
+from app.utils.image_utils import load_image_bgr, save_image_bgr
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +226,7 @@ class ExportService:
         # --- render annotated originals ---
         for img_path, face_list in image_faces.items():
             src = Path(img_path)
-            img = cv2.imread(img_path)
+            img = load_image_bgr(img_path)
             if img is None:
                 continue
             for pname, (x, y, w, h) in face_list:
@@ -238,7 +239,7 @@ class ExportService:
                 cv2.putText(img, pname, (x + 3, ty - bl), font, scale, (50, 220, 50), 2)
 
             dst_name = f"img_{abs(hash(img_path))}.jpg"
-            cv2.imwrite(str(img_dir / dst_name), img)
+            save_image_bgr(img_dir / dst_name, img)
             for pname, _ in face_list:
                 if dst_name not in person_images.get(pname, []):
                     person_images.setdefault(pname, []).append(dst_name)
@@ -318,7 +319,7 @@ class ExportService:
             safe = _safe_filename(collage.album_title or f"collage_{collage.id}")
             img_name = f"{safe}_{collage.id}.jpg"
             if canvas is not None:
-                cv2.imwrite(str(img_dir / img_name), canvas)
+                save_image_bgr(img_dir / img_name, canvas)
             else:
                 img_name = ""
 

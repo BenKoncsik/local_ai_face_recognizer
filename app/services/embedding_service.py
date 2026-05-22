@@ -10,12 +10,12 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
-import cv2
 from sqlalchemy.orm import Session
 
 from app.config import AppConfig
 from app.db.models import Face
 from app.embeddings.base import FaceEmbedder
+from app.utils.image_utils import load_image_bgr
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class EmbeddingService:
             log.debug("Crop file missing for face id=%d: %s", face.id, crop_file)
             return False
 
-        img_bgr = cv2.imread(str(crop_file))
+        img_bgr = load_image_bgr(str(crop_file))
         if img_bgr is None:
             log.debug("Cannot read crop: %s", crop_file)
             return False

@@ -51,6 +51,20 @@ from app.workers.pipeline_worker import PipelineWorker
 log = logging.getLogger(__name__)
 
 
+def _last_dir(key: str, default: str = "") -> str:
+    """Read a remembered directory path from persistent settings."""
+    from PySide6.QtCore import QSettings
+
+    return QSettings("FaceLocal", "FaceLocal").value(key, default, type=str)
+
+
+def _save_dir(key: str, path: str) -> None:
+    """Persist a directory path so the next file dialog reopens there."""
+    from PySide6.QtCore import QSettings
+
+    QSettings("FaceLocal", "FaceLocal").setValue(key, path)
+
+
 class MainWindow(QMainWindow):
     """Primary application window."""
 
@@ -74,6 +88,7 @@ class MainWindow(QMainWindow):
         self._connect_log_handler()
         self._refresh_persons()
         self._retranslate()
+        self._restore_last_folder()
         self._setup_tray()
 
         self.resize(1280, 780)
@@ -106,6 +121,7 @@ class MainWindow(QMainWindow):
 
         self._folder_label = QLabel()
         self._folder_label.setStyleSheet("color: #888;")
+        self._folder_label.setMaximumWidth(380)
         tb.addWidget(self._folder_label)
 
         tb.addSeparator()
@@ -310,14 +326,34 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_select_folder(self) -> None:
+        start_dir = _last_dir("paths/last_folder", str(Path.home()))
         folder = QFileDialog.getExistingDirectory(
-            self, t("select_folder"), str(Path.home())
+            self, t("select_folder"), start_dir
         )
         if folder:
             self._root_folder = folder
-            self._folder_label.setText(f"  {folder}")
+            _save_dir("paths/last_folder", folder)
+            self._set_folder_label(folder)
             self._scan_btn.setEnabled(True)
             log.info("Root folder selected: %s", folder)
+
+    def _set_folder_label(self, path: str) -> None:
+        """Show *path* in the toolbar, elided so it never overflows the toolbar."""
+        from PySide6.QtGui import QFontMetrics
+
+        self._folder_label.setToolTip(path)
+        metrics = QFontMetrics(self._folder_label.font())
+        elided = metrics.elidedText(path, Qt.ElideMiddle, 360)
+        self._folder_label.setText(f"  {elided}")
+
+    def _restore_last_folder(self) -> None:
+        """Re-select the folder used in the previous session, if it still exists."""
+        last = _last_dir("paths/last_folder", "")
+        if last and Path(last).is_dir():
+            self._root_folder = last
+            self._set_folder_label(last)
+            self._scan_btn.setEnabled(True)
+            log.info("Restored last folder: %s", last)
 
     @Slot()
     def _on_force_rescan(self) -> None:
@@ -647,19 +683,22 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Kollázs fájl megnyitása / Open collage file",
-            str(Path.home()),
+            _last_dir("paths/last_collage", str(Path.home())),
             "Picasa kollázs (*.cxf *.cfx);;Minden fájl (*)",
         )
         if not files:
             return
+        _save_dir("paths/last_collage", str(Path(files[0]).parent))
 
         # Optionally ask for an extra search root to resolve Windows paths
         search_root = QFileDialog.getExistingDirectory(
             self,
             "Keresési gyökérmappa (opcionális) — hagyd üresen, ha nem kell\n"
             "Extra search root for resolving Windows paths (optional)",
-            str(Path.home()),
+            _last_dir("paths/last_search_root", str(Path.home())),
         )
+        if search_root:
+            _save_dir("paths/last_search_root", search_root)
         search_roots = [search_root] if search_root else []
 
         imported, skipped, errors = 0, 0, []
@@ -698,10 +737,11 @@ class MainWindow(QMainWindow):
         target = QFileDialog.getExistingDirectory(
             self,
             "HTML export mappa / Select export folder",
-            str(Path.home()),
+            _last_dir("paths/last_export", str(Path.home())),
         )
         if not target:
             return
+        _save_dir("paths/last_export", target)
 
         try:
             with session_scope() as session:

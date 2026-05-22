@@ -10,15 +10,13 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
-import cv2
-import numpy as np
 from sqlalchemy.orm import Session
 
 from app.config import AppConfig
 from app.db.models import Face, Image
 from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
-from app.utils.image_utils import save_face_crop
+from app.utils.image_utils import load_image_bgr, save_face_crop
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +87,7 @@ class DetectionService:
             log.warning("Image file missing on disk: %s", path)
             return 0
 
-        img_bgr = cv2.imread(str(path))
+        img_bgr = load_image_bgr(str(path))
         if img_bgr is None:
             log.warning("OpenCV could not read: %s", path)
             return 0

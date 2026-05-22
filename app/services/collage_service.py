@@ -26,6 +26,7 @@ from app.services.collage_parser import (
     parse_collage_file,
     project_face_to_collage,
 )
+from app.utils.image_utils import load_image_bgr, save_image_bgr
 
 log = logging.getLogger(__name__)
 
@@ -329,7 +330,7 @@ class CollageService:
 
             src_path = node.src_resolved
             if src_path and Path(src_path).exists():
-                img = cv2.imread(src_path)
+                img = load_image_bgr(src_path)
                 if img is not None:
                     cell = _fit_cover(img, pw, ph, node.scale)
 
@@ -400,7 +401,7 @@ class CollageService:
 
         safe_title = _safe_filename(collage.album_title or f"collage_{collage.id}")
         jpg_path = out / f"{safe_title}_annotated.jpg"
-        cv2.imwrite(str(jpg_path), canvas)
+        save_image_bgr(jpg_path, canvas)
 
         # Write modified CXF listing only nodes with recognised persons
         self._write_annotated_cxf(collage, out / f"{safe_title}_annotated.cxf")

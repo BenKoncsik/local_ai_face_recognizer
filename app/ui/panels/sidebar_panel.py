@@ -68,7 +68,8 @@ def _render_original_with_box(
     max_size: int,
 ) -> Optional[QPixmap]:
     """Load original image, draw bbox, return scaled QPixmap."""
-    img = cv2.imread(image_path)
+    from app.utils.image_utils import load_image_bgr
+    img = load_image_bgr(image_path)
     if img is None:
         return None
 

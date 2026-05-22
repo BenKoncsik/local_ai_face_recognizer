@@ -28,7 +28,7 @@ from app.db.database import session_scope
 from app.db.models import Face, Image
 from app.detectors.base import Detection
 from app.ui.i18n import t
-from app.utils.image_utils import save_face_crop
+from app.utils.image_utils import load_image_bgr, save_face_crop
 
 log = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ class ManualMarkDialog(QDialog):
         layout.addWidget(btns)
 
     def _load_image(self) -> None:
-        self._img_bgr = cv2.imread(self._image_path)
+        self._img_bgr = load_image_bgr(self._image_path)
         if self._img_bgr is None:
             QMessageBox.warning(self, t("error"), f"Cannot load: {self._image_path}")
             self.reject()

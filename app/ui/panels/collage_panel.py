@@ -427,11 +427,15 @@ class CollagePanel(QWidget):
             QMessageBox.warning(self, "Export", "Nincs kiválasztott kollázs.")
             return
 
+        from PySide6.QtCore import QSettings
+        settings = QSettings("FaceLocal", "FaceLocal")
+        start_dir = settings.value("paths/last_export", "", type=str)
         target = QFileDialog.getExistingDirectory(
-            self, "Exportálási mappa kiválasztása", ""
+            self, "Exportálási mappa kiválasztása", start_dir
         )
         if not target:
             return
+        settings.setValue("paths/last_export", target)
 
         try:
             with session_scope() as session:

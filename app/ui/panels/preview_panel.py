@@ -145,7 +145,8 @@ class PreviewPanel(QWidget):
         img_path = face.image.file_path
         self._current_image_path = img_path
 
-        img_bgr = cv2.imread(img_path)
+        from app.utils.image_utils import load_image_bgr
+        img_bgr = load_image_bgr(img_path)
         if img_bgr is None:
             self._image_label.setText(f"Cannot load:\n{img_path}")
             return

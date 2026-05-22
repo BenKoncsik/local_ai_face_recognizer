@@ -61,7 +61,7 @@ def save_face_crop(
 
     filename = f"img{image_id:06d}_face{face_index:03d}.jpg"
     dest = crops_dir / filename
-    success = cv2.imwrite(str(dest), thumb, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    success = save_image_bgr(dest, thumb, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
     if not success:
         log.warning("Failed to write crop: %s", dest)
@@ -73,8 +73,10 @@ def save_face_crop(
 def load_image_bgr(path: str) -> Optional[np.ndarray]:
     """Load an image file to a BGR numpy array, with Pillow fallback.
 
-    OpenCV handles most formats natively.  For WEBP and edge cases, we fall
-    back to Pillow and convert.
+    Decoding is done via ``np.fromfile`` + ``cv2.imdecode`` rather than
+    ``cv2.imread``: on Windows ``cv2.imread`` cannot open paths containing
+    non-ASCII characters (e.g. accented Hungarian folder names) and silently
+    returns ``None``.  For WEBP and other edge cases we fall back to Pillow.
 
     Args:
         path: Absolute or relative path to the image file.
@@ -82,9 +84,14 @@ def load_image_bgr(path: str) -> Optional[np.ndarray]:
     Returns:
         BGR uint8 numpy array, or ``None`` if loading fails.
     """
-    img = cv2.imread(path)
-    if img is not None:
-        return img
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size > 0:
+            img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if img is not None:
+                return img
+    except Exception as exc:  # noqa: BLE001
+        log.debug("cv2.imdecode failed for %s: %s", path, exc)
 
     # Pillow fallback (handles WEBP, some TIFF variants, etc.)
     try:
@@ -93,6 +100,34 @@ def load_image_bgr(path: str) -> Optional[np.ndarray]:
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not load image %s: %s", path, exc)
         return None
+
+
+def save_image_bgr(path, img: np.ndarray, params: Optional[list] = None) -> bool:
+    """Write a BGR image to *path*, supporting non-ASCII paths on Windows.
+
+    Mirrors ``cv2.imwrite`` but encodes in memory and writes the bytes with
+    ``ndarray.tofile`` so Unicode paths work everywhere.
+
+    Args:
+        path:   Destination file path; the extension selects the format.
+        img:    BGR uint8 numpy array.
+        params: Optional OpenCV encode params (e.g. JPEG quality).
+
+    Returns:
+        ``True`` on success, ``False`` otherwise.
+    """
+    path = Path(path)
+    ext = path.suffix or ".jpg"
+    try:
+        ok, buf = cv2.imencode(ext, img, params or [])
+        if not ok:
+            log.warning("Failed to encode image for %s", path)
+            return False
+        buf.tofile(str(path))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not write image %s: %s", path, exc)
+        return False
 
 
 def qt_pixmap_from_path(path: str, max_size: Tuple[int, int] = (400, 400)):
