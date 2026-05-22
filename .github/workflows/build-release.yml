@@ -274,14 +274,36 @@ jobs:
             & $bin -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>$null
             if ($LASTEXITCODE -eq 0) { $pyBin = $bin; break }
           }
-          if (-not $pyBin) { Write-Error "Python 3.11+ not found on self-hosted runner"; exit 1 }
           $venvDir = Join-Path $env:RUNNER_TEMP "face-local-venv"
           if (Test-Path $venvDir) { Remove-Item $venvDir -Recurse -Force }
-          & $pyBin -m venv $venvDir
-          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create Python virtual environment"; exit 1 }
+
+          if ($pyBin) {
+            Write-Host "Using local Python: $pyBin"
+            & $pyBin -m venv $venvDir
+            if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create Python virtual environment"; exit 1 }
+          } else {
+            Write-Host "Python 3.11+ not found on self-hosted runner; bootstrapping a local Python with uv."
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $uvRoot = Join-Path $env:RUNNER_TEMP "uv"
+            $uvZip = Join-Path $env:RUNNER_TEMP "uv.zip"
+            if (Test-Path $uvRoot) { Remove-Item $uvRoot -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $uvRoot | Out-Null
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvZip
+            Expand-Archive -LiteralPath $uvZip -DestinationPath $uvRoot -Force
+            $uv = Get-ChildItem $uvRoot -Filter "uv.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $uv) { Write-Error "uv.exe was not found after extraction"; exit 1 }
+            $env:UV_CACHE_DIR = Join-Path $env:RUNNER_TEMP "uv-cache"
+            $env:UV_PYTHON_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "uv-python"
+            & $uv --version
+            & $uv python install 3.11
+            if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to install Python 3.11"; exit 1 }
+            & $uv venv $venvDir --python 3.11
+            if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to create Python virtual environment"; exit 1 }
+          }
+
           Add-Content $env:GITHUB_PATH (Join-Path $venvDir "Scripts")
           Add-Content $env:GITHUB_ENV "VIRTUAL_ENV=$venvDir"
-          & $pyBin --version
+          & (Join-Path $venvDir "Scripts\python.exe") --version
 
       - uses: actions/setup-python@v6
         if: ${{ !contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
