@@ -223,14 +223,21 @@ def _apply_macos_dmg(dmg_path: Path) -> None:
 
 
 def _apply_windows_exe(exe_path: Path) -> None:
-    """Run the Inno Setup installer silently; it handles close + relaunch."""
-    import subprocess
-    # /SILENT: no wizard UI  /CLOSEAPPLICATIONS: close running instances
-    # /RESTARTAPPLICATIONS: relaunch after install
-    subprocess.Popen(
-        [str(exe_path), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
-        close_fds=True,
+    """Run the Inno Setup installer; ShellExecute triggers UAC elevation if needed."""
+    import ctypes
+    # ShellExecuteW with "runas" properly requests admin rights via UAC prompt.
+    # subprocess.Popen does NOT trigger UAC, causing silent failure on most systems.
+    params = "/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS"
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", str(exe_path), params, None, 1
     )
+    if ret <= 32:
+        # ShellExecute returns a value > 32 on success; fall back to direct launch
+        import subprocess
+        subprocess.Popen(
+            [str(exe_path), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
+            close_fds=True,
+        )
     sys.exit(0)
 
 

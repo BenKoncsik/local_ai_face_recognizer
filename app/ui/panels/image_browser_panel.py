@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from app.db.database import session_scope
 from app.db.models import Face, Image, Person
 from app.services.identity_service import IdentityService
+from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 
 log = logging.getLogger(__name__)
 
@@ -492,6 +493,13 @@ class ImageBrowserPanel(QWidget):
         self._rename_btn.setVisible(False)
         self._rename_btn.clicked.connect(self._start_rename)
         name_row.addWidget(self._rename_btn)
+
+        self._person_info_btn = QPushButton("📋")
+        self._person_info_btn.setFixedSize(26, 26)
+        self._person_info_btn.setToolTip("Személyadatok szerkesztése")
+        self._person_info_btn.setVisible(False)
+        self._person_info_btn.clicked.connect(self._on_person_info)
+        name_row.addWidget(self._person_info_btn)
 
         info_layout.addLayout(name_row)
 
@@ -967,10 +975,12 @@ class ImageBrowserPanel(QWidget):
             self._person_name_label.setText(person_name)
             self._person_name_label.setVisible(True)
             self._rename_btn.setVisible(True)
+            self._person_info_btn.setVisible(True)
         else:
             self._face_status_label.setText("Ez az arc nincs kategorizálva")
             self._person_name_label.setVisible(False)
             self._rename_btn.setVisible(False)
+            self._person_info_btn.setVisible(False)
         self._rename_edit.setVisible(False)
 
     def _clear_face_panel(self) -> None:
@@ -985,6 +995,7 @@ class ImageBrowserPanel(QWidget):
             self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self._person_name_label.setVisible(False)
         self._rename_btn.setVisible(False)
+        self._person_info_btn.setVisible(False)
         self._assign_btn.setEnabled(False)
         self._create_btn.setEnabled(False)
         self._new_name_edit.clear()
@@ -1035,6 +1046,7 @@ class ImageBrowserPanel(QWidget):
             if entry and entry[5]:
                 self._person_name_label.setVisible(True)
                 self._rename_btn.setVisible(True)
+                self._person_info_btn.setVisible(True)
 
     def _cancel_rename(self) -> None:
         if not self._renaming:
@@ -1047,6 +1059,7 @@ class ImageBrowserPanel(QWidget):
             if entry and entry[5]:
                 self._person_name_label.setVisible(True)
                 self._rename_btn.setVisible(True)
+                self._person_info_btn.setVisible(True)
 
     def _save_person_rename(self, new_name: str) -> None:
         if self._selected_face_id is None:
@@ -1161,6 +1174,42 @@ class ImageBrowserPanel(QWidget):
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
+        self._open_person_info_dialog(person_id)
+
+    def _open_person_info_dialog(self, person_id: int) -> None:
+        """Open the PersonInfoDialog for the given person and save changes."""
+        with session_scope() as session:
+            person = session.get(Person, person_id)
+            if person is None:
+                return
+            dlg = PersonInfoDialog(person, parent=self)
+            if dlg.exec() != PersonInfoDialog.Accepted:
+                return
+            person.last_name = dlg.last_name() or None
+            person.first_name = dlg.first_name() or None
+            person.second_name = dlg.second_name() or None
+            person.nickname = dlg.nickname() or None
+            person.married_name = dlg.married_name() or None
+            person.birth_place = dlg.birth_place() or None
+            person.birth_date = dlg.birth_date() or None
+            person.death_date = dlg.death_date() or None
+            person.death_place = dlg.death_place() or None
+            person.notes = dlg.notes() or None
+        log.info("Személyadatok mentve: person_id=%d", person_id)
+        self._reload_persons_combo()
+        self.person_data_changed.emit()
+
+    def _on_person_info(self) -> None:
+        """Open PersonInfoDialog for the person assigned to the selected face."""
+        if self._selected_face_id is None:
+            return
+        entry = next((f for f in self._face_data if f[0] == self._selected_face_id), None)
+        if entry is None:
+            return
+        person_id = entry[6]
+        if person_id is None:
+            return
+        self._open_person_info_dialog(person_id)
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image without re-reading from disk."""
