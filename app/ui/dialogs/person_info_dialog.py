@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import logging
+from typing import List, Optional
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -16,6 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Person
+
+log = logging.getLogger(__name__)
 
 
 class PersonInfoDialog(QDialog):
@@ -92,6 +97,47 @@ class PersonInfoDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        self._setup_completers()
+
+    # ------------------------------------------------------------------
+    # Autocomplete
+    # ------------------------------------------------------------------
+
+    def _fetch_person_values(self, *fields: str) -> List[str]:
+        from sqlalchemy import select, distinct
+        from app.db.database import session_scope
+        values: set[str] = set()
+        try:
+            with session_scope() as session:
+                for field in fields:
+                    col = getattr(Person, field)
+                    rows = session.execute(
+                        select(distinct(col)).where(col.isnot(None)).where(col != "")
+                    ).scalars().all()
+                    values.update(rows)
+        except Exception:
+            log.exception("Failed to load autocomplete values for person fields %s", fields)
+        return sorted(values)
+
+    def _make_completer(self, values: List[str]) -> QCompleter:
+        completer = QCompleter(values, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        return completer
+
+    def _setup_completers(self) -> None:
+        places = self._fetch_person_values("birth_place", "death_place")
+        place_completer = self._make_completer(places)
+        self._birth_place.setCompleter(place_completer)
+        self._death_place.setCompleter(self._make_completer(places))
+
+        self._last_name.setCompleter(
+            self._make_completer(self._fetch_person_values("last_name"))
+        )
+        self._first_name.setCompleter(
+            self._make_completer(self._fetch_person_values("first_name"))
+        )
 
     # ------------------------------------------------------------------
     # Accessors

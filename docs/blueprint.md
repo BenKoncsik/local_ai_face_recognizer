@@ -1,398 +1,688 @@
 # Face-Local Blueprint
 
-This document describes the entire application architecture so that an LLM can reproduce it from scratch.
+Teljes alkalmazás architektúra dokumentáció.
 
-## 1. Overview
+## 1. Áttekintés
 
-Face-Local is a **desktop GUI application** for offline face detection, embedding, clustering, and person labeling in photo collections. It runs entirely locally (no internet required), stores data in SQLite, and uses PySide6 for the Qt-based UI.
+Face-Local egy **asztali GUI alkalmazás** arcok offline detektálására, beágyazására (embedding), klaszterezésére és személyek címkézésére fotógyűjteményekben. Teljes egészében lokálisan fut, SQLite adatbázist és PySide6 Qt alapú UI-t használ.
 
-### Key characteristics
-- **Language**: Python 3.11+
-- **GUI Framework**: PySide6 (Qt bindings)
-- **Database**: SQLite (via SQLAlchemy ORM)
-- **Face Detection**: TensorFlow Lite TFLite models (Coral EdgeTPU or CPU fallback)
-- **Face Embedding**: TFLite MobileFaceNet model (CPU only)
-- **Clustering**: scikit-learn DBSCAN with cosine distance
-- **Image Processing**: OpenCV (cv2)
-- **Configuration**: YAML files
-- **Platforms**: macOS, Windows, Linux
+### Fő jellemzők
+
+- **Nyelv**: Python 3.11+
+- **GUI Keretrendszer**: PySide6 (Qt bindings)
+- **Adatbázis**: SQLite SQLAlchemy ORM-mel, WAL módban
+- **Arc Detektálás**: OpenCV DNN (res10 SSD) vagy Coral Edge TPU (ssd_mobilenet_v2_quant)
+- **Arc Beágyazás**: TFLite MobileFaceNet (192-dim) vagy SFace OpenCV-n keresztül (128-dim, ONNX)
+- **Klaszterezés**: scikit-learn DBSCAN koszinusz távolsággal
+- **Képfeldolgozás**: OpenCV (cv2)
+- **Konfiguráció**: YAML fájl
+- **Platformok**: macOS, Windows, Linux (x64 és ARM64)
+- **Licenc**: HunKon Personal Use License v1.0
 
 ---
 
-## 2. Application Entry Point
+## 2. Architektúra diagram
 
-**File**: `app/main.py`
+```mermaid
+flowchart TB
+    subgraph UI["UI Réteg (PySide6)"]
+        MW[MainWindow]
+        SP[SidebarPanel]
+        CP[ClusterPanel]
+        PP[PreviewPanel]
+        IBP[ImageBrowserPanel]
+        CLP[CollagePanel]
+        LP[LogPanel]
+        DIALOGS[Dialogusok]
+    end
 
+    subgraph WORKER["Feldolgozás (QThread)"]
+        PW[PipelineWorker]
+    end
+
+    subgraph SERVICES["Szolgáltatások"]
+        SC[ScanService]
+        DS[DetectionService]
+        ES[EmbeddingService]
+        CS[ClusteringService]
+        IS[IdentityService]
+        EXP[ExportService]
+        SUG[SuggestionService]
+        COLS[CollageService]
+        US[UpdateService]
+    end
+
+    subgraph ML["ML Modellek"]
+        DET[FaceDetector<br/>Coral / CPU]
+        EMB[FaceEmbedder<br/>TFLite / SFace]
+        CLU[DBSCAN Clusterer]
+    end
+
+    subgraph DB["Adatbázis"]
+        DB_SQL[(SQLite<br/>faces.db)]
+    end
+
+    subgraph STORAGE["Fájlrendszer"]
+        CROPS[data/crops/]
+        IMAGES[Fotók mappa]
+    end
+
+    MW --> PW
+    PW --> SC --> IMAGES
+    PW --> DS --> DET
+    PW --> ES --> EMB
+    PW --> CS --> CLU
+    SERVICES --> DB_SQL
+    DS --> CROPS
+    MW --> SP
+    MW --> CP
+    MW --> PP
+    MW --> IBP
+    MW --> CLP
+    MW --> LP
+    MW --> DIALOGS
+    SP --> IS
+    CP --> IS
+    COLS --> CLP
+    US --> MW
+
+    SC --> DB_SQL
+    DS --> DB_SQL
+    ES --> DB_SQL
+    CS --> DB_SQL
+    IS --> DB_SQL
+    EXP --> DB_SQL
+    SUG --> DB_SQL
+    COLS --> DB_SQL
 ```
-python -m app.main                      # default config
+
+### Feldolgozási pipeline adatfolyam
+
+```mermaid
+flowchart LR
+    A[Fotók mappa] --> B(ScanService)
+    B --> C{Új/változott<br/>fájlok?}
+    C -->|Igen| D(DetectionService)
+    C -->|Nem| E[Kész]
+    D --> F(EmbeddingService)
+    F --> G(ClusteringService)
+    G --> H[Személyek<br/>az UI-ban]
+    D --> I[Arc kivágatok<br/>data/crops/]
+    F --> J[Embedding vektorok<br/>az adatbázisban]
+    G --> K[DBSCAN személy<br/>klaszterek]
+```
+
+### 3-paneles UI elrendezés
+
+```mermaid
+flowchart LR
+    subgraph LEFT["SidebarPanel (260-400px)"]
+        AF[Összes arc<br/>rácsnézet]
+        PL[Személy lista<br/>keresőmező]
+        RC[Újraklaszterezés<br/>gomb]
+    end
+    subgraph CENTER["ClusterPanel (flexibilis)"]
+        PN[Személy név<br/>fejléc]
+        FG[Arc indexképek<br/>rácsban]
+        AB[Művelet gombok<br/>átnevez/összefűz/töröl]
+    end
+    subgraph RIGHT["PreviewPanel (280px min)"]
+        IP[Eredeti kép<br/>arc bbox-okkal]
+        CTX[Jobb klikk<br/>menü]
+    end
+    LEFT -->|person_selected| CENTER
+    CENTER -->|face_selected| RIGHT
+```
+
+### Adatbázis séma (kapcsolatokkal)
+
+```mermaid
+erDiagram
+    IMAGES ||--o{ FACES : contains
+    PERSONS ||--o{ FACES : classified_as
+    FACES ||--o{ FACE_CORRECTIONS : correction_a
+    FACES ||--o{ FACE_CORRECTIONS : correction_b
+    COLLAGES ||--o{ COLLAGE_NODES : contains
+    IMAGES ||--o{ COLLAGE_NODES : referenced_by
+
+    IMAGES {
+        int id PK
+        text file_path UNIQUE
+        text file_hash
+        float file_mtime
+        int width
+        int height
+        bool detection_done
+        bool embedding_done
+    }
+
+    FACES {
+        int id PK
+        int image_id FK
+        int person_id FK
+        int bbox_x
+        int bbox_y
+        int bbox_w
+        int bbox_h
+        float confidence
+        text detector_backend
+        text crop_path
+        blob _embedding
+        bool is_excluded
+    }
+
+    PERSONS {
+        int id PK
+        text name
+        bool is_auto_named
+        text thumbnail_path
+        text notes
+    }
+
+    FACE_CORRECTIONS {
+        int id PK
+        int face_id_a FK
+        int face_id_b FK
+        bool same_person
+    }
+
+    COLLAGES {
+        int id PK
+        text collage_uid
+        text source_file UNIQUE
+        text album_title
+        int format_width
+        int format_height
+    }
+
+    COLLAGE_NODES {
+        int id PK
+        int collage_id FK
+        int image_id FK
+        text node_uid
+        float rel_x
+        float rel_y
+        float rel_w
+        float rel_h
+        float theta
+        float scale
+        text src_raw
+        text src_resolved
+        bool src_missing
+    }
+```
+
+### Teljes osztály diagram
+
+```mermaid
+classDiagram
+    class AppConfig {
+        +DetectionConfig detection
+        +EmbeddingConfig embedding
+        +ClusteringConfig clustering
+        +StorageConfig storage
+        +ScanConfig scan
+        +SuggestionConfig suggestion
+        +str base_dir
+    }
+
+    class FaceDetector {
+        <<abstract>>
+        +backend_name str
+        +detect(image_bgr, confidence_threshold) List~Detection~
+    }
+
+    class FaceEmbedder {
+        <<abstract>>
+        +embedding_dim int
+        +embed(face_bgr) np.ndarray
+    }
+
+    class PipelineWorker {
+        +QThread
+        +progress Signal
+        +finished Signal
+        +log_message Signal
+        +error Signal
+        +abort()
+        +run()
+    }
+
+    class ScanService {
+        +scan(root_folder) List~int~
+    }
+
+    class DetectionService {
+        +process(image_ids) int
+    }
+
+    class EmbeddingService {
+        +process_pending() int
+    }
+
+    class ClusteringService {
+        +run() int
+        +recluster() int
+    }
+
+    class IdentityService {
+        +rename_person()
+        +merge_persons()
+        +delete_person()
+        +reassign_face()
+        +record_same()
+        +record_different()
+    }
+
+    class ExportService {
+        +export_person_images()
+        +export_csv()
+        +export_json()
+        +export_html()
+    }
+
+    class SuggestionService {
+        +get_suggestions()
+        +approve()
+        +reject()
+    }
+
+    class CollageService {
+        +import_collage()
+        +render_collage_image()
+        +projected_faces()
+    }
+
+    class MainWindow {
+        +QMainWindow
+        +SidebarPanel sidebar
+        +ClusterPanel clusterPanel
+        +PreviewPanel previewPanel
+        +LogPanel logPanel
+    }
+
+    PipelineWorker --> ScanService
+    PipelineWorker --> DetectionService
+    PipelineWorker --> EmbeddingService
+    PipelineWorker --> ClusteringService
+    MainWindow --> PipelineWorker
+    MainWindow --> IdentityService
+    MainWindow --> ExportService
+    MainWindow --> SuggestionService
+    MainWindow --> CollageService
+    DetectionService --> FaceDetector
+    EmbeddingService --> FaceEmbedder
+    ClusteringService --> AppConfig
+```
+
+---
+
+## 3. Belépési pont
+
+**Fájl**: `app/main.py`
+
+```bash
+python -m app.main                      # alapértelmezett config
 python -m app.main --config config.yaml # explicit config
-python -m app.main --debug              # verbose logging
-python -m app.main --db /tmp/test.db    # override database path
+python -m app.main --debug              # részletes naplózás
+python -m app.main --db /tmp/test.db    # adatbázis út felülírása
 ```
 
-### Flow at startup:
-1. Parse CLI arguments (`argparse`)
-2. Setup logging (`app.logging_setup.setup_logging`)
-3. Load configuration (`app.config.load_config`)
-4. Setup i18n translations (`app.ui.i18n.load_prefs`)
-5. Create QApplication with dark palette
-6. Create and show `MainWindow`
-7. Run event loop (`app.exec()`)
+### Indítási folyamat
+
+1. CLI argumentumok feldolgozása (`argparse`)
+2. Naplózás beállítása (`app.logging_setup.setup_logging`)
+3. Konfiguráció betöltése (`app.config.load_config`)
+4. i18n fordítások betöltése (`app.ui.i18n.load_prefs`)
+5. QApplication létrehozása Catppuccin Mocha dark palettával
+6. `MainWindow` létrehozása és megjelenítése
+7. Esemény ciklus indítása (`app.exec()`)
 
 ---
 
-## 3. Configuration System
+## 4. Konfigurációs rendszer
 
-**File**: `app/config.py`
+**Fájl**: `app/config.py`
 
-### Config hierarchy
+### AppConfig felépítése
+
+| Mező | Típus | Leírás |
+|------|-------|--------|
+| `base_dir` | `str` | Feloldott elérési út alap |
+| `detection` | `DetectionConfig` | Detektálás beállítások |
+| `embedding` | `EmbeddingConfig` | Beágyazás beállítások |
+| `clustering` | `ClusteringConfig` | Klaszterezés beállítások |
+| `storage` | `StorageConfig` | Tárolás beállítások |
+| `scan` | `ScanConfig` | Szkennelés beállítások |
+| `suggestion` | `SuggestionConfig` | Javaslat beállítások |
+
+### Részletes konfigurációk
+
+```python
+DetectionConfig
+├── confidence_threshold: float = 0.65
+├── min_face_size: int = 50
+├── coral_model_path: Optional[str]
+├── cpu_model_path: Optional[str]
+└── cpu_model_input_size: tuple = (300, 300)
+
+EmbeddingConfig
+├── model_path: Optional[str]
+├── input_size: tuple = (112, 112)
+└── embedding_dim: int = 192
+
+ClusteringConfig
+├── epsilon: float = 0.4
+├── min_samples: int = 2
+└── metric: str = "cosine"
+
+StorageConfig
+├── crops_dir: str = "data/crops"
+└── db_path: str = "data/faces.db"
+
+ScanConfig
+├── image_extensions: list = [".jpg", ".jpeg", ".png", ".webp"]
+├── worker_threads: int = 2
+└── thumbnail_size: tuple = (128, 128)
+
+SuggestionConfig
+└── similarity_threshold: float = 0.5
 ```
-AppConfig
-├── detection: DetectionConfig
-│   ├── confidence_threshold: float = 0.65
-│   ├── min_face_size: int = 50
-│   ├── coral_model_path: Optional[str] = None
-│   ├── cpu_model_path: Optional[str] = None
-│   └── cpu_model_input_size: tuple = (300, 300)
-├── embedding: EmbeddingConfig
-│   ├── model_path: Optional[str] = None
-│   ├── input_size: tuple = (112, 112)
-│   └── embedding_dim: int = 192
-├── clustering: ClusteringConfig
-│   ├── epsilon: float = 0.4
-│   ├── min_samples: int = 2
-│   └── metric: str = "cosine"
-├── storage: StorageConfig
-│   ├── crops_dir: str = "data/crops"
-│   └── db_path: str = "data/faces.db"
-├── scan: ScanConfig
-│   ├── image_extensions: list = [".jpg", ".jpeg", ".png", ".webp"]
-│   ├── worker_threads: int = 2
-│   └── thumbnail_size: tuple = (128, 128)
-└── base_dir: str (resolved path base)
-```
 
-### Config loading order:
-1. Explicit `--config` argument
-2. `FACE_LOCAL_CONFIG` environment variable
-3. Auto-discovery: `config.yaml`, then `config.example.yaml`
-4. Freeze mode adds user config directory paths
+### Konfiguráció betöltési sorrend
 
-**Key functions**:
-- `load_config(config_path: Optional[str]) -> AppConfig`
-- `save_db_path(new_db_path: str, config_path: Optional[str]) -> None`
+1. Explicit `--config` CLI argumentum
+2. `FACE_LOCAL_CONFIG` környezeti változó
+3. Automatikus keresés: `config.yaml`, majd `config.example.yaml`
+4. Frozen (PyInstaller) módban felhasználói config könyvtár
+
+Minden relatív elérési út a `config.yaml` szülőkönyvtárához képest oldódik fel (frozen módban a `bundle_root`-hoz, fallbackként `user_data_dir`).
 
 ---
 
-## 4. Database Schema
+## 5. Adatbázis séma
 
-**File**: `app/db/models.py`
-**File**: `app/db/database.py`
+**Fájlok**: `app/db/models.py`, `app/db/database.py`
 
-### Tables
+### Táblák
 
-#### `images`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| file_path | TEXT UNIQUE | Absolute path to image |
-| file_hash | VARCHAR(64) | SHA-256 of content |
-| file_mtime | FLOAT | os.path.getmtime() |
-| width | INTEGER | Image width in pixels |
-| height | INTEGER | Image height in pixels |
-| detection_done | BOOLEAN | Detection completed flag |
-| embedding_done | BOOLEAN | Embedding completed flag |
-| created_at | DATETIME | Creation timestamp |
-| updated_at | DATETIME | Last update timestamp |
+#### `images` — Szkennelt képfájlok
 
-**Relationships**: `faces` (one-to-many, cascade delete)
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `file_path` | TEXT UNIQUE | Abszolút elérési út |
+| `file_hash` | VARCHAR(64) | SHA-256 hash |
+| `file_mtime` | FLOAT | `os.path.getmtime()` |
+| `width` | INTEGER | Kép szélesség pixelben |
+| `height` | INTEGER | Kép magasság pixelben |
+| `detection_done` | BOOLEAN | Detektálás kész |
+| `embedding_done` | BOOLEAN | Beágyazás kész |
+| `created_at` | DATETIME | Létrehozás időpontja |
+| `updated_at` | DATETIME | Utolsó módosítás |
 
-#### `faces`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| image_id | INTEGER FK | Reference to `images.id` |
-| person_id | INTEGER FK | Reference to `persons.id` (nullable) |
-| bbox_x, bbox_y, bbox_w, bbox_h | INTEGER | Bounding box in original image |
-| confidence | FLOAT | Detection confidence [0.0-1.0] |
-| detector_backend | VARCHAR(32) | "coral" or "cpu" |
-| crop_path | TEXT | Path to face thumbnail |
-| _embedding | BLOB | Serialized float32 numpy array |
-| is_excluded | BOOLEAN | Excluded from clustering |
-| created_at | DATETIME | Creation timestamp |
+**Kapcsolatok**: `faces` (one-to-many, cascade delete)
 
-**Relationships**: `image`, `person`, `corrections_a`, `corrections_b`
+#### `faces` — Detektált arcok
 
-**Helper methods**:
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `image_id` | INTEGER FK | `images.id` |
+| `person_id` | INTEGER FK | `persons.id` (nullable) |
+| `bbox_x/y/w/h` | INTEGER | Határoló doboz az eredeti képen |
+| `confidence` | FLOAT | Detektálás biztonság [0.0-1.0] |
+| `detector_backend` | VARCHAR(32) | `"coral"` vagy `"cpu"` |
+| `crop_path` | TEXT | Arc indexkép elérési út |
+| `_embedding` | BLOB | Szerializált float32 numpy tömb |
+| `is_excluded` | BOOLEAN | Kizárva a klaszterezésből |
+| `created_at` | DATETIME | Létrehozás időpontja |
+
+**Segéd metódusok**:
 - `Face.get_embedding() -> Optional[np.ndarray]`
 - `Face.set_embedding(vector: np.ndarray) -> None`
 
-#### `persons`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| name | VARCHAR(255) | Person name |
-| is_auto_named | BOOLEAN | True if auto-generated (e.g., "Unknown 1") |
-| thumbnail_path | TEXT | Representative face crop |
-| notes | TEXT | User notes |
-| created_at | DATETIME | Creation timestamp |
-| updated_at | DATETIME | Last update timestamp |
+#### `persons` — Személyek
 
-**Relationships**: `faces` (one-to-many)
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `name` | VARCHAR(255) | Személy neve |
+| `is_auto_named` | BOOLEAN | Automatikus név (pl. "Ismeretlen 1") |
+| `thumbnail_path` | TEXT | Reprezentatív arc indexkép |
+| `notes` | TEXT | Felhasználói jegyzetek |
+| `created_at` | DATETIME | Létrehozás időpontja |
+| `updated_at` | DATETIME | Utolsó módosítás |
 
-#### `face_corrections`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| face_id_a | INTEGER FK | First face |
-| face_id_b | INTEGER FK | Second face |
-| same_person | BOOLEAN | True=same, False=different |
-| created_at | DATETIME | Creation timestamp |
+#### `face_corrections` — Kézi korrekciók
 
-**Constraint**: UNIQUE(face_id_a, face_id_b)
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `face_id_a` | INTEGER FK | Első arc |
+| `face_id_b` | INTEGER FK | Második arc |
+| `same_person` | BOOLEAN | `True`=ugyanaz, `False`=különböző |
+| `created_at` | DATETIME | Létrehozás időpontja |
 
-#### `collages`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| collage_uid | VARCHAR(64) | Picasa album UID |
-| source_file | TEXT UNIQUE | Path to .cxf/.cfx file |
-| album_title | TEXT | Album title |
-| album_date | VARCHAR(128) | Album date |
-| format_width | INTEGER | Canvas width |
-| format_height | INTEGER | Canvas height |
-| orientation | VARCHAR(32) | "landscape" or "portrait" |
-| bg_color | VARCHAR(16) | Background color |
-| spacing | FLOAT | Node spacing |
-| created_at | DATETIME | Creation timestamp |
-| updated_at | DATETIME | Last update timestamp |
+**Megszorítás**: UNIQUE(face_id_a, face_id_b)
 
-**Relationships**: `nodes` (one-to-many, cascade delete)
+#### `collages` — Picasa kollázsok
 
-#### `collage_nodes`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| collage_id | INTEGER FK | Reference to `collages.id` |
-| node_uid | VARCHAR(64) | Node UID from XML |
-| rel_x, rel_y, rel_w, rel_h | FLOAT | Normalized coordinates [0,1] |
-| theta | FLOAT | Rotation in radians |
-| scale | FLOAT | Picasa zoom scale (100=fit) |
-| theme | VARCHAR(64) | Picasa theme name |
-| src_raw | TEXT | Original source path from XML |
-| src_resolved | TEXT | Resolved absolute path |
-| src_missing | BOOLEAN | True if file not found |
-| image_id | INTEGER FK | Reference to `images.id` (nullable) |
-| year | VARCHAR(16) | Year extracted from filename |
-| location | VARCHAR(256) | Location |
-| event_name | VARCHAR(256) | Event name |
-| notes | TEXT | User notes |
-| created_at | DATETIME | Creation timestamp |
-| updated_at | DATETIME | Last update timestamp |
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `collage_uid` | VARCHAR(64) | Picasa album UID |
+| `source_file` | TEXT UNIQUE | .cxf/.cfx fájl elérési út |
+| `album_title` | TEXT | Album címe |
+| `album_date` | VARCHAR(128) | Album dátuma |
+| `format_width` | INTEGER | Vászon szélesség |
+| `format_height` | INTEGER | Vászon magasság |
+| `orientation` | VARCHAR(32) | "landscape" vagy "portrait" |
+| `bg_color` | VARCHAR(16) | Háttérszín |
+| `spacing` | FLOAT | Node-ok távolsága |
+| `created_at` | DATETIME | Létrehozás időpontja |
+| `updated_at` | DATETIME | Utolsó módosítás |
 
-**Methods**:
+#### `collage_nodes` — Kollázs node-ok (fotók)
+
+| Oszlop | Típus | Leírás |
+|--------|-------|--------|
+| `id` | INTEGER PK | Auto-increment |
+| `collage_id` | INTEGER FK | `collages.id` |
+| `node_uid` | VARCHAR(64) | Node UID XML-ből |
+| `rel_x/y/w/h` | FLOAT | Normalizált koordináták [0,1] |
+| `theta` | FLOAT | Forgatás radiánban |
+| `scale` | FLOAT | Picasa zoom skála |
+| `theme` | VARCHAR(64) | Picasa téma név |
+| `src_raw` | TEXT | Eredeti elérési út XML-ből |
+| `src_resolved` | TEXT | Feloldott abszolút elérési út |
+| `src_missing` | BOOLEAN | Hiányzó fájl |
+| `image_id` | INTEGER FK | `images.id` (nullable) |
+| `year/location/event_name/notes` | TEXT | Metaadatok |
+| `created_at/updated_at` | DATETIME | Időbélyegek |
+
+**Metódusok**:
 - `CollageNode.pixel_bbox(collage_w, collage_h) -> (px, py, pw, ph)`
 
-### Database initialization
-**File**: `app/db/database.py`
+### Adatbázis inicializálás
 
 ```python
-# SQLite with WAL mode
+# SQLite WAL móddal
 init_db(db_path: Path) -> Engine
 get_engine() -> Engine
-get_session() -> Session  # caller must close
+get_session() -> Session
 session_scope() -> Generator[Session]  # auto commit/rollback
 ```
 
 ---
 
-## 5. Core Services
+## 6. Core szolgáltatások
 
-### 5.1 ScanService
+### 6.1 ScanService
 
-**File**: `app/services/scan_service.py`
+**Fájl**: `app/services/scan_service.py`
 
-**Responsibility**: Discover image files and index them in the database.
+**Felelősség**: Képfájlok felderítése és indexelése az adatbázisban.
 
-**Key classes**:
-- `ScanService(session, config, progress_cb)`
+**Folyamat**:
+1. Rekurzív fájl enumeráció megfelelő kiterjesztésekkel
+2. Minden fájlra:
+   - Ellenőrzi, hogy létezik-e már az adatbázisban
+   - Ha létezik azonos mtime-mal és `detection_done=True` → kihagyja
+   - Különben SHA-256 hash számítás
+   - Ha a hash változott → feldolgozási flag-ek resetelése
+   - Ha új fájl → rekord beszúrása
+3. Visszaadja a feldolgozandó kép ID-k listáját
 
-**Methods**:
-- `scan(root_folder: str) -> List[int]` — returns IDs of new/changed images
-
-**Process**:
-1. Recursively enumerate files with matching extensions (`discover_images`)
-2. For each file:
-   - Check if path already exists in DB
-   - If exists with same mtime + `detection_done=True` → skip
-   - Otherwise compute SHA-256 hash
-   - If hash changed → reset processing flags
-   - If new file → insert record
-3. Return list of image IDs needing processing
-
-**Functions**:
-- `hash_file(path: Path) -> str` — SHA-256, 4MB chunks
+**Segédfüggvények**:
+- `hash_file(path: Path) -> str` — SHA-256, 4MB chunk-okban
 - `discover_images(root: Path, extensions: List[str]) -> Generator[Path]`
 
-### 5.2 DetectionService
+### 6.2 DetectionService
 
-**File**: `app/services/detection_service.py`
+**Fájl**: `app/services/detection_service.py`
 
-**Responsibility**: Run face detection on images, save face records and crops.
+**Felelősség**: Arc detektálás futtatása képeken, arc rekordok és kivágatok mentése.
 
-**Key classes**:
-- `DetectionService(session, detector: FaceDetector, config, progress_cb)`
+**Folyamat**:
+1. Minden kép ID-ra:
+   - Kép betöltése OpenCV-vel (`cv2.imread`)
+   - Detektor futtatása (`detector.detect()`)
+   - Meglévő arc rekordok törlése a képhez
+   - Minden detektáláshoz:
+     - Arc kivágat mentése (`save_face_crop`)
+     - `Face` rekord létrehozása az adatbázisban
+   - Kép jelölése `detection_done=True`
 
-**Methods**:
-- `process(image_ids: List[int]) -> int` — returns total faces detected
+**TPU fallback**: Ha a Coral meghibásodik, CPU detektorra vált.
 
-**Process**:
-1. For each image ID:
-   - Load image with OpenCV (`cv2.imread`)
-   - Run detector (`detector.detect(image_bgr, confidence_threshold, min_face_size)`)
-   - Delete existing face records for this image
-   - For each detection:
-     - Save face crop to disk (`save_face_crop`)
-     - Create `Face` record in DB
-   - Mark image as `detection_done=True`
-2. Handle TPU fallback: if Coral fails, switch to CPU detector
+### 6.3 EmbeddingService
 
-**Used by**: `PipelineWorker._run_detection`
+**Fájl**: `app/services/embedding_service.py`
 
-### 5.3 EmbeddingService
+**Felelősség**: Beágyazási vektorok generálása arcokhoz.
 
-**File**: `app/services/embedding_service.py`
+**Folyamat**:
+1. Lekérdezi az összes arcot ahol `_embedding IS NULL` és `is_excluded=False`
+2. Minden archoz:
+   - Kivágat betöltése
+   - Embedder futtatása (`embedder.embed(img_bgr)`)
+   - Beágyazás tárolása
+3. Commit minden 50 arc után
 
-**Responsibility**: Generate embedding vectors for faces.
+### 6.4 ClusteringService
 
-**Key classes**:
-- `EmbeddingService(session, embedder: FaceEmbedder, config, progress_cb)`
+**Fájl**: `app/services/clustering_service.py`
 
-**Methods**:
-- `process_pending() -> int` — returns number of faces embedded
+**Felelősség**: Arcok csoportosítása személy klaszterekbe DBSCAN segítségével.
 
-**Process**:
-1. Query all faces where `_embedding IS NULL` and `is_excluded=False`
-2. For each face:
-   - Load crop image from disk
-   - Run embedder (`embedder.embed(img_bgr)`)
-   - Store embedding (`face.set_embedding(vector)`)
-3. Commit every 50 faces
+**Folyamat**:
+1. Összes beágyazott, nem kizárt arc betöltése
+2. Kézi korrekciók betöltése (`same_pairs`, `diff_pairs`)
+3. `cluster_embeddings()` futtatása (DBSCAN)
+4. Címkék leképezése Person rekordokra:
+   - Minden egyedi címke → Person rekord
+   - -1 címke (zaj) → egyedi singleton Person
+   - "Ismeretlen N" elnevezés
+5. `face.person_id` hozzárendelése
+6. Orphan (árva) automatikus Person rekordok törlése
 
-**Used by**: `PipelineWorker._run_embedding`
+### 6.5 IdentityService
 
-### 5.4 ClusteringService
+**Fájl**: `app/services/identity_service.py`
 
-**File**: `app/services/clustering_service.py`
+**Felelősség**: Felhasználói műveletek Person klasztereken.
 
-**Responsibility**: Group faces into person clusters using DBSCAN.
+**Metódusok**:
+- `rename_person(person_id, new_name)` — átnevezés
+- `merge_persons(source_id, target_id)` — összefűzés (forrás törléssel)
+- `delete_person(person_id)` — törlés
+- `reassign_face(face_id, target_person_id)` — áthelyezés
+- `remove_face_from_cluster(face_id)` — eltávolítás (is_excluded=True)
+- `exclude_face(face_id)` — kizárás
+- `record_same(face_id_a, face_id_b)` — azonosnak jelölés
+- `record_different(face_id_a, face_id_b)` — különbözőnek jelölés
+- `list_persons(named_only, search)` — személyek listázása
+- `get_faces_for_person(person_id)` — arcok lekérése
 
-**Key classes**:
-- `ClusteringService(session, config)`
+### 6.6 ExportService
 
-**Methods**:
-- `run() -> int` — returns number of persons
-- `recluster() -> int` — re-run with current corrections
+**Fájl**: `app/services/export_service.py`
 
-**Process**:
-1. Load all embedded, non-excluded faces
-2. Load manual corrections (`same_pairs`, `diff_pairs`)
-3. Run `cluster_embeddings()` (DBSCAN)
-4. Map labels to Person records:
-   - Each unique label → Person record
-   - Label -1 (noise) → individual singleton Person
-   - "Unknown N" naming for auto-created persons
-5. Assign `face.person_id` for each face
-6. Commit
+**Felelősség**: Arc képek és metaadatok exportálása.
 
-**Used by**: `PipelineWorker._run_clustering`
+**Metódusok**:
+- `export_person_images()` — arc kivágatok/eredeti képek másolása
+- `export_csv()` — strukturált CSV jelentés
+- `export_json()` — JSON jelentés
+- `export_html()` — statikus HTML galéria
+- `export_collage_html()` — kollázs HTML galéria
 
-### 5.5 IdentityService
+### 6.7 SuggestionService
 
-**File**: `app/services/identity_service.py`
+**Fájl**: `app/services/suggestion_service.py`
 
-**Responsibility**: User-driven operations on Person clusters.
+**Felelősség**: Centroid-alapú profil egyeztetés ismeretlen személyekhez.
 
-**Key classes**:
-- `IdentityService(session)`
+**Folyamat**:
+1. Ismeretlen személy centroid számítása
+2. Nevesített személy centroid-okkal koszinusz hasonlóság összehasonlítás
+3. Rangsorolt `Suggestion` lista visszaadása
+4. `approve()` — ismeretlen beolvasztása a nevesített személybe
+5. `reject()` — `FaceCorrection` (same_person=False) rögzítése
 
-**Methods**:
-- `rename_person(person_id, new_name) -> Person`
-- `merge_persons(source_id, target_id) -> Person` — moves all faces, deletes source
-- `delete_person(person_id) -> None` — unassigns faces and deletes person
-- `reassign_face(face_id, target_person_id) -> Face`
-- `remove_face_from_cluster(face_id) -> Face` — unassigns, marks `is_excluded=True`
-- `exclude_face(face_id) -> Face` — marks `is_excluded=True`
-- `record_same(face_id_a, face_id_b) -> FaceCorrection`
-- `record_different(face_id_a, face_id_b) -> FaceCorrection`
-- `list_persons(named_only, search) -> List[Person]`
-- `get_faces_for_person(person_id) -> List[Face]`
+### 6.8 CollageService
 
-### 5.6 ExportService
+**Fájl**: `app/services/collage_service.py`
 
-**File**: `app/services/export_service.py`
+**Felelősség**: Picasa kollázs importálás és renderelés.
 
-**Responsibility**: Export face images and metadata.
+**Metódusok**:
+- `import_collage(file_path, search_roots, overwrite)` — XML import
+- `relink_images(collage_id)` — node-ok újrakapcsolása Image rekordokhoz
+- `get_faces_for_node(node)` — arc lekérés node-hoz
+- `projected_faces(collage, render_w, render_h)` — arc vetítés
+- `render_collage_image()` — annotált kollázs renderelés
+- `export_annotated_collage()` — exportálás
 
-**Key classes**:
-- `ExportService(session)`
+### 6.9 CollageParser
 
-**Methods**:
-- `export_person_images(person_id, target_dir, copy_originals) -> int` — copy face crops/originals
-- `export_csv(target_path, person_id) -> Path` — CSV report
-- `export_json(target_path, person_id) -> Path` — JSON report
-- `export_html(target_dir, person_id) -> Path` — static HTML gallery
-- `export_collage_html(target_dir, collage_id) -> Path` — collage HTML gallery
+**Fájl**: `app/services/collage_parser.py`
 
-### 5.7 CollageService
+**Felelősség**: Picasa .cxf/.cfx XML fájlok feldolgozása.
 
-**File**: `app/services/collage_service.py`
+**Adatosztályok**: `CollageNodeData`, `CollageData` (ORM nélkül)
 
-**Responsibility**: Picasa collage import and rendering.
-
-**Key classes**:
-- `CollageService(session)`
-
-**Methods**:
-- `import_collage(file_path, search_roots, overwrite) -> Collage`
-- `relink_images(collage_id) -> int` — re-link nodes to Image records
-- `list_collages() -> List[Collage]`
-- `get_collage(collage_id) -> Optional[Collage]`
-- `get_nodes(collage_id) -> List[CollageNode]`
-- `update_node_metadata(node_id, year, location, event_name, notes) -> CollageNode`
-- `get_faces_for_node(node) -> List[Face]`
-- `projected_faces(collage, render_w, render_h) -> List[Dict]` — face projections
-- `render_collage_image(collage, render_h, draw_borders, draw_faces) -> np.ndarray`
-- `export_annotated_collage(collage, output_dir, render_h) -> Path`
-
-### 5.8 CollageParser
-
-**File**: `app/services/collage_parser.py`
-
-**Responsibility**: Parse Picasa collage XML files (.cxf/.cfx).
-
-**Key classes**:
-- `CollageNodeData` — dataclass for node data (no ORM)
-- `CollageData` — dataclass for full collage (no ORM)
-
-**Functions**:
+**Függvények**:
 - `parse_collage_file(file_path, search_roots) -> CollageData`
 - `project_face_to_collage(face_bbox, img_w, img_h, node, collage_w, collage_h) -> Optional[tuple]`
 
-**Path resolution strategy**:
-1. Try exact path (Windows/Wine)
-2. Strip `[X]\` drive prefix, try relative to collage directory
-3. Try common POSIX mount points
-4. Try search_roots
-5. Filename-only fallback search
+**Elérési út feloldási stratégia**:
+1. Pontos elérési út próbálása (Windows/Wine)
+2. `[X]\` meghajtó előtag eltávolítása, relatív út a kollázs könyvtárához
+3. Gyakori POSIX mount pontok próbálása
+4. `search_roots` próbálása
+5. Fájlnév-alapú keresés
+
+### 6.10 UpdateService
+
+**Fájl**: `app/services/update_service.py`
+
+**Felelősség**: GitHub release ellenőrzés, letöltés, frissítés alkalmazása.
+
+**Metódusok**:
+- `check_for_updates()` — GitHub API hívás
+- `download_update()` — asset letöltés
+- `apply_update()` — platform-specifikus frissítés
 
 ---
 
-## 6. Detectors
+## 7. ML Detektorok
 
-**File**: `app/detectors/base.py`
+**Fájl**: `app/detectors/base.py`
 
-### Interface
+### Interfész
+
 ```python
 class FaceDetector(ABC):
     @property
@@ -410,444 +700,377 @@ class Detection:
     confidence: float
 ```
 
-**Implementations**:
-- `app/detectors/coral_detector.py` — Coral EdgeTPU (if available)
-- `app/detectors/cpu_detector.py` — CPU via OpenCV DNN or TFLite
+### Implementációk
 
-**Factory**: `app/detectors/factory.create_detector(config) -> FaceDetector`
+| Osztály | Fájl | Leírás |
+|---------|------|--------|
+| `CoralDetector` | `app/detectors/coral_detector.py` | Coral EdgeTPU (ai-edge-litert vagy pycoral, libedgetpu delegate) |
+| `CpuDetector` | `app/detectors/cpu_detector.py` | OpenCV DNN (res10 SSD) + MediaPipe fallback |
+
+### Factory
+
+**Fájl**: `app/detectors/factory.py`
+
+```python
+create_detector(config: DetectionConfig) -> FaceDetector
+probe_coral() -> bool
+_find_edgetpu_lib() -> Optional[Path]
+```
+
+A factory először Coralt próbál, sikertelenség esetén CPU-ra esik vissza.
 
 ---
 
-## 7. Embedders
+## 8. ML Embedderek
 
-**File**: `app/embeddings/base.py`
+**Fájl**: `app/embeddings/base.py`
 
-### Interface
+### Interfész
+
 ```python
 class FaceEmbedder(ABC):
     @property
     def embedding_dim(self) -> int: ...
-
     @abstractmethod
     def embed(face_bgr: np.ndarray) -> np.ndarray: ...
 ```
 
-**Implementation**: `app/embeddings/tflite_embedder.TFLiteEmbedder`
+### Implementációk
+
+| Osztály | Fájl | Kimenet | Bemenet | Leírás |
+|---------|------|---------|---------|--------|
+| `TFLiteEmbedder` | `app/embeddings/tflite_embedder.py` | 192-dim | 112x112 RGB | MobileFaceNet TFLite + HOG+PCA fallback |
+| `SFaceEmbedder` | `app/embeddings/sface_embedder.py` | 128-dim | 112x112 grayscale | SFace OpenCV-n keresztül (ONNX) |
 
 ---
 
-## 8. Clustering
+## 9. Klaszterezés
 
-**File**: `app/clustering/clusterer.py`
+**Fájl**: `app/clustering/clusterer.py`
 
-**Function**: `cluster_embeddings(face_ids, embeddings, epsilon, min_samples, metric, same_pairs, diff_pairs) -> Dict[int, int]`
+```python
+cluster_embeddings(
+    face_ids: List[int],
+    embeddings: List[np.ndarray],
+    epsilon: float,
+    min_samples: int,
+    metric: str = "cosine",
+    same_pairs: Optional[List[tuple]] = None,
+    diff_pairs: Optional[List[tuple]] = None
+) -> Dict[int, int]
+```
 
-**Process**:
-1. Stack embeddings into matrix, L2-normalize
-2. Run DBSCAN (`eps=epsilon`, `min_samples=min_samples`, `metric=metric`)
-3. Apply manual constraints (`same_pairs` merge)
-4. Return `{face_id: cluster_label}` mapping
+**Folyamat**:
+1. Embedding mátrix stackelése, L2-normalizálás
+2. DBSCAN futtatás (`eps=epsilon`, `min_samples=min_samples`, `metric=metric`)
+3. Kézi megszorítások alkalmazása (`same_pairs` összefűz, `diff_pairs` szétválaszt)
+4. Eredmény: `{face_id: cluster_label}` leképzés
 
-**Helper functions**:
+**Segédfüggvények**:
 - `compute_centroid(embeddings) -> np.ndarray`
 - `cosine_distance(a, b) -> float`
 
 ---
 
-## 9. Processing Pipeline
+## 10. Feldolgozási Pipeline
 
-**File**: `app/workers/pipeline_worker.py`
+**Fájl**: `app/workers/pipeline_worker.py`
 
-**Class**: `PipelineWorker(QThread)`
+**Osztály**: `PipelineWorker(QThread)`
 
-Runs in a background thread to keep GUI responsive.
+Háttérszálon fut, hogy a GUI reszponzív maradjon.
 
-**Signals**:
-- `progress(current, total, stage, detail)`
-- `log_message(message)`
-- `finished(success, summary)`
-- `error(message)`
+### Signálok
 
-**Methods**:
-- `abort() -> None` — request graceful stop
-- `run() -> None` — called by QThread.start()
+| Signal | Paraméterek | Leírás |
+|--------|-------------|--------|
+| `progress` | `(int current, int total, str stage, str detail)` | Előrehaladás |
+| `log_message` | `(str message)` | Napló üzenet |
+| `finished` | `(bool success, str summary)` | Befejezés |
+| `error` | `(str message)` | Hiba |
 
-### Pipeline stages (in order):
+### Pipeline szakaszok
 
-#### Stage 1: Scan
 ```
-_on_scan clicked → PipelineWorker.start()
-  → _run_scan()
-    → ScanService(session, config.scan, progress_cb).scan(root_folder)
-    → returns List[int] of new/changed image IDs
-```
-
-#### Stage 2: Detection
-```
-_run_detection(image_ids)
-  → create_detector(config.detection) → FaceDetector
-  → DetectionService(session, detector, config, progress_cb).process(image_ids)
-  → returns total faces detected
-```
-
-#### Stage 3: Embedding
-```
-_run_embedding()
-  → TFLiteEmbedder(config.embedding)
-  → EmbeddingService(session, embedder, config, progress_cb).process_pending()
-  → returns number of faces embedded
-```
-
-#### Stage 4: Clustering
-```
-_run_clustering()
-  → ClusteringService(session, config.clustering).run()
-  → returns number of persons
+Felhasználó kiválaszt egy mappát → Scan gomb
+        │
+        ▼
+PipelineWorker.start()
+        │
+        ├── Stage 1: Scan ──────────────────────────────────────
+        │     ScanService.scan(root_folder)
+        │     → új/módosult kép ID-k listája
+        │
+        ├── Stage 2: Detection ─────────────────────────────────
+        │     FaceDetector létrehozása (Coral/CPU)
+        │     DetectionService.process(image_ids)
+        │     → arc rekordok + kivágatok
+        │
+        ├── Stage 3: Embedding ─────────────────────────────────
+        │     FaceEmbedder létrehozása (TFLite/SFace)
+        │     EmbeddingService.process_pending()
+        │     → embedding vektorok
+        │
+        ├── Stage 4: Clustering ────────────────────────────────
+        │     ClusteringService.run()
+        │     → Person rekordok + hozzárendelések
+        │
+        ▼
+finished(success, summary) signal
+        │
+        ▼
+UI frissítés: SidebarPanel.populate()
 ```
 
 ---
 
-## 10. UI Architecture
+## 11. UI Architektúra
 
-### Main Window
+### MainWindow
 
-**File**: `app/ui/main_window.py`
+**Fájl**: `app/ui/main_window.py`
 
-**Class**: `MainWindow(QMainWindow)`
+**Osztály**: `MainWindow(QMainWindow)`
 
-**Layout**:
-- **Toolbar**: Action buttons for folder selection, scan, export, settings, collage import/export
-- **Central**: QTabWidget with two tabs:
-  - Tab 0: "Arcfelismerés" (Face Recognition) — 3-panel layout
-  - Tab 1: "Kollázs" (Collage) — CollagePanel
-- **Dock**: LogPanel at bottom
-- **Status bar**: Progress bar + status label
+**Elrendezés**:
+- **Toolbar**: Művelet gombok (mappa kiválasztás, szkennelés, export, beállítások, kollázs)
+- **Központi**: QTabWidget két lappal:
+  - Tab 0: "Arcfelismerés" — 3-panel layout
+  - Tab 1: "Kollázs" — CollagePanel
+- **Dock**: LogPanel alul
+- **Status bar**: Progress bar + státusz szöveg
 
-### 3-Panel Layout (Face Recognition tab)
+### 3-Panel Layout
 
 ```
 ┌─────────────────┬───────────────────────────┬──────────────────┐
 │  SidebarPanel   │     ClusterPanel          │  PreviewPanel    │
-│  (260-400px)    │     (flexible)            │  (280px min)     │
+│  (260-400px)    │     (flexibilis)          │  (280px min)     │
 │                 │                           │                  │
-│  ┌───────────┐  │  [Header: person name]    │  [Image preview  │
-│  │ All Faces │  │                           │   with face      │
-│  │ (grid)    │  │  [Face thumbnails grid]   │   boxes]         │
-│  └───────────┘  │                           │                  │
-│                 │  [Action buttons]         │  [Open/Zoom]     │
-│  ┌───────────┐  │  - Átnevezés            │                  │
-│  │ Search    │  │  - Összefűzés           │                  │
-│  │ ────────  │  │  - Törlés              │                  │
-│  │ Person 1  │  │  - Arc eltávolítása     │                  │
-│  │ Person 2  │  │  - Átassignálás         │                  │
-│  │ ...       │  │                           │                  │
-│  └───────────┘  │                           │                  │
+│  Összes arc     │  [Személy név fejléc]     │  [Kép preview   │
+│  (indexkép      │  [Arc thumbnails          │   arc bbox-okkal │
+│   rács)         │   rácsban]                │   + nevek]       │
 │                 │                           │                  │
-│  [Re-cluster]   │                           │                  │
+│  Keresőmező     │  [Művelet gombok]         │  [Jobb klikk:    │
+│  Személy lista  │   - Átnevezés             │   megnyitás,     │
+│                 │   - Összefűzés            │   nagyítás]      │
+│  [Újra-         │   - Törlés                │                  │
+│   klaszterezés] │   - Arc eltávolítása      │                  │
+│                 │                           │                  │
 └─────────────────┴───────────────────────────┴──────────────────┘
 ```
 
-**Signals flow**:
-1. User clicks person in SidebarPanel → `person_selected(int person_id)`
-2. MainWindow queries DB, shows faces in ClusterPanel
-3. User clicks face thumbnail → `face_selected(int face_id)`
-4. MainWindow loads image + face data, shows in PreviewPanel
+### Panel-ek
 
-### Panels
-
-| Panel | File | Purpose |
+| Panel | Fájl | Feladat |
 |-------|------|---------|
-| SidebarPanel | `app/ui/panels/sidebar_panel.py` | Person list + face thumbnail grid, search |
-| ClusterPanel | `app/ui/panels/cluster_panel.py` | Face grid for selected person |
-| PreviewPanel | `app/ui/panels/preview_panel.py` | Image preview with face boxes |
-| CollagePanel | `app/ui/panels/collage_panel.py` | Collage list and viewer |
-| LogPanel | `app/ui/panels/log_panel.py` | Activity log display |
+| **SidebarPanel** | `app/ui/panels/sidebar_panel.py` | Személy lista, keresés, arc előnézet |
+| **ClusterPanel** | `app/ui/panels/cluster_panel.py` | Arcok rácsban kiválasztott személyhez |
+| **PreviewPanel** | `app/ui/panels/preview_panel.py` | Eredeti kép + arc bbox-ok + jobb klikk menü |
+| **ImageBrowserPanel** | `app/ui/panels/image_browser_panel.py` | Összes kép böngészése arc annotációkkal |
+| **CollagePanel** | `app/ui/panels/collage_panel.py` | Picasa kollázs nézegető, zoomolható |
+| **LogPanel** | `app/ui/panels/log_panel.py` | Színes napló, törlés gomb |
 
-### Dialogs
+### Signal folyam
 
-| Dialog | File | Purpose |
-|--------|------|---------|
-| RenameDialog | `app/ui/dialogs/rename_dialog.py` | Rename a person |
-| MergeDialog | `app/ui/dialogs/merge_dialog.py` | Merge/split persons |
-| SettingsDialog | `app/ui/dialogs/settings_dialog.py` | App settings, DB path, language |
-| ExportDialog | `app/ui/dialogs/export_dialog.py` | Export options (images, CSV, JSON, HTML) |
-| UpdateDialog | `app/ui/dialogs/update_dialog.py` | GitHub update notification |
-| NoFaceImagesDialog | `app/ui/dialogs/manual_face_dialog.py` | View/manage images with no detected faces |
+1. SidebarPanel `person_selected(person_id)` → ClusterPanel mutatja a személy arcait
+2. ClusterPanel `face_selected(face_id)` → PreviewPanel betölti az eredeti képet + bbox-ot
+3. PipelineWorker `progress(current, total, stage, detail)` → státusz sáv
+4. PipelineWorker `finished(success, summary)` → UI frissítés + értesítés
 
-### i18n System
+### Dialógusok
 
-**File**: `app/ui/i18n.py`
+| Dialógus | Fájl | Feladat |
+|----------|------|---------|
+| **RenameDialog** | `app/ui/dialogs/rename_dialog.py` | Személy átnevezése |
+| **MergeDialog** | `app/ui/dialogs/merge_dialog.py` | Személyek összefűzése |
+| **SettingsDialog** | `app/ui/dialogs/settings_dialog.py` | Nyelv, DB útvonal, auto-update, TPU teszt |
+| **SuggestionDialog** | `app/ui/dialogs/suggestion_dialog.py` | Javaslatok elfogadása/elutasítása |
+| **ExportDialog** | `app/ui/dialogs/export_dialog.py` | Export formátum választás |
+| **UpdateDialog** | `app/ui/dialogs/update_dialog.py` | Frissítés letöltés/telepítés |
+| **TpuStatusDialog** | `app/ui/dialogs/tpu_status_dialog.py` | TPU állapot, automatikus javítás |
+| **PersonInfoDialog** | `app/ui/dialogs/person_info_dialog.py` | Személy adatok szerkesztése |
+| **ManualFaceDialog** | `app/ui/dialogs/manual_face_dialog.py` | Kézi arc jelölés |
+| **CollageNodeDialog** | `app/ui/dialogs/collage_node_dialog.py` | Kollázs node metaadatok |
 
-- `t(key, **kwargs) -> str` — translate by key
-- `load_prefs() -> None` — load language preference from QSettings
-- Language files stored in `app/ui/i18n/` directory
+### i18n Rendszer
 
----
+**Fájl**: `app/ui/i18n.py`
 
-## 11. File Structure
+- `t(key, **kwargs) -> str` — fordítás kulcs alapján
+- `load_prefs() -> None` — nyelvi preferencia betöltése QSettings-ből
+- Két nyelv: Angol (alapértelmezett) és Magyar
+- Minden UI szöveg `t()`-n keresztül megy
 
-```
-app/
-├── __init__.py              # __version__ variable
-├── __main__.py              # Entry point: python -m app.main
-├── main.py                  # Application main() function
-├── config.py                # Configuration loading
-├── paths.py                 # Path helpers (is_frozen, bundle_root, etc.)
-├── logging_setup.py         # Logging configuration
+### Téma
 
-├── db/
-│   ├── __init__.py
-│   ├── database.py          # SQLAlchemy engine, session_scope
-│   └── models.py           # ORM models: Image, Face, Person, Collage, CollageNode, FaceCorrection
+**Fájl**: `app/ui/theme.py`
 
-├── detectors/
-│   ├── __init__.py
-│   ├── base.py             # FaceDetector ABC, Detection dataclass
-│   ├── factory.py          # create_detector()
-│   ├── cpu_detector.py     # CPU detector (OpenCV DNN)
-│   └── coral_detector.py   # Coral EdgeTPU detector
-
-├── embeddings/
-│   ├── __init__.py
-│   ├── base.py             # FaceEmbedder ABC
-│   └── tflite_embedder.py  # TFLite embedder implementation
-
-├── clustering/
-│   ├── __init__.py
-│   └── clusterer.py        # DBSCAN clustering with constraints
-
-├── services/
-│   ├── __init__.py
-│   ├── scan_service.py         # Image discovery and indexing
-│   ├── detection_service.py    # Face detection pipeline
-│   ├── embedding_service.py   # Face embedding generation
-│   ├── clustering_service.py   # DBSCAN person clustering
-│   ├── identity_service.py     # Person/face CRUD operations
-│   ├── export_service.py       # Export (images, CSV, JSON, HTML)
-│   ├── collage_service.py      # Picasa collage management
-│   ├── collage_parser.py      # Collage XML parser
-│   └── update_service.py       # GitHub release checker
-
-├── workers/
-│   ├── __init__.py
-│   └── pipeline_worker.py     # Background QThread pipeline
-
-├── ui/
-│   ├── __init__.py
-│   ├── i18n.py               # Internationalization
-│   ├── main_window.py         # MainWindow
-│   ├── panels/
-│   │   ├── __init__.py
-│   │   ├── sidebar_panel.py   # Person list + face grid
-│   │   ├── cluster_panel.py   # Face grid for person
-│   │   ├── preview_panel.py   # Image + face preview
-│   │   ├── collage_panel.py   # Collage viewer
-│   │   └── log_panel.py      # Activity log
-│   └── dialogs/
-│       ├── __init__.py
-│       ├── rename_dialog.py
-│       ├── merge_dialog.py
-│       ├── settings_dialog.py
-│       ├── export_dialog.py
-│       ├── update_dialog.py
-│       └── manual_face_dialog.py
-
-└── utils/
-    ├── __init__.py
-    └── image_utils.py       # save_face_crop, image processing
-```
+- Catppuccin Mocha dark téma
+- `QPalette` beállítás + QSS string alkalmazás
 
 ---
 
-## 12. Processing Flow Diagram
+## 12. Segédmodulok
 
-```
-User selects folder
-        │
-        ▼
-┌─────────────────────────────────────────────────┐
-│  PipelineWorker (QThread)                       │
-│                                                 │
-│  Stage 1: ScanService.scan()                    │
-│    └─ discovers files, computes hashes          │
-│    └─ inserts/updates Image records             │
-│    └─ returns new/changed image IDs            │
-│                                                 │
-│  Stage 2: DetectionService.process()            │
-│    └─ creates FaceDetector (Coral or CPU)       │
-│    └─ for each image:                           │
-│        └─ cv2.imread()                          │
-│        └─ detector.detect() → List[Detection]  │
-│        └─ save_face_crop() → crop files         │
-│        └─ Face records in DB                    │
-│                                                 │
-│  Stage 3: EmbeddingService.process_pending()    │
-│    └─ creates TFLiteEmbedder                    │
-│    └─ for each unembedded face:                 │
-│        └─ cv2.imread(crop)                     │
-│        └─ embedder.embed() → vector             │
-│        └─ face.set_embedding()                  │
-│                                                 │
-│  Stage 4: ClusteringService.run()               │
-│    └─ loads all embeddings from DB              │
-│    └─ loads FaceCorrection pairs                 │
-│    └─ cluster_embeddings() → label_map          │
-│    └─ creates/reuses Person records             │
-│    └─ assigns face.person_id                    │
-│                                                 │
-└─────────────────────────────────────────────────┘
-        │
-        ▼
-MainWindow receives finished signal
-        │
-        ▼
-_refresh_persons() → SidebarPanel.populate()
-        │
-        ▼
-User clicks person → _on_person_selected()
-        │
-        ▼
-_show_person() → ClusterPanel.show_person()
-```
+### image_utils
+
+**Fájl**: `app/utils/image_utils.py`
+
+- `load_image_bgr(path) -> np.ndarray` — kép betöltés OpenCV-vel
+- `save_face_crop(img_bgr, detection, crops_dir, image_id, thumbnail_size, face_index) -> str` — arc kivágat mentés
+- `save_image_bgr(path, img_bgr) -> None` — kép mentés
+
+### paths
+
+**Fájl**: `app/paths.py`
+
+- `is_frozen() -> bool` — PyInstaller csomagolt mód?
+- `bundle_root() -> Path` — alkalmazás bundle könyvtár
+- `resource_path(relative_path) -> Path` — erőforrás elérés (frozen/modul)
+- `user_data_dir() -> Path` — felhasználói adatkönyvtár
+- `user_config_dir() -> Path` — felhasználói config könyvtár
+- `project_root() -> Path` — projekt gyökér
+
+### logging_setup
+
+**Fájl**: `app/logging_setup.py`
+
+- Rotating file handler + stderr handler
+- `QLogHandler` — Qt signálokkal naplózás a UI-ba
+- Szintek: DEBUG, INFO, WARNING, ERROR
 
 ---
 
-## 13. Key Data Flows
+## 13. Tesztelés
 
-### Image to Person flow
-```
-Image file on disk
-    │
-    ▼ (ScanService)
-Image record in DB (file_path, file_hash, file_mtime)
-    │
-    ▼ (DetectionService)
-Face records (bbox, confidence, crop_path)
-    │
-    ▼ (EmbeddingService)
-Face records with _embedding (serialized numpy array)
-    │
-    ▼ (ClusteringService)
-Person records + face.person_id assigned
-```
+**Könyvtár**: `tests/`
 
-### Face crop saving
-```
-Original image (cv2.imread)
-    │
-    ▼
-detector.detect() → List[Detection] (x, y, w, h, confidence)
-    │
-    ▼
-For each Detection:
-  └─ save_face_crop(img_bgr, detection, crops_dir, image_id, thumbnail_size, face_index)
-      │
-      ▼
-      crop = img_bgr[y:y+h, x:x+w]  (or with padding)
-      │
-      ▼
-      Resize to thumbnail_size (128x128)
-      │
-      ▼
-      Save as: {crops_dir}/{image_id}/{face_id}_{face_index}.jpg
-```
+11 teszt fájl, mind `tmp_path` fixture-t használ izolált SQLite adatbázishoz:
+
+| Teszt fájl | Mit tesztel | Sorok |
+|------------|-------------|-------|
+| `test_clustering.py` | cosine_distance, compute_centroid, DBSCAN cluster_embeddings | 82 |
+| `test_clustering_service.py` | Orphan cleanup, recluster stabilitás | 92 |
+| `test_collage_parser.py` | XML parse, path resolution, face projection | 338 |
+| `test_config.py` | Relative path resolution, frozen bundle | 56 |
+| `test_database.py` | Image/Face/Person CRUD, embedding roundtrip, cascade | 125 |
+| `test_detection_service.py` | Face indexing dummy detectorral | 91 |
+| `test_detectors.py` | Detection dataclass, factory fallback, interface | 81 |
+| `test_post_buffer_release.py` | Buffer post text, channel select | 54 |
+| `test_post_x_release.py` | X post text, length enforcement | 36 |
+| `test_scan_service.py` | File discovery, hash dedup, mtime resume | 105 |
+| `test_suggestion_service.py` | Centroid, suggestions, approve/reject | 284 |
 
 ---
 
-## 14. Dependencies
+## 14. ML Modellek
 
-### Core dependencies
-```
-PySide6              # Qt GUI framework
-SQLAlchemy           # ORM
-opencv-python        # Image processing
-numpy                # Array operations
-scikit-learn         # DBSCAN clustering
-Pillow               # Image loading
-```
+**Könyvtár**: `models/`
 
-### ML models
-```
-TensorFlow Lite      # TFLite runtime (via tflite-runtime or tensorflow)
-EdgeTPU runtime     # Optional: Coral USB accelerator
-```
+| Fájl | Forrás | Feladat | Bemenet | Kimenet |
+|------|--------|---------|---------|---------|
+| `deploy.prototxt` | OpenCV samples | CPU DNN face detector prototxt | 300x300 | detections |
+| `res10_300x300_ssd_iter_140000.caffemodel` | OpenCV 3rdparty | CPU DNN face detector weights | 300x300 | detections |
+| `ssd_mobilenet_v2_face_quant_postprocess_edgetpu.tflite` | Google Coral test data | Coral Edge TPU face detector | kvantált | detections |
+| `sface.onnx` | OpenCV Zoo | Face recognition embedder | 112x112 grayscale | 128-dim |
+| `mobilefacenet.tflite` | GitHub (auto-download) | MobileFaceNet embedder | 112x112 RGB | 192-dim |
 
-### Configuration
-```
-PyYAML               # YAML config parsing
-```
-
-### Development
-```
-pytest               # Testing
-```
+Megjegyzés: `mobilefacenet.tflite` nincs verziókövetve (`.gitignore`). A `build_and_run.sh` letölti több mirrorról validációval.
 
 ---
 
-## 15. Build & Distribution
+## 15. Külső függőségek
 
-### Build scripts
-- `scripts/package_app.py` — pyinstaller packaging
-- `scripts/build_windows_installer.iss` — Inno Setup for Windows
-- `scripts/build_linux_deb.sh` — Linux DEB builder
-- `.github/workflows/build-release.yml` — CI/CD release pipeline
+### Core
 
-### Frozen mode detection
-`app/paths.py` provides:
-- `is_frozen() -> bool` — running as packaged app
-- `bundle_root() -> Path` — app bundle directory
-- `user_data_dir() -> Path` — user-writable data directory
-- `user_config_dir() -> Path` — user config directory
+| Csomag | Verzió | Használat |
+|--------|--------|-----------|
+| PySide6 | ≥6.5 | Qt GUI |
+| SQLAlchemy | ≥2.0 | ORM |
+| opencv-python | ≥4.8 | Képfeldolgozás |
+| numpy | ≥1.24 | Tömb műveletek |
+| scikit-learn | ≥1.3 | DBSCAN |
+| Pillow | ≥10.0 | Kép betöltés |
+| PyYAML | ≥6.0 | YAML config |
+| tflite-runtime | ≥2.14 | TFLite modellek |
+| ai-edge-litert | (opcionális) | Coral EdgeTPU |
 
 ---
 
-## 16. Key Implementation Patterns
+## 16. Build & Disztribúció
 
-### Database session pattern
+### Script-ek
+
+| Script | Platform | Feladat |
+|--------|----------|---------|
+| `scripts/build_and_run.sh` | Linux/macOS | Teljes környezet beállítás + indítás |
+| `scripts/build_and_run.bat` | Windows (CMD) | Ugyanaz |
+| `scripts/build_and_run.ps1` | Windows (PowerShell) | Ugyanaz |
+| `scripts/package_app.py` | Minden | PyInstaller csomagolás |
+| `scripts/build_linux_deb.sh` | Linux | `.deb` csomag |
+| `scripts/build_windows_installer.iss` | Windows | Inno Setup `.exe` telepítő |
+| `scripts/github_release.py` | CI | GitHub release + asset feltöltés |
+| `scripts/post_buffer_release.py` | CI | Buffer posztolás |
+| `scripts/post_x_release.py` | CI | X/Twitter posztolás |
+
+### CI/CD Pipeline (GitHub Actions)
+
+`.github/workflows/build-release.yml`
+
+1. **pick-runner**: Ellenőrzi a self-hosted futókat
+2. **prepare**: Patch verzió automatikus növelése
+3. **build-macos**: `.dmg` telepítő
+4. **build-windows**: `.exe` + `.zip`
+5. **build-linux-arm64**: `.deb` + `.tar.gz`
+6. **build-linux-x64**: `.deb` + `.tar.gz`
+7. **release**: Asset-ek összegyűjtése + GitHub release
+8. **post-to-buffer**: Kétnyelvű bejelentés posztolása
+
+---
+
+## 17. Főbb implementációs minták
+
+### Adatbázis session minta
+
 ```python
-from app.db.database import session_scope
-
 with session_scope() as session:
-    # work with session
-    session.add(obj)
-    # auto-commits on exit
-    # auto-rollbacks on exception
+    svc = SomeService(session, config)
+    result = svc.do_work()
+# auto-commit siker esetén, auto-rollback hiba esetén
 ```
 
-### Progress callback pattern
+### Progress callback minta
+
 ```python
 def progress_cb(current: int, total: Optional[int], detail: str):
-    pass
-
-svc = SomeService(session, config, progress_cb)
+    pass  # UI frissítés
 ```
 
-### Qt signal pattern
+### Qt signal minta
+
 ```python
-class Worker(QThread):
-    progress = Signal(int, int, str, str)  # current, total, stage, detail
-    finished = Signal(bool, str)             # success, summary
+class PipelineWorker(QThread):
+    progress = Signal(int, int, str, str)   # current, total, stage, detail
+    finished = Signal(bool, str)            # success, summary
 ```
 
-### Service instantiation pattern
-```python
-with session_scope() as session:
-    svc = Service(session, config)
-    result = svc.do_work()
-# session auto-closed
-```
+### Embedding tárolás
 
-### Face embedding storage
 ```python
-# Store
+# Tárolás
 face._embedding = vector.astype(np.float32).tobytes()
 
-# Retrieve
+# Visszaolvasás
 vector = np.frombuffer(face._embedding, dtype=np.float32).copy()
 ```
 
-### Relative path resolution
-```python
-config = load_config()
-crop_path = config.crops_dir_resolved / "face.jpg"  # Path resolution
-```
+---
+
+## 18. Fejlesztői irányelvek (AGENT.md-ból)
+
+- **Kétnyelvű UI**: Minden szöveg `t()`-n keresztül, angol és magyar fordítás szükséges
+- **Zero-research, one-click fixes**: TPU dialógus mutatja a javító parancsokat auto-fix gombbal
+- **Build script**: `build_and_run.sh` mindent kezel venv-től modell letöltésig
+- **Tesztelés**: `pytest -v` a teljes teszt suite futtatásához
+- **Kód konvenciók**: típus annotációk, docstring-ek, meglévő minták követése

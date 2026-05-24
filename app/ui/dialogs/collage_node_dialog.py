@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCompleter,
     QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -43,6 +44,7 @@ class CollageNodeDialog(QDialog):
         self.setWindowTitle("Kollázs elem részletei")
         self.setMinimumWidth(520)
         self._build_ui(info_lines)
+        self._setup_completers()
         self._load_existing()
 
     # ------------------------------------------------------------------
@@ -94,6 +96,38 @@ class CollageNodeDialog(QDialog):
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    # Autocomplete
+    # ------------------------------------------------------------------
+
+    def _fetch_collage_values(self, field: str) -> List[str]:
+        from sqlalchemy import select, distinct
+        from app.db.models import CollageNode
+        try:
+            with session_scope() as session:
+                col = getattr(CollageNode, field)
+                rows = session.execute(
+                    select(distinct(col)).where(col.isnot(None)).where(col != "")
+                ).scalars().all()
+                return sorted(rows)
+        except Exception:
+            log.exception("Failed to load autocomplete values for %s", field)
+            return []
+
+    def _make_completer(self, values: List[str]) -> QCompleter:
+        completer = QCompleter(values, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        return completer
+
+    def _setup_completers(self) -> None:
+        self._location_edit.setCompleter(
+            self._make_completer(self._fetch_collage_values("location"))
+        )
+        self._event_edit.setCompleter(
+            self._make_completer(self._fetch_collage_values("event_name"))
+        )
 
     # ------------------------------------------------------------------
     # Load existing data
