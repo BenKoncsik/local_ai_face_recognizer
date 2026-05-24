@@ -43,8 +43,17 @@ class Image(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # Absolute path as stored; used as the stable key for display
+    # Absolute path as recorded on the indexing machine; kept for backward
+    # compatibility.  On a different machine this path may not exist — use
+    # relative_path + ImageLibraryService.resolve_path() for portability.
     file_path: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+
+    # POSIX-style path relative to the configured ImageLibraryRoot.
+    # NULL for records created before the portable-library feature was added.
+    # Always stored with forward slashes for cross-platform compatibility.
+    relative_path: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True, index=True
+    )
 
     # SHA-256 hex digest of file content — used to skip unchanged files
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)

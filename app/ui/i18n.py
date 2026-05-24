@@ -193,8 +193,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "export_need_person_tip": {"en": "Select a person in the main window",
                                "hu": "Válassz ki egy személyt a főablakban"},
     "export_html_group": {"en": "Static HTML Gallery", "hu": "Statikus weboldal"},
-    "export_html_desc":  {"en": "Browser gallery: persons, crops, annotated originals with burned-in names. Searchable.",
-                          "hu": "Böngészőben megnyitható galéria: személyek, arc-kivágások és az eredeti képek beégetett névfeliratokkal. Keresés is elérhető."},
+    "export_html_desc":  {"en": "Browser gallery: persons, crops, and original photos with interactive face overlays. Searchable.",
+                          "hu": "Böngészőben megnyitható galéria: személyek, arc-kivágások és eredeti képek interaktív arckeretekkel. Keresés is elérhető."},
     "export_generate_html": {"en": "Generate HTML Gallery …", "hu": "HTML galéria generálása…"},
     "csv_exported":      {"en": "CSV Exported", "hu": "CSV exportálva"},
     "json_exported":     {"en": "JSON Exported", "hu": "JSON exportálva"},
@@ -462,6 +462,70 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                 "hu": "← Válassz képet"},
     "ib3_no_images_in_folder": {"en": "No images in this folder",
                                 "hu": "Nincs kép ebben a mappában"},
+
+    # ── Image library ─────────────────────────────────────────────────────
+    "img_lib_group":            {"en": "Image Library",
+                                 "hu": "Képkönyvtár"},
+    "img_lib_root_label":       {"en": "Library root:",
+                                 "hu": "Könyvtár gyökere:"},
+    "img_lib_not_configured":   {"en": "(not configured — using absolute paths)",
+                                 "hu": "(nincs beállítva — abszolút útvonalakat használ)"},
+    "img_lib_status_ok":        {"en": "Connected: {path}",
+                                 "hu": "Csatlakoztatva: {path}"},
+    "img_lib_status_missing":   {"en": "Root not found: {path}",
+                                 "hu": "Gyökér nem található: {path}"},
+    "img_lib_change_btn":       {"en": "Change …",
+                                 "hu": "Módosítás …"},
+    "img_lib_migrate_btn":      {"en": "Migrate to Relative Paths",
+                                 "hu": "Relatív útvonalakra konvertálás"},
+    "img_lib_migrate_tip":      {"en": "Convert all absolute image paths in the database "
+                                       "to relative paths based on the library root. "
+                                       "Run this once after setting the root for the first time.",
+                                 "hu": "Az adatbázisban tárolt abszolút útvonalak konvertálása "
+                                       "relatív útvonalakra a könyvtár gyökere alapján. "
+                                       "Ezt egyszer kell futtatni a gyökér első beállítása után."},
+    "img_lib_select_title":     {"en": "Select Image Library Root Folder",
+                                 "hu": "Képkönyvtár gyökérmappájának kiválasztása"},
+    "img_lib_migrate_title":    {"en": "Migrate Image Paths",
+                                 "hu": "Képútvonalak migrálása"},
+    "img_lib_migrate_confirm":  {"en": "Convert {n} image record(s) to relative paths?\n\n"
+                                       "Library root: {root}\n\n"
+                                       "The original file_path values are preserved. "
+                                       "The migration can be repeated safely.",
+                                 "hu": "Konvertálja a(z) {n} képrekordot relatív útvonalakra?\n\n"
+                                       "Könyvtár gyökere: {root}\n\n"
+                                       "Az eredeti fájlútvonalak megmaradnak. "
+                                       "A migráció biztonságosan ismételhető."},
+    "img_lib_migrating":        {"en": "Migrating image paths …",
+                                 "hu": "Képútvonalak migrálása …"},
+    "img_lib_migrate_done":     {"en": "Migration complete: {migrated} converted, {skipped} skipped.",
+                                 "hu": "Migráció kész: {migrated} konvertálva, {skipped} kihagyva."},
+    "img_lib_migrate_errors":   {"en": "Files not found during migration ({n}):",
+                                 "hu": "Migráció során nem talált fájlok ({n}):"},
+    "img_lib_missing_title":    {"en": "Image Library Not Found",
+                                 "hu": "Képkönyvtár nem található"},
+    "img_lib_missing_msg":      {"en": "The configured image library root was not found:\n\n"
+                                       "{path}\n\n"
+                                       "Images cannot be loaded until a valid root is selected. "
+                                       "Choose the new location of your image folder, or skip to "
+                                       "continue with reduced functionality.",
+                                 "hu": "A beállított képkönyvtár gyökere nem található:\n\n"
+                                       "{path}\n\n"
+                                       "A képek nem tölthetők be érvényes gyökér nélkül. "
+                                       "Válassza ki a képkönyvtár új helyét, vagy ugorja át "
+                                       "a korlátozott működés folytatásához."},
+    "img_lib_find_btn":         {"en": "Find New Location …",
+                                 "hu": "Új helyszín keresése …"},
+    "img_lib_skip_btn":         {"en": "Skip for Now",
+                                 "hu": "Kihagyás egyelőre"},
+    "img_lib_root_changed":     {"en": "Image library root updated.",
+                                 "hu": "Képkönyvtár gyökere frissítve."},
+    "img_lib_n_relative":       {"en": "{n} image(s) with relative paths",
+                                 "hu": "{n} kép relatív útvonallal"},
+    "img_lib_n_absolute":       {"en": "{n} image(s) with absolute paths only",
+                                 "hu": "{n} kép csak abszolút útvonallal"},
+    "img_lib_no_root_for_migrate": {"en": "Please set the library root before migrating.",
+                                    "hu": "A migráció előtt állítsa be a könyvtár gyökerét."},
 
     # ── Name suggestions ──────────────────────────────────────────────────
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},

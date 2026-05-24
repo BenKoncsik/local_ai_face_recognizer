@@ -17,11 +17,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
 
 from app import __version__
+from app.services.image_library_service import get_image_library_optional
 from app.ui.i18n import SUPPORTED, current_language, set_language, t
 
 
@@ -45,7 +47,7 @@ class SettingsDialog(QDialog):
     def __init__(self, current_db_path: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("settings_title"))
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(540)
         self._current_db_path = current_db_path
         self._new_db_path: Optional[str] = None
         self._language_changed = False
@@ -92,6 +94,37 @@ class SettingsDialog(QDialog):
         btn_row.addStretch()
         db_layout.addLayout(btn_row)
         layout.addWidget(db_group)
+
+        # ── Image Library ─────────────────────────────────────────────────
+        lib_group = QGroupBox(t("img_lib_group"))
+        lib_layout = QVBoxLayout(lib_group)
+
+        root_row = QHBoxLayout()
+        root_row.addWidget(QLabel(t("img_lib_root_label")))
+        self._lib_root_label = QLineEdit()
+        self._lib_root_label.setReadOnly(True)
+        self._lib_root_label.setStyleSheet("color: #aaa;")
+        root_row.addWidget(self._lib_root_label, 1)
+        lib_layout.addLayout(root_row)
+
+        lib_btn_row = QHBoxLayout()
+        change_lib_btn = QPushButton(t("img_lib_change_btn"))
+        change_lib_btn.clicked.connect(self._on_change_library_root)
+        lib_btn_row.addWidget(change_lib_btn)
+
+        self._migrate_btn = QPushButton(t("img_lib_migrate_btn"))
+        self._migrate_btn.setToolTip(t("img_lib_migrate_tip"))
+        self._migrate_btn.clicked.connect(self._on_migrate_paths)
+        lib_btn_row.addWidget(self._migrate_btn)
+        lib_btn_row.addStretch()
+        lib_layout.addLayout(lib_btn_row)
+
+        self._lib_stats_label = QLabel()
+        self._lib_stats_label.setStyleSheet("color: #888; font-size: 11px;")
+        lib_layout.addWidget(self._lib_stats_label)
+
+        layout.addWidget(lib_group)
+        self._refresh_library_status()
 
         # ── Updates ───────────────────────────────────────────────────────
         upd_group = QGroupBox(t("updates_group"))
@@ -185,6 +218,127 @@ class SettingsDialog(QDialog):
         dlg = TpuStatusDialog(parent=self)
         dlg.exec()
         self._start_tpu_probe()
+
+    # ------------------------------------------------------------------
+    # Image Library
+    # ------------------------------------------------------------------
+
+    def _refresh_library_status(self) -> None:
+        """Update the library root label and stats."""
+        svc = get_image_library_optional()
+        if svc is None:
+            self._lib_root_label.setText(t("img_lib_not_configured"))
+            self._lib_root_label.setStyleSheet("color: #888;")
+            self._lib_stats_label.clear()
+            return
+
+        root = svc.library_root
+        if root is None:
+            self._lib_root_label.setText(t("img_lib_not_configured"))
+            self._lib_root_label.setStyleSheet("color: #888;")
+        elif svc.is_available():
+            self._lib_root_label.setText(t("img_lib_status_ok", path=str(root)))
+            self._lib_root_label.setStyleSheet("color: #4caf50;")
+        else:
+            self._lib_root_label.setText(t("img_lib_status_missing", path=str(root)))
+            self._lib_root_label.setStyleSheet("color: #f57c00;")
+
+        self._update_library_stats()
+
+    def _update_library_stats(self) -> None:
+        """Show counts of relative vs. absolute paths in a subtle label."""
+        try:
+            from app.db.database import session_scope
+            from app.db.models import Image
+            with session_scope() as session:
+                n_rel = session.query(Image).filter(
+                    Image.relative_path.isnot(None)
+                ).count()
+                n_abs = session.query(Image).filter(
+                    Image.relative_path.is_(None)
+                ).count()
+            parts = []
+            if n_rel:
+                parts.append(t("img_lib_n_relative", n=n_rel))
+            if n_abs:
+                parts.append(t("img_lib_n_absolute", n=n_abs))
+            self._lib_stats_label.setText("  ".join(parts))
+        except Exception:  # noqa: BLE001
+            self._lib_stats_label.clear()
+
+    def _on_change_library_root(self) -> None:
+        svc = get_image_library_optional()
+        start = str(svc.library_root) if (svc and svc.library_root) else str(Path.home())
+        folder = QFileDialog.getExistingDirectory(
+            self, t("img_lib_select_title"), start
+        )
+        if not folder:
+            return
+        try:
+            if svc is not None:
+                svc.set_library_root(folder)
+            else:
+                from app.services.image_library_service import get_image_library
+                get_image_library().set_library_root(folder)
+            self._refresh_library_status()
+            QMessageBox.information(self, t("img_lib_group"), t("img_lib_root_changed"))
+        except (NotADirectoryError, RuntimeError) as exc:
+            QMessageBox.warning(self, t("error"), str(exc))
+
+    def _on_migrate_paths(self) -> None:
+        svc = get_image_library_optional()
+        if svc is None or not svc.is_configured():
+            QMessageBox.warning(
+                self, t("img_lib_migrate_title"), t("img_lib_no_root_for_migrate")
+            )
+            return
+        if not svc.is_available():
+            QMessageBox.warning(
+                self,
+                t("img_lib_migrate_title"),
+                t("img_lib_status_missing", path=str(svc.library_root)),
+            )
+            return
+
+        # Count images without relative_path
+        try:
+            from app.db.database import session_scope
+            from app.db.models import Image
+            with session_scope() as session:
+                n = session.query(Image).filter(
+                    Image.relative_path.is_(None)
+                ).count()
+                total = session.query(Image).count()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        if n == 0:
+            QMessageBox.information(
+                self,
+                t("img_lib_migrate_title"),
+                t("img_lib_migrate_done", migrated=0, skipped=0),
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("img_lib_migrate_title"),
+            t("img_lib_migrate_confirm", n=n, root=str(svc.library_root)),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        from app.ui.dialogs.image_library_dialog import MigrateLibraryDialog
+        dlg = MigrateLibraryDialog(
+            db_path=self._current_db_path,
+            library_root=str(svc.library_root),
+            total_images=n,
+            parent=self,
+        )
+        dlg.exec()
+        self._refresh_library_status()
 
     # ------------------------------------------------------------------
     # DB

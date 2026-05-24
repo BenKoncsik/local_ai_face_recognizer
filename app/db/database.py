@@ -68,6 +68,10 @@ def init_db(db_path: Path | str) -> Engine:
     _engine = engine
     _SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
 
+    # Initialise the image library service for this database path
+    from app.services.image_library_service import init_image_library
+    init_image_library(db_path)
+
     log.info("Database ready: %s tables", len(Base.metadata.tables))
     return engine
 
@@ -89,6 +93,7 @@ def _migrate_add_columns(engine: Engine) -> None:
         ],
         "images": [
             ("photo_date", "VARCHAR(128)"),
+            ("relative_path", "VARCHAR(1024)"),
         ],
         "faces": [
             ("assignment_source", "VARCHAR(32)"),

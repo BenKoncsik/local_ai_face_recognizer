@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self._restore_last_folder()
         self._setup_tray()
         self._image_browser.refresh()
+        self._check_image_library_on_startup()
 
         self.resize(1280, 780)
         self._update_ready.connect(self._on_update_found)
@@ -493,8 +494,9 @@ class MainWindow(QMainWindow):
             self._db_path = new_db
             self._config.storage.db_path = new_db
             save_db_path(new_db)
-            init_db(new_db)
+            init_db(new_db)  # also re-initialises the ImageLibraryService
             ensure_unknown_person()
+            self._check_image_library_on_startup()
             self._current_person_id = None
             self._current_face_id = None
             self._cluster_panel.clear()
@@ -1204,3 +1206,38 @@ class MainWindow(QMainWindow):
                     _ = f.image  # noqa: F841
             self._sidebar.populate(persons)
         log.debug("Sidebar refreshed: %d person(s)", len(persons))
+
+    # ------------------------------------------------------------------
+    # Image library startup check
+    # ------------------------------------------------------------------
+
+    def _check_image_library_on_startup(self) -> None:
+        """Show a dialog if the library root is configured but not found."""
+        from app.services.image_library_service import get_image_library_optional
+
+        svc = get_image_library_optional()
+        if svc is None:
+            return
+
+        root = svc.library_root
+        if root is None:
+            return  # Not configured — no warning needed.
+
+        if svc.is_available():
+            log.debug("Image library root available: %s", root)
+            return
+
+        # Root is configured but not reachable — prompt the user.
+        from app.ui.dialogs.image_library_dialog import ImageLibraryMissingDialog
+
+        dlg = ImageLibraryMissingDialog(missing_path=str(root), parent=self)
+        if dlg.exec() == ImageLibraryMissingDialog.Accepted:
+            new_root = dlg.new_root()
+            if new_root:
+                try:
+                    svc.set_library_root(new_root)
+                    log.info("Image library root updated to: %s", new_root)
+                except (NotADirectoryError, RuntimeError) as exc:
+                    from app.ui.i18n import t
+                    from PySide6.QtWidgets import QMessageBox
+                    QMessageBox.warning(self, t("error"), str(exc))

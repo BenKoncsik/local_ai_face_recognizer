@@ -16,6 +16,7 @@ from app.config import AppConfig
 from app.db.models import Face, Image
 from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
+from app.services.image_library_service import resolve_image_path
 from app.utils.image_utils import load_image_bgr, save_face_crop
 
 log = logging.getLogger(__name__)
@@ -63,13 +64,14 @@ class DetectionService:
                 log.warning("Image id=%d not found in DB — skipping", image_id)
                 continue
 
-            self._progress_cb(idx, total, image.file_path)
+            display_path = image.file_path or f"image id={image.id}"
+            self._progress_cb(idx, total, display_path)
 
             try:
                 n = self._process_image(image)
                 total_faces += n
             except Exception as exc:  # noqa: BLE001
-                log.error("Detection failed for %s: %s", image.file_path, exc)
+                log.error("Detection failed for %s: %s", display_path, exc)
             finally:
                 image.detection_done = True
                 self._session.commit()
@@ -82,7 +84,10 @@ class DetectionService:
 
         Returns the number of detected faces.
         """
-        path = Path(image.file_path)
+        path = resolve_image_path(image)
+        if path is None:
+            log.warning("Cannot resolve path for image id=%d", image.id)
+            return 0
         if not path.exists():
             log.warning("Image file missing on disk: %s", path)
             return 0

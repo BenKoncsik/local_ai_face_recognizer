@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import ScanConfig
 from app.db.models import Image
+from app.services.image_library_service import ImageLibraryService
 
 log = logging.getLogger(__name__)
 
@@ -88,10 +89,12 @@ class ScanService:
         session: Session,
         config: ScanConfig,
         progress_cb: Optional[Callable[[int, Optional[int], str], None]] = None,
+        image_library_svc: Optional[ImageLibraryService] = None,
     ) -> None:
         self._session = session
         self._config = config
         self._progress_cb = progress_cb or (lambda *_: None)
+        self._library_svc = image_library_svc
 
     def scan(self, root_folder: str) -> List[int]:
         """Scan *root_folder* and return IDs of images that need processing.
@@ -137,6 +140,13 @@ class ScanService:
     def _index_file(self, path: Path) -> Optional[int]:
         """Insert or update the DB record for *path*.
 
+        When an :class:`~app.services.image_library_service.ImageLibraryService`
+        is configured, the method:
+        * Stores a portable ``relative_path`` on every new record.
+        * Recognises images by ``relative_path`` when ``file_path`` no longer
+          matches (e.g. after moving the project to a new machine).
+        * Back-fills ``relative_path`` on existing records that lack it.
+
         Returns:
             The image ID if the record is new or changed; ``None`` if
             the file is unchanged and already fully processed.
@@ -147,29 +157,57 @@ class ScanService:
             log.warning("Cannot stat %s: %s", path, exc)
             return None
 
+        # Compute portable relative path if library service is available.
+        relative_path: Optional[str] = None
+        if self._library_svc is not None:
+            relative_path = self._library_svc.make_relative(path)
+
+        # Primary lookup: absolute file_path (fast, covers same-machine case).
         existing: Optional[Image] = (
             self._session.query(Image)
             .filter(Image.file_path == str(path))
             .first()
         )
 
+        # Secondary lookup: relative_path (cross-machine portability).
+        # This finds an existing record even when file_path has changed.
+        if existing is None and relative_path is not None:
+            existing = (
+                self._session.query(Image)
+                .filter(Image.relative_path == relative_path)
+                .first()
+            )
+            if existing is not None:
+                # Update the stored absolute path to the current machine's path.
+                log.info(
+                    "Re-linked image by relative path: %s → %s",
+                    existing.file_path,
+                    path,
+                )
+                existing.file_path = str(path)
+
         if existing is not None:
-            # Quick check: if mtime matches, skip hashing
+            # Back-fill relative_path on older records that lack it.
+            if existing.relative_path is None and relative_path is not None:
+                existing.relative_path = relative_path
+                log.debug("Back-filled relative_path for: %s", path.name)
+
+            # Quick check: if mtime matches, skip hashing.
             if existing.file_mtime == mtime and existing.detection_done:
                 log.debug("Skipping unchanged file: %s", path.name)
                 return None
 
-        # Hash is relatively expensive — only compute when mtime changed
+        # Hash is relatively expensive — only compute when mtime changed.
         file_hash = hash_file(path)
 
         if existing is not None:
             if existing.file_hash == file_hash and existing.detection_done:
-                # Update mtime in DB (file touched but content unchanged)
+                # Update mtime in DB (file touched but content unchanged).
                 existing.file_mtime = mtime
                 log.debug("Content unchanged (mtime updated): %s", path.name)
                 return None
 
-            # Content changed — reset processing flags
+            # Content changed — reset processing flags.
             existing.file_hash = file_hash
             existing.file_mtime = mtime
             existing.detection_done = False
@@ -177,11 +215,12 @@ class ScanService:
             log.debug("Content changed — requeued: %s", path.name)
             return existing.id
         else:
-            # New file
+            # New file.
             image = Image(
                 file_path=str(path),
                 file_hash=file_hash,
                 file_mtime=mtime,
+                relative_path=relative_path,
             )
             self._session.add(image)
             self._session.flush()  # populate image.id before returning

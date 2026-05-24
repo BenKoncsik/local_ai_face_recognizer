@@ -141,8 +141,14 @@ class PipelineWorker(QThread):
             if current % 50 == 0:
                 self.log_message.emit(f"  Scanned {current}/{total or '?'} files …")
 
+        from app.services.image_library_service import get_image_library_optional
         with session_scope() as session:
-            svc = ScanService(session=session, config=self._config.scan, progress_cb=cb)
+            svc = ScanService(
+                session=session,
+                config=self._config.scan,
+                progress_cb=cb,
+                image_library_svc=get_image_library_optional(),
+            )
             return svc.scan(self._root_folder)
 
     def _get_pending_detection_ids(self) -> list:

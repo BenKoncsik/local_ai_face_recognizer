@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Collage, CollageNode, Face, Image, Person
+from app.db.models import Face, Image, Person
 from app.utils.image_utils import load_image_bgr, save_image_bgr
 
 log = logging.getLogger(__name__)
@@ -199,9 +199,10 @@ class ExportService:
         persons = self._get_persons(person_id)
 
         # --- build data structures ---
-        # image_path → list of (person, face) records. Face bounding boxes are
-        # stored in original image pixels and transformed in the generated HTML.
+        # image_path -> list of (person, face) records. Face bounding boxes are
+        # exported as percentages so CSS overlays stay aligned after resizing.
         image_faces: Dict[str, List[Tuple[Person, Face]]] = {}
+        faceless_image_paths: set[str] = set()
         # person_name → list of thumb filenames
         person_thumbs: Dict[str, List[str]] = {}
         # person_name → list of image record ids
@@ -220,8 +221,24 @@ class ExportService:
                     shutil.copy2(face.crop_path, dst_thumb)
                     person_thumbs[person.name].append(dst_thumb.name)
 
+        if person_id is None:
+            faceless_images = (
+                self._session.query(Image)
+                .filter(~Image.faces.any())
+                .order_by(Image.file_path)
+                .all()
+            )
+            if faceless_images:
+                no_face_group = "Arc nélküli képek"
+                person_thumbs.setdefault(no_face_group, [])
+                person_images.setdefault(no_face_group, [])
+                for image in faceless_images:
+                    image_faces.setdefault(image.file_path, [])
+                    faceless_image_paths.add(image.file_path)
+
         # --- export normalized originals and HTML overlay metadata ---
         image_records: Dict[str, dict] = {}
+        image_order: List[str] = []
         for img_path, face_list in image_faces.items():
             img = load_image_bgr(img_path)
             if img is None:
@@ -247,16 +264,23 @@ class ExportService:
                 )
                 _append_unique(person_images.setdefault(person.name, []), dst_name)
 
+            if img_path in faceless_image_paths:
+                _append_unique(person_images.setdefault("Arc nélküli képek", []), dst_name)
+
+            source = Path(img_path)
             image_records[dst_name] = {
                 "id": dst_name,
                 "src": f"images/{dst_name}",
+                "file_name": source.name,
+                "folder_name": source.parent.name,
                 "width": img_w,
                 "height": img_h,
                 "faces": face_records,
             }
+            image_order.append(dst_name)
 
         # --- build JS data ---
-        js_persons = json.dumps(
+        persons_data = (
             [
                 {
                     "name": pname,
@@ -264,16 +288,15 @@ class ExportService:
                     "images": person_images.get(pname, []),
                 }
                 for pname in sorted(person_thumbs.keys())
-            ],
-            ensure_ascii=False,
+            ]
         )
-        js_images = json.dumps(image_records, ensure_ascii=False)
 
         # --- render HTML ---
         html = (
             _HTML_TEMPLATE
-            .replace("__PERSONS_JSON__", _json_for_script(js_persons))
-            .replace("__IMAGES_JSON__", _json_for_script(js_images))
+            .replace("__PERSONS_JSON__", _json_for_script(persons_data))
+            .replace("__IMAGES_JSON__", _json_for_script(image_records))
+            .replace("__IMAGE_ORDER_JSON__", _json_for_script(image_order))
         )
         (out / "index.html").write_text(html, encoding="utf-8")
 
@@ -341,7 +364,8 @@ class ExportService:
 
             # Build node data with face projections
             from app.services.collage_parser import (
-                CollageNodeData, project_face_to_collage,
+                CollageNodeData,
+                project_face_to_collage,
             )
             nodes_json = []
             for node in collage.nodes:
@@ -411,7 +435,7 @@ class ExportService:
                 "nodes": nodes_json,
             })
 
-        js_data = json.dumps(collage_records, ensure_ascii=False, indent=1)
+        js_data = _json_for_script(collage_records, indent=1)
         html_out = _COLLAGE_HTML_TEMPLATE.replace("__COLLAGES_JSON__", js_data)
         html_path = out / "collage_index.html"
         html_path.write_text(html_out, encoding="utf-8")
@@ -477,12 +501,14 @@ def _face_bbox_for_export(
     face: Face,
     image_w: int,
     image_h: int,
-) -> Optional[Dict[str, int]]:
-    """Normalize and clamp a face bbox to original image pixel coordinates.
+) -> Optional[Dict[str, float]]:
+    """Normalize, clamp, and export a face bbox as image-relative percentages.
 
     The database schema stores face boxes in original image pixels. The
     normalized-coordinate branch is defensive for old/manual imports that may
-    have stored 0..1 values.
+    have stored 0..1 values. The generated HTML uses these percentages
+    directly as CSS positions, keeping overlays responsive without rewriting
+    the image.
     """
     if image_w <= 0 or image_h <= 0:
         return None
@@ -508,11 +534,15 @@ def _face_bbox_for_export(
         return None
 
     return {
-        "x": int(round(x1)),
-        "y": int(round(y1)),
-        "width": max(1, int(round(out_w))),
-        "height": max(1, int(round(out_h))),
+        "left": _percent(x1, image_w),
+        "top": _percent(y1, image_h),
+        "width": _percent(out_w, image_w),
+        "height": _percent(out_h, image_h),
     }
+
+
+def _percent(value: float, total: int) -> float:
+    return round((value / float(total)) * 100.0, 6)
 
 
 def _append_unique(values: List[str], value: str) -> None:
@@ -520,9 +550,14 @@ def _append_unique(values: List[str], value: str) -> None:
         values.append(value)
 
 
-def _json_for_script(json_text: str) -> str:
-    """Keep JSON valid inside an inline script tag."""
-    return json_text.replace("</", "<\\/")
+def _json_for_script(value, *, indent: Optional[int] = None) -> str:
+    """Serialize JSON safely for an inline script tag."""
+    return (
+        json.dumps(value, ensure_ascii=False, indent=indent)
+        .replace("</", "<\\/")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -532,12 +567,13 @@ def _json_for_script(json_text: str) -> str:
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="hu">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Face Gallery</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#111;color:#ddd;font-family:system-ui,sans-serif}
+  button,input{font:inherit}
   header{background:#1a1a1a;padding:16px 24px;border-bottom:1px solid #333;
          display:flex;align-items:center;gap:16px;flex-wrap:wrap}
   header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
@@ -558,28 +594,46 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .thumbs img:hover{border-color:#88aaff}
   .images-label{font-size:.75rem;color:#888;margin-bottom:6px}
   .img-strip{display:flex;flex-wrap:wrap;gap:4px}
-  .img-strip img{height:80px;border-radius:4px;border:1px solid #333;
-                 cursor:pointer;transition:opacity .2s;object-fit:cover}
-  .img-strip img:hover{opacity:.85;border-color:#88aaff}
+  .image-tile{position:relative;display:inline-block;line-height:0;background:#050505;
+              border:1px solid #333;border-radius:4px;overflow:hidden;cursor:pointer;
+              transition:border-color .2s,opacity .2s}
+  .image-tile:hover,.image-tile:focus{border-color:#88aaff;opacity:.92;outline:none}
+  .image-tile>img{display:block;height:86px;max-width:220px;width:auto;object-fit:contain}
   .media-wrap{position:relative;display:inline-block;line-height:0}
   .media-wrap>img{display:block}
   .bbox-overlay{position:absolute;inset:0;pointer-events:none}
-  .bbox{position:absolute;outline:2px solid rgba(50,220,50,.95);
-        background:rgba(50,220,50,.06);box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+  .bbox{position:absolute;outline:2px solid rgba(72,220,122,.42);
+        background:rgba(72,220,122,.06);box-shadow:0 0 0 1px rgba(0,0,0,.35);
+        pointer-events:auto;cursor:pointer;transition:outline-color .15s,
+        outline-width .15s,background .15s,box-shadow .15s}
+  .bbox:hover,.bbox:focus{outline-color:rgba(125,255,166,.98);outline-width:3px;
+        background:rgba(72,220,122,.13);box-shadow:0 0 0 1px rgba(0,0,0,.55),
+        0 0 18px rgba(72,220,122,.35);z-index:3}
   .bbox-label{position:absolute;left:0;top:0;transform:translateY(calc(-100% - 4px));
               max-width:min(280px,70vw);overflow:hidden;text-overflow:ellipsis;
               white-space:nowrap;background:rgba(12,18,12,.9);color:#75ff75;
               border:1px solid rgba(50,220,50,.85);border-radius:4px;
-              padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25}
+              padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25;
+              opacity:0;pointer-events:none;transition:opacity .12s}
+  .bbox:hover .bbox-label,.bbox:focus .bbox-label{opacity:1}
   .bbox-label.inside{transform:none;top:2px;left:2px}
 
   /* lightbox */
   #lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);
-      z-index:100;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+      z-index:100;align-items:center;justify-content:center;flex-direction:column;
+      gap:12px;padding:18px}
   #lb.open{display:flex}
-  #lb-media{max-width:92vw;max-height:86vh;border-radius:6px;
+  #lb-toolbar{width:min(92vw,1200px);display:flex;align-items:center;justify-content:center;
+              gap:10px;flex-wrap:wrap;color:#ddd}
+  #lb-caption{min-width:180px;text-align:center;color:#aaa;font-size:.9rem;
+              overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lb-nav{padding:7px 12px;border:1px solid #3e5f9c;border-radius:6px;
+          color:#eaf0ff;background:#1d2b45;cursor:pointer}
+  .lb-nav:hover:not(:disabled){border-color:#88aaff;background:#26385a}
+  .lb-nav:disabled{opacity:.35;cursor:default}
+  #lb-media{max-width:92vw;max-height:82vh;border-radius:6px;
             box-shadow:0 0 0 2px #88aaff;background:#050505}
-  #lb-media img{max-width:92vw;max-height:86vh;width:auto;height:auto;border-radius:6px}
+  #lb-media img{max-width:92vw;max-height:82vh;width:auto;height:auto;border-radius:6px}
   #lb-close{position:fixed;top:16px;right:20px;font-size:2rem;cursor:pointer;
              color:#aaa;line-height:1;background:none;border:none}
   #lb-close:hover{color:#fff}
@@ -596,6 +650,11 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <!-- lightbox -->
 <div id="lb">
   <button id="lb-close" onclick="closeLb()">✕</button>
+  <div id="lb-toolbar">
+    <button id="lb-prev" class="lb-nav" onclick="showRelativeImage(-1)">Előző kép</button>
+    <div id="lb-caption"></div>
+    <button id="lb-next" class="lb-nav" onclick="showRelativeImage(1)">Következő kép</button>
+  </div>
   <div id="lb-media" class="media-wrap">
     <img id="lb-img" src="" alt="">
     <div id="lb-overlay" class="bbox-overlay"></div>
@@ -605,109 +664,169 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <script>
 const PERSONS = __PERSONS_JSON__;
 const IMAGES = __IMAGES_JSON__;
-let currentImage = null;
+const IMAGE_ORDER = __IMAGE_ORDER_JSON__;
+let currentImageId = null;
 
-function transformBox(box, originalSize, display){
-  const sourceW=Number(originalSize.width), sourceH=Number(originalSize.height);
-  const displayW=Number(display.width), displayH=Number(display.height);
-  if(!sourceW||!sourceH||!displayW||!displayH)return null;
-  const scaleX=displayW/sourceW;
-  const scaleY=displayH/sourceH;
-  return {
-    left:display.offsetX+Number(box.x)*scaleX,
-    top:display.offsetY+Number(box.y)*scaleY,
-    width:Number(box.width)*scaleX,
-    height:Number(box.height)*scaleY
-  };
+function clearOverlay(overlay){
+  while(overlay.firstChild)overlay.removeChild(overlay.firstChild);
 }
 
-function displayedImageBox(imgEl, wrapperEl, originalSize){
-  const imgRect=imgEl.getBoundingClientRect();
-  const wrapRect=wrapperEl.getBoundingClientRect();
-  let width=imgRect.width, height=imgRect.height;
-  let offsetX=imgRect.left-wrapRect.left;
-  let offsetY=imgRect.top-wrapRect.top;
-  const sourceW=Number(originalSize.width), sourceH=Number(originalSize.height);
-  const fit=getComputedStyle(imgEl).objectFit;
-  if(sourceW&&sourceH&&width&&height&&(fit==='contain'||fit==='scale-down'||fit==='cover')){
-    const scale=fit==='cover'
-      ? Math.max(width/sourceW,height/sourceH)
-      : Math.min(width/sourceW,height/sourceH);
-    const contentW=sourceW*scale;
-    const contentH=sourceH*scale;
-    offsetX+=(width-contentW)/2;
-    offsetY+=(height-contentH)/2;
-    width=contentW;
-    height=contentH;
+function setPercentStyle(el, prop, value){
+  const n=Number(value);
+  el.style[prop]=Number.isFinite(n)?n.toFixed(6)+'%':'0%';
+}
+
+function createFaceBox(face){
+  const bbox=face.bbox||{};
+  const box=document.createElement('div');
+  box.className='bbox';
+  box.tabIndex=0;
+  box.setAttribute('role','button');
+  const name=face.name||'Ismeretlen arc';
+  box.title=name;
+  box.setAttribute('aria-label','Arc: '+name);
+  setPercentStyle(box,'left',bbox.left);
+  setPercentStyle(box,'top',bbox.top);
+  setPercentStyle(box,'width',bbox.width);
+  setPercentStyle(box,'height',bbox.height);
+  if(face.name){
+    const label=document.createElement('div');
+    label.className='bbox-label';
+    if(Number(bbox.top)<6)label.classList.add('inside');
+    label.textContent=face.name;
+    box.appendChild(label);
   }
-  return {width,height,offsetX,offsetY};
+  return box;
 }
 
-function renderOverlay(record){
-  const imgEl=document.getElementById('lb-img');
-  const overlay=document.getElementById('lb-overlay');
-  const wrapper=document.getElementById('lb-media');
-  overlay.innerHTML='';
-  if(!record||!imgEl.complete||!imgEl.naturalWidth)return;
-  const display=displayedImageBox(imgEl,wrapper,{width:record.width,height:record.height});
+function renderOverlay(record, overlay){
+  clearOverlay(overlay);
+  if(!record||!Array.isArray(record.faces))return;
   record.faces.forEach(face=>{
-    const rect=transformBox(face.bbox,{width:record.width,height:record.height},display);
-    if(!rect||rect.width<=0||rect.height<=0)return;
-    const box=document.createElement('div');
-    box.className='bbox';
-    box.style.left=rect.left.toFixed(2)+'px';
-    box.style.top=rect.top.toFixed(2)+'px';
-    box.style.width=rect.width.toFixed(2)+'px';
-    box.style.height=rect.height.toFixed(2)+'px';
-    if(face.name){
-      const label=document.createElement('div');
-      label.className='bbox-label';
-      if(rect.top<24)label.classList.add('inside');
-      label.textContent=face.name;
-      box.appendChild(label);
-    }
-    overlay.appendChild(box);
+    overlay.appendChild(createFaceBox(face));
   });
+}
+
+function imageTitle(record){
+  if(!record)return'';
+  const parts=[];
+  if(record.folder_name)parts.push(record.folder_name);
+  if(record.file_name)parts.push(record.file_name);
+  return parts.join(' / ');
 }
 
 function openLb(imageId){
   const record=IMAGES[imageId];
   if(!record)return;
-  currentImage=record;
+  currentImageId=imageId;
   const img=document.getElementById('lb-img');
-  img.onload=()=>renderOverlay(record);
+  const overlay=document.getElementById('lb-overlay');
+  img.onload=()=>renderOverlay(record,overlay);
+  img.alt=imageTitle(record);
   img.src=record.src;
   document.getElementById('lb').classList.add('open');
-  if(img.complete)requestAnimationFrame(()=>renderOverlay(record));
+  renderOverlay(record,overlay);
+  updateLbNav();
 }
 
-function openThumb(src){
-  currentImage=null;
-  document.getElementById('lb-overlay').innerHTML='';
-  document.getElementById('lb-img').src=src;
+function openThumb(src,title){
+  currentImageId=null;
+  const img=document.getElementById('lb-img');
+  img.onload=null;
+  img.src=src;
+  img.alt=title||'';
+  clearOverlay(document.getElementById('lb-overlay'));
   document.getElementById('lb').classList.add('open');
+  setThumbNav(title||'Arc kivágás');
 }
+
 function closeLb(){
   document.getElementById('lb').classList.remove('open');
-  currentImage=null;
+  currentImageId=null;
 }
+
+function setThumbNav(title){
+  document.getElementById('lb-prev').disabled=true;
+  document.getElementById('lb-next').disabled=true;
+  document.getElementById('lb-caption').textContent=title;
+}
+
+function updateLbNav(){
+  const idx=IMAGE_ORDER.indexOf(currentImageId);
+  const prev=document.getElementById('lb-prev');
+  const next=document.getElementById('lb-next');
+  if(idx<0){
+    prev.disabled=true;
+    next.disabled=true;
+    return;
+  }
+  prev.disabled=idx===0;
+  next.disabled=idx===IMAGE_ORDER.length-1;
+  const record=IMAGES[currentImageId];
+  const names=[...new Set((record.faces||[]).map(f=>f.name).filter(Boolean))];
+  let caption=(idx+1)+' / '+IMAGE_ORDER.length;
+  const title=imageTitle(record);
+  if(title)caption+=' - '+title;
+  if(names.length)caption+=' - '+names.join(', ');
+  document.getElementById('lb-caption').textContent=caption;
+}
+
+function showRelativeImage(delta){
+  const idx=IMAGE_ORDER.indexOf(currentImageId);
+  const nextIdx=idx+delta;
+  if(idx<0||nextIdx<0||nextIdx>=IMAGE_ORDER.length)return;
+  openLb(IMAGE_ORDER[nextIdx]);
+}
+
 document.getElementById('lb').addEventListener('click',function(e){
   if(e.target===this)closeLb();
 });
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeLb();});
-window.addEventListener('resize',function(){
-  if(currentImage&&document.getElementById('lb').classList.contains('open')){
-    requestAnimationFrame(()=>renderOverlay(currentImage));
+document.addEventListener('keydown',function(e){
+  const open=document.getElementById('lb').classList.contains('open');
+  if(!open)return;
+  if(e.key==='Escape')closeLb();
+  if(e.key==='ArrowLeft'){
+    e.preventDefault();
+    showRelativeImage(-1);
+  }
+  if(e.key==='ArrowRight'){
+    e.preventDefault();
+    showRelativeImage(1);
   }
 });
 
+function createImageTile(imageId,personName){
+  const rec=IMAGES[imageId];
+  if(!rec)return null;
+  const tile=document.createElement('div');
+  tile.className='image-tile';
+  tile.tabIndex=0;
+  tile.title=imageTitle(rec)||personName||'';
+  tile.onclick=()=>openLb(imageId);
+  tile.addEventListener('keydown',e=>{
+    if(e.key==='Enter'||e.key===' '){
+      e.preventDefault();
+      openLb(imageId);
+    }
+  });
+  const img=document.createElement('img');
+  img.src=rec.src;
+  img.alt=imageTitle(rec)||personName||'';
+  tile.appendChild(img);
+  const overlay=document.createElement('div');
+  overlay.className='bbox-overlay';
+  renderOverlay(rec,overlay);
+  tile.appendChild(overlay);
+  return tile;
+}
+
 function buildCards(){
   const wrap=document.getElementById('persons');
-  wrap.innerHTML='';
+  while(wrap.firstChild)wrap.removeChild(wrap.firstChild);
   PERSONS.forEach(p=>{
     const card=document.createElement('div');
     card.className='person-card';
-    card.dataset.name=p.name.toLowerCase();
+    card.dataset.name=String(p.name||'').toLocaleLowerCase('hu-HU');
 
     const nameEl=document.createElement('div');
     nameEl.className='person-name';
@@ -721,7 +840,8 @@ function buildCards(){
         const img=document.createElement('img');
         img.src='thumbs/'+t;
         img.title=p.name;
-        img.onclick=()=>openThumb('thumbs/'+t);
+        img.alt=p.name;
+        img.onclick=()=>openThumb('thumbs/'+t,p.name);
         thumbs.appendChild(img);
       });
       card.appendChild(thumbs);
@@ -735,13 +855,8 @@ function buildCards(){
       const strip=document.createElement('div');
       strip.className='img-strip';
       p.images.forEach(imageId=>{
-        const rec=IMAGES[imageId];
-        if(!rec)return;
-        const img=document.createElement('img');
-        img.src=rec.src;
-        img.title=p.name;
-        img.onclick=()=>openLb(imageId);
-        strip.appendChild(img);
+        const tile=createImageTile(imageId,p.name);
+        if(tile)strip.appendChild(tile);
       });
       card.appendChild(strip);
     }
@@ -752,7 +867,7 @@ function buildCards(){
 }
 
 function filter(){
-  const q=document.getElementById('search').value.toLowerCase().trim();
+  const q=document.getElementById('search').value.toLocaleLowerCase('hu-HU').trim();
   document.querySelectorAll('.person-card').forEach(c=>{
     c.classList.toggle('hidden', q && !c.dataset.name.includes(q));
   });
@@ -784,7 +899,7 @@ def _safe_filename(name: str) -> str:
 _COLLAGE_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="hu">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kollázs Galéria</title>
 <style>
@@ -836,6 +951,11 @@ _COLLAGE_HTML_TEMPLATE = """<!DOCTYPE html>
 const COLLAGES = __COLLAGES_JSON__;
 const tip = document.getElementById('tip');
 let tipTimer;
+function esc(value){
+  return String(value??'').replace(/[&<>"']/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
 function showTip(evt, html){clearTimeout(tipTimer);tip.innerHTML=html;tip.style.display='block';moveTip(evt);}
 function moveTip(evt){
   const mx=evt.clientX,my=evt.clientY,tw=tip.offsetWidth,th=tip.offsetHeight,ww=window.innerWidth,wh=window.innerHeight;
@@ -846,15 +966,15 @@ function hideTip(){tipTimer=setTimeout(()=>{tip.style.display='none';},120);}
 function showMob(html){document.getElementById('mob-content').innerHTML=html;document.getElementById('mob-panel').style.display='block';}
 function closeMob(){document.getElementById('mob-panel').style.display='none';}
 function nodeInfoHtml(node){
-  let h='<div class="tip-title">'+(node.src||'\u2014')+'</div>';
+  let h='<div class="tip-title">'+esc(node.src||'\u2014')+'</div>';
   if(node.missing)h+='<div class="tip-warn">\u26a0 Forr\u00e1sf\u00e1jl hi\u00e1nyzik</div>';
-  if(node.year)h+='<div><b>\u00c9v:</b> '+node.year+'</div>';
-  if(node.location)h+='<div><b>Helysz\u00edn:</b> '+node.location+'</div>';
-  if(node.event)h+='<div><b>Esem\u00e9ny:</b> '+node.event+'</div>';
-  if(node.notes)h+='<div><b>Megjegyz\u00e9s:</b> '+node.notes+'</div>';
+  if(node.year)h+='<div><b>\u00c9v:</b> '+esc(node.year)+'</div>';
+  if(node.location)h+='<div><b>Helysz\u00edn:</b> '+esc(node.location)+'</div>';
+  if(node.event)h+='<div><b>Esem\u00e9ny:</b> '+esc(node.event)+'</div>';
+  if(node.notes)h+='<div><b>Megjegyz\u00e9s:</b> '+esc(node.notes)+'</div>';
   if(node.faces&&node.faces.length){
     const names=[...new Set(node.faces.map(f=>f.name).filter(Boolean))];
-    if(names.length)h+='<div><b>Szem\u00e9lyek:</b> '+names.join(', ')+'</div>';
+    if(names.length)h+='<div><b>Szem\u00e9lyek:</b> '+names.map(esc).join(', ')+'</div>';
   }
   return h;
 }
@@ -928,8 +1048,16 @@ function buildAll(){
     block.dataset.collageId=col.id;
     const hdr=document.createElement('div');
     hdr.className='collage-header';
-    hdr.innerHTML='<div class="collage-title">'+col.title+'</div>'
-                 +(col.date?'<div class="collage-date">'+col.date+'</div>':'');
+    const title=document.createElement('div');
+    title.className='collage-title';
+    title.textContent=col.title;
+    hdr.appendChild(title);
+    if(col.date){
+      const date=document.createElement('div');
+      date.className='collage-date';
+      date.textContent=col.date;
+      hdr.appendChild(date);
+    }
     block.appendChild(hdr);
     const canvas=document.createElement('div');
     canvas.className='collage-canvas';
