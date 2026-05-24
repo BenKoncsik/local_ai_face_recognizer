@@ -1,6 +1,6 @@
 """Background pipeline worker.
 
-Runs the full scan → detect → embed → cluster → suggest pipeline in a
+Runs the full scan → detect → embed → recognize → suggest pipeline in a
 QThread so the GUI remains responsive.  Progress is communicated via Qt
 signals.
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import traceback
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -26,9 +25,9 @@ from app.config import AppConfig
 from app.db.database import init_db, session_scope
 from app.detectors.factory import create_detector
 from app.embeddings.tflite_embedder import TFLiteEmbedder
-from app.services.clustering_service import ClusteringService
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
+from app.services.recognition_service import RecognitionService
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
 
@@ -108,9 +107,11 @@ class PipelineWorker(QThread):
             self.finished.emit(False, "Aborted after embedding")
             return
 
-        # --- Stage 4: Clustering ---
-        self.log_message.emit("Stage 4/5: Clustering faces into identities …")
-        n_persons = self._run_clustering()
+        # --- Stage 4: Recognition ---
+        self.log_message.emit(
+            "Stage 4/5: Recognizing faces from learned people …"
+        )
+        n_assigned = self._run_recognition()
 
         # --- Stage 5: Name suggestions ---
         self.log_message.emit(
@@ -123,7 +124,7 @@ class PipelineWorker(QThread):
             f"Done — {len(new_ids)} new image(s), "
             f"{total_faces} face(s) detected, "
             f"{embedded} embedded, "
-            f"{n_persons} person cluster(s), "
+            f"{n_assigned} face(s) auto-assigned, "
             f"{n_suggestions} name suggestion(s)"
         )
         self.log_message.emit(summary)
@@ -203,14 +204,15 @@ class PipelineWorker(QThread):
             )
             return svc.process_pending()
 
-    def _run_clustering(self) -> int:
+    def _run_recognition(self) -> int:
         with session_scope() as session:
-            svc = ClusteringService(
+            svc = RecognitionService(
                 session=session,
-                config=self._config.clustering,
+                config=self._config.recognition,
             )
-            n = svc.run()
-            self.progress.emit(1, 1, "Clustering", f"{n} person(s)")
+            assignments = svc.recognize_pending()
+            n = len(assignments)
+            self.progress.emit(1, 1, "Recognition", f"{n} face(s)")
             return n
 
     def _run_suggestions(self) -> int:

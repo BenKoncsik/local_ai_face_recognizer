@@ -236,6 +236,8 @@ class SuggestionService:
             .filter(Person.is_auto_named == want_auto_named)
             .all()
         )
+        if named:
+            persons = [p for p in persons if not p.is_protected]
 
         profiles: Dict[int, PersonProfile] = {}
         for person in persons:

@@ -74,6 +74,37 @@ class ClusteringConfig:
 
 
 @dataclass
+class RecognitionConfig:
+    """Parameters for learned person recognition.
+
+    The recognizer builds person profiles from already labeled faces and
+    assigns currently unassigned / auto-named faces to known people when the
+    match is strong and unambiguous.
+    """
+
+    # Minimum combined cosine similarity required for automatic assignment.
+    auto_assign_threshold: float = 0.72
+
+    # Required gap between the best and second-best person match.
+    # Higher values reduce ambiguous automatic assignments.
+    min_margin: float = 0.08
+
+    # Minimum trusted training faces before a person can be recognized.
+    min_examples_per_person: int = 1
+
+    # Blend between the person's centroid and the best individual example.
+    # 1.0 = centroid only, 0.0 = nearest example only.
+    centroid_weight: float = 0.70
+
+    # Whether very confident automatic assignments can strengthen future
+    # profiles. Manual / legacy assignments are always trusted.
+    use_recognized_faces_for_training: bool = True
+
+    # Minimum confidence for an automatic assignment to be reused as training.
+    profile_auto_min_confidence: float = 0.85
+
+
+@dataclass
 class SuggestionConfig:
     """Parameters for the unknown-person name-suggestion feature.
 
@@ -124,6 +155,7 @@ class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
@@ -227,6 +259,28 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             epsilon=clu.get("epsilon", cfg.clustering.epsilon),
             min_samples=clu.get("min_samples", cfg.clustering.min_samples),
             metric=clu.get("metric", cfg.clustering.metric),
+        )
+
+        rec = raw.get("recognition", {})
+        cfg.recognition = RecognitionConfig(
+            auto_assign_threshold=rec.get(
+                "auto_assign_threshold", cfg.recognition.auto_assign_threshold
+            ),
+            min_margin=rec.get("min_margin", cfg.recognition.min_margin),
+            min_examples_per_person=rec.get(
+                "min_examples_per_person", cfg.recognition.min_examples_per_person
+            ),
+            centroid_weight=rec.get(
+                "centroid_weight", cfg.recognition.centroid_weight
+            ),
+            use_recognized_faces_for_training=rec.get(
+                "use_recognized_faces_for_training",
+                cfg.recognition.use_recognized_faces_for_training,
+            ),
+            profile_auto_min_confidence=rec.get(
+                "profile_auto_min_confidence",
+                cfg.recognition.profile_auto_min_confidence,
+            ),
         )
 
         sug = raw.get("suggestions", {})

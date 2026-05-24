@@ -90,6 +90,11 @@ def _migrate_add_columns(engine: Engine) -> None:
         "images": [
             ("photo_date", "VARCHAR(128)"),
         ],
+        "faces": [
+            ("assignment_source", "VARCHAR(32)"),
+            ("assignment_confidence", "FLOAT"),
+            ("assigned_at", "DATETIME"),
+        ],
     }
     with engine.connect() as conn:
         for table, cols in new_columns.items():

@@ -30,7 +30,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "delete_person":      {"en": "Delete Person", "hu": "Személy törlése"},
     "remove_face":        {"en": "Remove Selected Face", "hu": "Kiválasztott arc eltávolítása"},
     "reassign_face":      {"en": "Reassign Face …", "hu": "Arc áthelyezése …"},
-    "recluster_all":      {"en": "Re-cluster All", "hu": "Újra csoportosítás"},
+    "recluster_all":      {"en": "Recognize Unassigned", "hu": "Névtelen arcok felismerése"},
     "force_rescan":       {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
     "force_rescan_title": {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
     "force_rescan_msg":   {"en": "Delete all detected faces and re-run detection on all {n} images?\n"
@@ -132,14 +132,15 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                           "hu": "Először válasszon ki egy mappát."},
     "busy_title":        {"en": "Busy", "hu": "Foglalt"},
     "busy_msg":          {"en": "A scan is already running.", "hu": "Már fut egy beolvasás."},
-    "recluster_title":   {"en": "Re-cluster", "hu": "Újra csoportosítás"},
-    "recluster_msg":     {"en": "Re-run clustering on all embedded faces?\n"
-                                "Manually assigned names are preserved.",
-                          "hu": "Újra csoportosítja az összes beágyazott arcot?\n"
-                                "A manuálisan beállított nevek megmaradnak."},
-    "reclustering":      {"en": "Re-clustering …", "hu": "Újra csoportosítás …"},
-    "recluster_done":    {"en": "Re-clustering complete: {n} person(s)",
-                          "hu": "Újra csoportosítás kész: {n} személy"},
+    "recluster_title":   {"en": "Recognize Unassigned Faces",
+                          "hu": "Névtelen arcok felismerése"},
+    "recluster_msg":     {"en": "Recognize unassigned and auto-named faces from the people you have already labeled?\n"
+                                "Existing manually categorized people are preserved.",
+                          "hu": "Felismerje a még névtelen vagy automatikus arcokat a már megjelölt személyek alapján?\n"
+                                "A kézzel kategorizált személyek megmaradnak."},
+    "reclustering":      {"en": "Recognizing faces …", "hu": "Arcok felismerése …"},
+    "recluster_done":    {"en": "Recognition complete: {n} face(s) assigned",
+                          "hu": "Felismerés kész: {n} arc hozzárendelve"},
 
     # ── Dialogs — rename ─────────────────────────────────────────────────────
     "empty_name_title":     {"en": "Empty Name", "hu": "Üres név"},
@@ -375,8 +376,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "face_tooltip":      {"en": "<b>{person}</b><br>Face #{id} · confidence {confidence:.2f}<br>Backend: {backend}<br>File: {file}",
                           "hu": "<b>{person}</b><br>Arc #{id} · konfidencia {confidence:.2f}<br>Backend: {backend}<br>Fájl: {file}"},
     "all_faces":         {"en": "All Faces", "hu": "Összes arc"},
-    "recluster_tip":     {"en": "Re-run clustering with current corrections",
-                          "hu": "Újra csoportosítás a jelenlegi javításokkal"},
+    "recluster_tip":     {"en": "Recognize unresolved faces from labeled people",
+                          "hu": "Névtelen arcok felismerése a megjelölt személyek alapján"},
     "preview_empty":     {"en": "Click a face thumbnail to preview",
                           "hu": "Kattints egy arc bélyegképre az előnézethez"},
     "preview_tip":       {"en": "Click a face to select it\nRight-click for options\nClick empty area to zoom",

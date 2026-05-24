@@ -17,7 +17,8 @@ Design
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Dict, List, Tuple
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -27,6 +28,10 @@ from app.config import ClusteringConfig
 from app.db.models import Face, FaceCorrection, Person
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class ClusteringService:
@@ -177,6 +182,9 @@ class ClusteringService:
                 if person.id is None:
                     self._session.flush()
                 face.person_id = person.id
+                face.assignment_source = "clustering"
+                face.assignment_confidence = None
+                face.assigned_at = _utcnow_naive()
             else:
                 if label not in label_to_person:
                     person = self._get_or_create_person(label, auto_counter)
@@ -184,6 +192,9 @@ class ClusteringService:
                         self._session.flush()
                     label_to_person[label] = person.id  # type: ignore[assignment]
                 face.person_id = label_to_person[label]
+                face.assignment_source = "clustering"
+                face.assignment_confidence = None
+                face.assigned_at = _utcnow_naive()
 
         return len(label_to_person)
 

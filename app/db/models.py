@@ -10,13 +10,12 @@ face_corrections – manual same/not-same judgements for future re-clustering
 
 from __future__ import annotations
 
-import numpy as np
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
+import numpy as np
 from sqlalchemy import (
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -25,7 +24,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -170,6 +168,12 @@ class Face(Base):
 
     # Whether this face was manually excluded from clustering
     is_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # How the current person_id was assigned: NULL for legacy/manual data,
+    # "manual", "manual_merge", "recognition", "clustering", etc.
+    assignment_source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    assignment_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

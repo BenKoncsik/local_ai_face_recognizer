@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QPoint, QRect, QEvent, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
     QImage,
     QKeySequence,
@@ -62,6 +62,7 @@ def _bgr_to_qpixmap(img_bgr: np.ndarray) -> QPixmap:
 def _get_pil_font(size: int):
     """Return a truetype font that supports UTF-8; falls back to PIL default."""
     import sys
+
     from PIL import ImageFont
 
     if sys.platform == "darwin":
@@ -92,7 +93,8 @@ def _draw_faces(
     faces: List[_FaceData],
     selected_id: Optional[int],
 ) -> np.ndarray:
-    from PIL import Image as PILImage, ImageDraw
+    from PIL import Image as PILImage
+    from PIL import ImageDraw
 
     img = img_bgr.copy()
 
@@ -1088,8 +1090,7 @@ class ImageBrowserPanel(QWidget):
             person = session.get(Person, person_id)
             if person is None:
                 return
-            person.name = new_name
-            person.is_auto_named = False
+            IdentityService(session).rename_person(person_id, new_name)
         log.info("Person %d renamed to %r", person_id, new_name)
         self._reload_current_face_data()
         self._reload_persons_combo()

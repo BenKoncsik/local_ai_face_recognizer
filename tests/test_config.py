@@ -16,6 +16,10 @@ def test_load_config_resolves_relative_paths_against_config_location(tmp_path: P
                 "  crops_dir: custom/crops",
                 "embedding:",
                 "  model_path: models/mobilefacenet.tflite",
+                "recognition:",
+                "  auto_assign_threshold: 0.81",
+                "  min_margin: 0.12",
+                "  use_recognized_faces_for_training: false",
             ]
         ),
         encoding="utf-8",
@@ -27,6 +31,9 @@ def test_load_config_resolves_relative_paths_against_config_location(tmp_path: P
     assert cfg.db_path_resolved == tmp_path / "custom" / "faces.db"
     assert cfg.crops_dir_resolved == tmp_path / "custom" / "crops"
     assert cfg.resolve(cfg.embedding.model_path) == tmp_path / "models" / "mobilefacenet.tflite"
+    assert cfg.recognition.auto_assign_threshold == 0.81
+    assert cfg.recognition.min_margin == 0.12
+    assert cfg.recognition.use_recognized_faces_for_training is False
 
 
 def test_frozen_bundle_defaults_use_user_data_dir(tmp_path: Path, monkeypatch) -> None:

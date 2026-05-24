@@ -98,6 +98,6 @@ class EmbeddingService:
         embedding = self._embedder.embed(img_bgr)
         face.set_embedding(embedding)
 
-        # Mark the parent image as embedding-done when all faces are done
-        # (checked lazily in clustering service)
+        # Marking the parent image as embedding-done is handled lazily by
+        # later pipeline stages.
         return True

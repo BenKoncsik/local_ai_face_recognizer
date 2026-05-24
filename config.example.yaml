@@ -61,6 +61,8 @@ embedding:
   embedding_dim: 192
 
 clustering:
+  # Legacy DBSCAN grouping settings. The main pipeline now uses the learned
+  # recognition settings below to assign unresolved faces to labeled people.
   # DBSCAN neighbourhood radius (cosine distance).
   # Lower → tighter clusters (more persons). Typical range: 0.3 – 0.6.
   epsilon: 0.4
@@ -71,6 +73,28 @@ clustering:
 
   # Distance metric for DBSCAN
   metric: cosine
+
+recognition:
+  # Learned recognition compares unresolved faces against profiles built from
+  # already labeled people. Existing manually categorized people are preserved.
+
+  # Minimum combined cosine similarity [0.0 – 1.0] for automatic assignment.
+  auto_assign_threshold: 0.72
+
+  # Required gap between the best and second-best person match.
+  # Higher → fewer ambiguous automatic assignments.
+  min_margin: 0.08
+
+  # Minimum trusted training faces before a person can be recognized.
+  min_examples_per_person: 1
+
+  # Blend between the person's centroid and nearest trusted example.
+  # 1.0 = centroid only, 0.0 = nearest example only.
+  centroid_weight: 0.70
+
+  # Very confident automatic assignments can strengthen future profiles.
+  use_recognized_faces_for_training: true
+  profile_auto_min_confidence: 0.85
 
 suggestions:
   # Unknown-person name suggestions: compares auto-named ("Unknown N")

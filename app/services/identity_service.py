@@ -12,6 +12,7 @@ Handles user-driven operations on Person clusters:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,10 @@ from sqlalchemy.orm import Session
 from app.db.models import Face, FaceCorrection, Person
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class IdentityService:
@@ -48,8 +53,15 @@ class IdentityService:
         if person.is_protected:
             raise ValueError(f"'{person.name}' is a protected person and cannot be renamed.")
         old_name = person.name
+        was_auto_named = person.is_auto_named
         person.name = new_name.strip()
         person.is_auto_named = False
+        if was_auto_named:
+            now = _utcnow_naive()
+            for face in person.faces:
+                face.assignment_source = "manual"
+                face.assignment_confidence = None
+                face.assigned_at = now
         self._session.commit()
         log.info("Renamed person %d: %r → %r", person_id, old_name, person.name)
         return person
@@ -78,7 +90,13 @@ class IdentityService:
 
         # Re-assign faces
         self._session.query(Face).filter(Face.person_id == source_id).update(
-            {Face.person_id: target_id}, synchronize_session="fetch"
+            {
+                Face.person_id: target_id,
+                Face.assignment_source: "manual_merge",
+                Face.assignment_confidence: None,
+                Face.assigned_at: _utcnow_naive(),
+            },
+            synchronize_session="fetch",
         )
 
         # Migrate corrections
@@ -110,7 +128,13 @@ class IdentityService:
         if person.is_protected:
             raise ValueError(f"'{person.name}' is a protected person and cannot be deleted.")
         self._session.query(Face).filter(Face.person_id == person_id).update(
-            {Face.person_id: None}, synchronize_session="fetch"
+            {
+                Face.person_id: None,
+                Face.assignment_source: None,
+                Face.assignment_confidence: None,
+                Face.assigned_at: None,
+            },
+            synchronize_session="fetch",
         )
         self._session.delete(person)
         self._session.commit()
@@ -135,6 +159,9 @@ class IdentityService:
         self._require_person(target_person_id)
 
         face.person_id = target_person_id
+        face.assignment_source = "manual"
+        face.assignment_confidence = None
+        face.assigned_at = _utcnow_naive()
         self._session.commit()
         log.info(
             "Reassigned face %d: person %s → %d", face_id, old_pid, target_person_id
@@ -147,6 +174,9 @@ class IdentityService:
         old_pid = face.person_id
         face.person_id = None
         face.is_excluded = True  # prevent re-clustering into same group
+        face.assignment_source = None
+        face.assignment_confidence = None
+        face.assigned_at = None
         self._session.commit()
         log.info("Removed face %d from person %s", face_id, old_pid)
         return face
@@ -156,6 +186,9 @@ class IdentityService:
         face = self._require_face(face_id)
         face.person_id = None
         face.is_excluded = True
+        face.assignment_source = None
+        face.assignment_confidence = None
+        face.assigned_at = None
         self._session.commit()
         log.info("Excluded face %d from clustering", face_id)
         return face

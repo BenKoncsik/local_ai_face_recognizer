@@ -32,8 +32,8 @@ from app.db.database import ensure_unknown_person, init_db, session_scope
 from app.db.models import Face, Person
 from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
-from app.services.clustering_service import ClusteringService
 from app.services.identity_service import IdentityService
+from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
@@ -938,7 +938,11 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         with session_scope() as session:
-            n = ClusteringService(session, self._config.clustering).recluster()
+            n = len(
+                RecognitionService(
+                    session, self._config.recognition
+                ).recognize_pending()
+            )
 
         self._status_label.setText(t("recluster_done", n=n))
         self._refresh_persons()
