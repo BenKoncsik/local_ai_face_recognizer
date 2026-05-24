@@ -15,6 +15,8 @@ python -m app.main                   # Run app directly (after setup)
 
 **Languages**: English / Hungarian (EN / HU) via [`app/ui/i18n.py`](app/ui/i18n.py) — ALL UI strings in both.
 
+**⚠️ Git Workflow**: You **cannot commit directly**. Stage changes with `git add`, then request human approval. The human reviews and commits with proper GitHub issue references (`#13 #18 #10`).
+
 ---
 
 ## Core Principles
