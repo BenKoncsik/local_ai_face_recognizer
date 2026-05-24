@@ -44,6 +44,7 @@ flowchart TB
         SC[ScanService]
         DS[DetectionService]
         ES[EmbeddingService]
+        RS[RecognitionService]
         CS[ClusteringService]
         IS[IdentityService]
         EXP[ExportService]
@@ -106,10 +107,12 @@ flowchart LR
     C -->|Nem| E[Kész]
     D --> F(EmbeddingService)
     F --> G(ClusteringService)
-    G --> H[Személyek<br/>az UI-ban]
+    G --> R(RecognitionService)
+    R --> H[Személyek<br/>az UI-ban]
     D --> I[Arc kivágatok<br/>data/crops/]
     F --> J[Embedding vektorok<br/>az adatbázisban]
     G --> K[DBSCAN személy<br/>klaszterek]
+    R --> L[Automatikus<br/>arcfelismerés]
 ```
 
 ### 3-paneles UI elrendezés
@@ -265,6 +268,11 @@ classDiagram
         +recluster() int
     }
 
+    class RecognitionService {
+        +recognize_pending() List~RecognitionAssignment~
+        +build_profiles() Dict~int, PersonRecognitionProfile~
+    }
+
     class IdentityService {
         +rename_person()
         +merge_persons()
@@ -305,6 +313,7 @@ classDiagram
     PipelineWorker --> DetectionService
     PipelineWorker --> EmbeddingService
     PipelineWorker --> ClusteringService
+    PipelineWorker --> RecognitionService
     MainWindow --> PipelineWorker
     MainWindow --> IdentityService
     MainWindow --> ExportService
@@ -313,6 +322,7 @@ classDiagram
     DetectionService --> FaceDetector
     EmbeddingService --> FaceEmbedder
     ClusteringService --> AppConfig
+    RecognitionService --> AppConfig
 ```
 
 ---
@@ -352,6 +362,7 @@ python -m app.main --db /tmp/test.db    # adatbázis út felülírása
 | `detection` | `DetectionConfig` | Detektálás beállítások |
 | `embedding` | `EmbeddingConfig` | Beágyazás beállítások |
 | `clustering` | `ClusteringConfig` | Klaszterezés beállítások |
+| `recognition` | `RecognitionConfig` | Arcfelismerés beállítások |
 | `storage` | `StorageConfig` | Tárolás beállítások |
 | `scan` | `ScanConfig` | Szkennelés beállítások |
 | `suggestion` | `SuggestionConfig` | Javaslat beállítások |
@@ -375,6 +386,14 @@ ClusteringConfig
 ├── epsilon: float = 0.4
 ├── min_samples: int = 2
 └── metric: str = "cosine"
+
+RecognitionConfig
+├── auto_assign_threshold: float = 0.75
+├── min_margin: float = 0.1
+├── min_examples_per_person: int = 2
+├── centroid_weight: float = 0.5
+├── use_recognized_faces_for_training: bool = False
+└── profile_auto_min_confidence: float = 0.8
 
 StorageConfig
 ├── crops_dir: str = "data/crops"
@@ -436,6 +455,9 @@ Minden relatív elérési út a `config.yaml` szülőkönyvtárához képest old
 | `crop_path` | TEXT | Arc indexkép elérési út |
 | `_embedding` | BLOB | Szerializált float32 numpy tömb |
 | `is_excluded` | BOOLEAN | Kizárva a klaszterezésből |
+| `assignment_source` | VARCHAR(32) | Az arc hozzárendelésének forrása (`"manual"`, `"recognition"`, `"suggestion_approved"`) |
+| `assignment_confidence` | FLOAT | A hozzárendelés bizalmi szintje [0.0-1.0] |
+| `assigned_at` | DATETIME | A hozzárendelés időpontja |
 | `created_at` | DATETIME | Létrehozás időpontja |
 
 **Segéd metódusok**:
@@ -449,6 +471,7 @@ Minden relatív elérési út a `config.yaml` szülőkönyvtárához képest old
 | `id` | INTEGER PK | Auto-increment |
 | `name` | VARCHAR(255) | Személy neve |
 | `is_auto_named` | BOOLEAN | Automatikus név (pl. "Ismeretlen 1") |
+| `is_protected` | BOOLEAN | Védett személy (nem módosítható automatikus felismeréssel) |
 | `thumbnail_path` | TEXT | Reprezentatív arc indexkép |
 | `notes` | TEXT | Felhasználói jegyzetek |
 | `created_at` | DATETIME | Létrehozás időpontja |
@@ -587,7 +610,28 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 5. `face.person_id` hozzárendelése
 6. Orphan (árva) automatikus Person rekordok törlése
 
-### 6.5 IdentityService
+### 6.5 RecognitionService
+
+**Fájl**: `app/services/recognition_service.py`
+
+**Felelősség**: Automatikus arcfelismerés tanult személyi profilokból. Hozzárendeli az ismeretlen arcokat az ismert személyekhez magas magabiztossággal.
+
+**Folyamat**:
+1. Tanult profilok felépítése az ismert (nem automatikus) személyekből
+   - Minden nevesített személy centroidjának és beágyazási vektorainak számítása
+   - Csak megbízható forrásból (kézi vagy jóváhagyott) származó arcok használata
+2. Feldolgozandó arcok betöltése (beágyazott, nem kizárt)
+3. Egyes arcok illesztése a profilokra
+   - Centroid + legjobb szomszéd hasonlóság keveréke
+   - Küszöbértékek: `auto_assign_threshold` és `min_margin`
+   - Kézi korrekciók betöltése és alkalmazása
+4. Automatikus hozzárendelések rögzítése (`assignment_source="recognition"`)
+
+**Adatosztályok**:
+- `PersonRecognitionProfile` — centroid, példák, arc szám
+- `RecognitionAssignment` — arc ID, cél személy, pontszám, margó
+
+### 6.6 IdentityService
 
 **Fájl**: `app/services/identity_service.py`
 
@@ -605,7 +649,7 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 - `list_persons(named_only, search)` — személyek listázása
 - `get_faces_for_person(person_id)` — arcok lekérése
 
-### 6.6 ExportService
+### 6.7 ExportService
 
 **Fájl**: `app/services/export_service.py`
 
@@ -618,7 +662,7 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 - `export_html()` — statikus HTML galéria
 - `export_collage_html()` — kollázs HTML galéria
 
-### 6.7 SuggestionService
+### 6.8 SuggestionService
 
 **Fájl**: `app/services/suggestion_service.py`
 
@@ -631,7 +675,7 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 4. `approve()` — ismeretlen beolvasztása a nevesített személybe
 5. `reject()` — `FaceCorrection` (same_person=False) rögzítése
 
-### 6.8 CollageService
+### 6.9 CollageService
 
 **Fájl**: `app/services/collage_service.py`
 
@@ -645,7 +689,7 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 - `render_collage_image()` — annotált kollázs renderelés
 - `export_annotated_collage()` — exportálás
 
-### 6.9 CollageParser
+### 6.10 CollageParser
 
 **Fájl**: `app/services/collage_parser.py`
 
@@ -664,7 +708,7 @@ session_scope() -> Generator[Session]  # auto commit/rollback
 4. `search_roots` próbálása
 5. Fájlnév-alapú keresés
 
-### 6.10 UpdateService
+### 6.11 UpdateService
 
 **Fájl**: `app/services/update_service.py`
 
@@ -815,6 +859,10 @@ PipelineWorker.start()
         │     ClusteringService.run()
         │     → Person rekordok + hozzárendelések
         │
+        ├── Stage 5: Recognition ───────────────────────────────
+        │     RecognitionService.recognize_pending()
+        │     → automatikus arcok hozzárendelése az ismert személyekhez
+        │
         ▼
 finished(success, summary) signal
         │
@@ -946,7 +994,7 @@ UI frissítés: SidebarPanel.populate()
 
 **Könyvtár**: `tests/`
 
-11 teszt fájl, mind `tmp_path` fixture-t használ izolált SQLite adatbázishoz:
+12 teszt fájl, mind `tmp_path` fixture-t használ izolált SQLite adatbázishoz:
 
 | Teszt fájl | Mit tesztel | Sorok |
 |------------|-------------|-------|
@@ -955,10 +1003,11 @@ UI frissítés: SidebarPanel.populate()
 | `test_collage_parser.py` | XML parse, path resolution, face projection | 338 |
 | `test_config.py` | Relative path resolution, frozen bundle | 56 |
 | `test_database.py` | Image/Face/Person CRUD, embedding roundtrip, cascade | 125 |
-| `test_detection_service.py` | Face indexing dummy detectorral | 91 |
+| `test_detection_service.py` | Face indexing dummy detektorral | 91 |
 | `test_detectors.py` | Detection dataclass, factory fallback, interface | 81 |
 | `test_post_buffer_release.py` | Buffer post text, channel select | 54 |
 | `test_post_x_release.py` | X post text, length enforcement | 36 |
+| `test_recognition_service.py` | Profil építés, arcok illesztése, jóváhagyás/elutasítás | (új) |
 | `test_scan_service.py` | File discovery, hash dedup, mtime resume | 105 |
 | `test_suggestion_service.py` | Centroid, suggestions, approve/reject | 284 |
 
