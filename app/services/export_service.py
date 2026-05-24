@@ -10,14 +10,12 @@ Output formats:
 from __future__ import annotations
 
 import csv
-import html as html_module
+import hashlib
 import json
 import logging
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
-import cv2
 
 from sqlalchemy.orm import Session
 
@@ -189,7 +187,7 @@ class ExportService:
 
         Creates:
           index.html   – searchable gallery with per-person filtering
-          images/      – annotated originals (face boxes + names burned in)
+          images/      – normalized original images used by the HTML overlay
           thumbs/      – face-crop thumbnails
         """
         out = Path(target_dir)
@@ -201,11 +199,12 @@ class ExportService:
         persons = self._get_persons(person_id)
 
         # --- build data structures ---
-        # image_path → list of (person_name, bbox)
-        image_faces: Dict[str, List[Tuple[str, Tuple[int,int,int,int]]]] = {}
+        # image_path → list of (person, face) records. Face bounding boxes are
+        # stored in original image pixels and transformed in the generated HTML.
+        image_faces: Dict[str, List[Tuple[Person, Face]]] = {}
         # person_name → list of thumb filenames
         person_thumbs: Dict[str, List[str]] = {}
-        # person_name → set of annotated image filenames
+        # person_name → list of image record ids
         person_images: Dict[str, List[str]] = {}
 
         for person in persons:
@@ -215,34 +214,46 @@ class ExportService:
             for face in faces:
                 if face.image:
                     ip = face.image.file_path
-                    image_faces.setdefault(ip, []).append(
-                        (person.name, (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h))
-                    )
+                    image_faces.setdefault(ip, []).append((person, face))
                 if face.crop_path and Path(face.crop_path).exists():
                     dst_thumb = thumb_dir / f"face_{face.id}.jpg"
                     shutil.copy2(face.crop_path, dst_thumb)
                     person_thumbs[person.name].append(dst_thumb.name)
 
-        # --- render annotated originals ---
+        # --- export normalized originals and HTML overlay metadata ---
+        image_records: Dict[str, dict] = {}
         for img_path, face_list in image_faces.items():
-            src = Path(img_path)
             img = load_image_bgr(img_path)
             if img is None:
                 continue
-            for pname, (x, y, w, h) in face_list:
-                cv2.rectangle(img, (x, y), (x + w, y + h), (50, 200, 50), 3)
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                scale = max(0.4, min(1.2, w / 80))
-                (tw, th), bl = cv2.getTextSize(pname, font, scale, 2)
-                ty = max(y - 6, th + 6)
-                cv2.rectangle(img, (x, ty - th - bl - 4), (x + tw + 6, ty + 2), (20, 20, 20), -1)
-                cv2.putText(img, pname, (x + 3, ty - bl), font, scale, (50, 220, 50), 2)
 
-            dst_name = f"img_{abs(hash(img_path))}.jpg"
-            save_image_bgr(img_dir / dst_name, img)
-            for pname, _ in face_list:
-                if dst_name not in person_images.get(pname, []):
-                    person_images.setdefault(pname, []).append(dst_name)
+            img_h, img_w = img.shape[:2]
+            dst_name = _image_export_filename(img_path)
+            if not save_image_bgr(img_dir / dst_name, img):
+                continue
+
+            face_records = []
+            for person, face in face_list:
+                bbox = _face_bbox_for_export(face, img_w, img_h)
+                if bbox is None:
+                    continue
+                face_records.append(
+                    {
+                        "face_id": face.id,
+                        "person_id": person.id,
+                        "name": person.name,
+                        "bbox": bbox,
+                    }
+                )
+                _append_unique(person_images.setdefault(person.name, []), dst_name)
+
+            image_records[dst_name] = {
+                "id": dst_name,
+                "src": f"images/{dst_name}",
+                "width": img_w,
+                "height": img_h,
+                "faces": face_records,
+            }
 
         # --- build JS data ---
         js_persons = json.dumps(
@@ -256,9 +267,14 @@ class ExportService:
             ],
             ensure_ascii=False,
         )
+        js_images = json.dumps(image_records, ensure_ascii=False)
 
         # --- render HTML ---
-        html = _HTML_TEMPLATE.replace("__PERSONS_JSON__", js_persons)
+        html = (
+            _HTML_TEMPLATE
+            .replace("__PERSONS_JSON__", _json_for_script(js_persons))
+            .replace("__IMAGES_JSON__", _json_for_script(js_images))
+        )
         (out / "index.html").write_text(html, encoding="utf-8")
 
         log.info("HTML export: %d person(s) → %s", len(persons), out)
@@ -451,6 +467,64 @@ class ExportService:
         return rows
 
 
+def _image_export_filename(image_path: str) -> str:
+    """Return a stable browser-friendly filename for an exported source image."""
+    digest = hashlib.sha256(image_path.encode("utf-8")).hexdigest()[:16]
+    return f"img_{digest}.jpg"
+
+
+def _face_bbox_for_export(
+    face: Face,
+    image_w: int,
+    image_h: int,
+) -> Optional[Dict[str, int]]:
+    """Normalize and clamp a face bbox to original image pixel coordinates.
+
+    The database schema stores face boxes in original image pixels. The
+    normalized-coordinate branch is defensive for old/manual imports that may
+    have stored 0..1 values.
+    """
+    if image_w <= 0 or image_h <= 0:
+        return None
+
+    x = float(face.bbox_x)
+    y = float(face.bbox_y)
+    w = float(face.bbox_w)
+    h = float(face.bbox_h)
+
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 < w <= 1.0 and 0.0 < h <= 1.0:
+        x *= image_w
+        w *= image_w
+        y *= image_h
+        h *= image_h
+
+    x1 = max(0.0, min(x, float(image_w)))
+    y1 = max(0.0, min(y, float(image_h)))
+    x2 = max(x1, min(x + w, float(image_w)))
+    y2 = max(y1, min(y + h, float(image_h)))
+    out_w = x2 - x1
+    out_h = y2 - y1
+    if out_w <= 0 or out_h <= 0:
+        return None
+
+    return {
+        "x": int(round(x1)),
+        "y": int(round(y1)),
+        "width": max(1, int(round(out_w))),
+        "height": max(1, int(round(out_h))),
+    }
+
+
+def _append_unique(values: List[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _json_for_script(json_text: str) -> str:
+    """Keep JSON valid inside an inline script tag."""
+    return json_text.replace("</", "<\\/")
+
+
 # ---------------------------------------------------------------------------
 # Static HTML template
 # ---------------------------------------------------------------------------
@@ -487,12 +561,25 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .img-strip img{height:80px;border-radius:4px;border:1px solid #333;
                  cursor:pointer;transition:opacity .2s;object-fit:cover}
   .img-strip img:hover{opacity:.85;border-color:#88aaff}
+  .media-wrap{position:relative;display:inline-block;line-height:0}
+  .media-wrap>img{display:block}
+  .bbox-overlay{position:absolute;inset:0;pointer-events:none}
+  .bbox{position:absolute;outline:2px solid rgba(50,220,50,.95);
+        background:rgba(50,220,50,.06);box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+  .bbox-label{position:absolute;left:0;top:0;transform:translateY(calc(-100% - 4px));
+              max-width:min(280px,70vw);overflow:hidden;text-overflow:ellipsis;
+              white-space:nowrap;background:rgba(12,18,12,.9);color:#75ff75;
+              border:1px solid rgba(50,220,50,.85);border-radius:4px;
+              padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25}
+  .bbox-label.inside{transform:none;top:2px;left:2px}
 
   /* lightbox */
   #lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);
       z-index:100;align-items:center;justify-content:center;flex-direction:column;gap:12px}
   #lb.open{display:flex}
-  #lb img{max-width:92vw;max-height:86vh;border-radius:6px;border:2px solid #88aaff}
+  #lb-media{max-width:92vw;max-height:86vh;border-radius:6px;
+            box-shadow:0 0 0 2px #88aaff;background:#050505}
+  #lb-media img{max-width:92vw;max-height:86vh;width:auto;height:auto;border-radius:6px}
   #lb-close{position:fixed;top:16px;right:20px;font-size:2rem;cursor:pointer;
              color:#aaa;line-height:1;background:none;border:none}
   #lb-close:hover{color:#fff}
@@ -507,20 +594,112 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <div id="persons"></div>
 
 <!-- lightbox -->
-<div id="lb"><button id="lb-close" onclick="closeLb()">✕</button><img id="lb-img" src=""></div>
+<div id="lb">
+  <button id="lb-close" onclick="closeLb()">✕</button>
+  <div id="lb-media" class="media-wrap">
+    <img id="lb-img" src="" alt="">
+    <div id="lb-overlay" class="bbox-overlay"></div>
+  </div>
+</div>
 
 <script>
 const PERSONS = __PERSONS_JSON__;
+const IMAGES = __IMAGES_JSON__;
+let currentImage = null;
 
-function openLb(src){
+function transformBox(box, originalSize, display){
+  const sourceW=Number(originalSize.width), sourceH=Number(originalSize.height);
+  const displayW=Number(display.width), displayH=Number(display.height);
+  if(!sourceW||!sourceH||!displayW||!displayH)return null;
+  const scaleX=displayW/sourceW;
+  const scaleY=displayH/sourceH;
+  return {
+    left:display.offsetX+Number(box.x)*scaleX,
+    top:display.offsetY+Number(box.y)*scaleY,
+    width:Number(box.width)*scaleX,
+    height:Number(box.height)*scaleY
+  };
+}
+
+function displayedImageBox(imgEl, wrapperEl, originalSize){
+  const imgRect=imgEl.getBoundingClientRect();
+  const wrapRect=wrapperEl.getBoundingClientRect();
+  let width=imgRect.width, height=imgRect.height;
+  let offsetX=imgRect.left-wrapRect.left;
+  let offsetY=imgRect.top-wrapRect.top;
+  const sourceW=Number(originalSize.width), sourceH=Number(originalSize.height);
+  const fit=getComputedStyle(imgEl).objectFit;
+  if(sourceW&&sourceH&&width&&height&&(fit==='contain'||fit==='scale-down'||fit==='cover')){
+    const scale=fit==='cover'
+      ? Math.max(width/sourceW,height/sourceH)
+      : Math.min(width/sourceW,height/sourceH);
+    const contentW=sourceW*scale;
+    const contentH=sourceH*scale;
+    offsetX+=(width-contentW)/2;
+    offsetY+=(height-contentH)/2;
+    width=contentW;
+    height=contentH;
+  }
+  return {width,height,offsetX,offsetY};
+}
+
+function renderOverlay(record){
+  const imgEl=document.getElementById('lb-img');
+  const overlay=document.getElementById('lb-overlay');
+  const wrapper=document.getElementById('lb-media');
+  overlay.innerHTML='';
+  if(!record||!imgEl.complete||!imgEl.naturalWidth)return;
+  const display=displayedImageBox(imgEl,wrapper,{width:record.width,height:record.height});
+  record.faces.forEach(face=>{
+    const rect=transformBox(face.bbox,{width:record.width,height:record.height},display);
+    if(!rect||rect.width<=0||rect.height<=0)return;
+    const box=document.createElement('div');
+    box.className='bbox';
+    box.style.left=rect.left.toFixed(2)+'px';
+    box.style.top=rect.top.toFixed(2)+'px';
+    box.style.width=rect.width.toFixed(2)+'px';
+    box.style.height=rect.height.toFixed(2)+'px';
+    if(face.name){
+      const label=document.createElement('div');
+      label.className='bbox-label';
+      if(rect.top<24)label.classList.add('inside');
+      label.textContent=face.name;
+      box.appendChild(label);
+    }
+    overlay.appendChild(box);
+  });
+}
+
+function openLb(imageId){
+  const record=IMAGES[imageId];
+  if(!record)return;
+  currentImage=record;
+  const img=document.getElementById('lb-img');
+  img.onload=()=>renderOverlay(record);
+  img.src=record.src;
+  document.getElementById('lb').classList.add('open');
+  if(img.complete)requestAnimationFrame(()=>renderOverlay(record));
+}
+
+function openThumb(src){
+  currentImage=null;
+  document.getElementById('lb-overlay').innerHTML='';
   document.getElementById('lb-img').src=src;
   document.getElementById('lb').classList.add('open');
 }
-function closeLb(){document.getElementById('lb').classList.remove('open');}
+function closeLb(){
+  document.getElementById('lb').classList.remove('open');
+  currentImage=null;
+}
 document.getElementById('lb').addEventListener('click',function(e){
   if(e.target===this)closeLb();
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeLb();});
+window.addEventListener('resize',function(){
+  if(currentImage&&document.getElementById('lb').classList.contains('open')){
+    requestAnimationFrame(()=>renderOverlay(currentImage));
+  }
+});
 
 function buildCards(){
   const wrap=document.getElementById('persons');
@@ -542,7 +721,7 @@ function buildCards(){
         const img=document.createElement('img');
         img.src='thumbs/'+t;
         img.title=p.name;
-        img.onclick=()=>openLb('thumbs/'+t);
+        img.onclick=()=>openThumb('thumbs/'+t);
         thumbs.appendChild(img);
       });
       card.appendChild(thumbs);
@@ -555,11 +734,13 @@ function buildCards(){
       card.appendChild(lbl);
       const strip=document.createElement('div');
       strip.className='img-strip';
-      p.images.forEach(im=>{
+      p.images.forEach(imageId=>{
+        const rec=IMAGES[imageId];
+        if(!rec)return;
         const img=document.createElement('img');
-        img.src='images/'+im;
+        img.src=rec.src;
         img.title=p.name;
-        img.onclick=()=>openLb('images/'+im);
+        img.onclick=()=>openLb(imageId);
         strip.appendChild(img);
       });
       card.appendChild(strip);
