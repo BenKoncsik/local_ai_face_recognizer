@@ -181,25 +181,34 @@ class ManualMarkDialog(QDialog):
         crops_dir.mkdir(parents=True, exist_ok=True)
 
         with session_scope() as session:
-            existing = session.query(Face).filter(Face.image_id == self._image_id).count()
+            # Insert face first to obtain its stable DB primary key, then name
+            # the crop after it to guarantee a globally-unique filename.
+            face = Face(
+                image_id=self._image_id,
+                bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
+                confidence=1.0,
+                detector_backend="manual",
+                crop_path=None,
+            )
+            session.add(face)
+            session.flush()
+            new_face_id = face.id
+
             crop_path = save_face_crop(
                 img_bgr=self._img_bgr,
                 detection=detection,
                 crops_dir=crops_dir,
                 image_id=self._image_id,
                 thumbnail_size=self._config.scan.thumbnail_size,
-                face_index=existing,
+                face_index=new_face_id,
             )
-            face = Face(
-                image_id=self._image_id,
-                bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
-                confidence=1.0,
-                detector_backend="manual",
-                crop_path=str(crop_path) if crop_path else None,
-            )
-            session.add(face)
+            if crop_path is not None:
+                face.crop_path = str(crop_path)
 
-        log.info("Manual face added for image_id=%d at (%d,%d,%d,%d)", self._image_id, x, y, w, h)
+        log.info(
+            "Manual face added: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
+            self._image_id, new_face_id, x, y, w, h,
+        )
         self._saved = True
         QMessageBox.information(self, t("mark_face"), t("mark_face_saved"))
         self.accept()

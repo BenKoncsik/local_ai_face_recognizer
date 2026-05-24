@@ -31,7 +31,13 @@ class _DummyDetector(FaceDetector):
         ]
 
 
-def test_detection_service_uses_unique_face_indexes(monkeypatch, tmp_path):
+def test_detection_service_uses_face_id_for_crop_naming(monkeypatch, tmp_path):
+    """Each crop filename must be keyed by the face's DB primary key.
+
+    Using face.id (rather than a per-image sequential counter) guarantees that
+    later bbox-update operations can overwrite the exact same file without
+    accidentally colliding with another face's crop stored in the same image.
+    """
     db_path = tmp_path / "faces.db"
     init_db(db_path)
 
@@ -58,9 +64,11 @@ def test_detection_service_uses_unique_face_indexes(monkeypatch, tmp_path):
         image_id,
         thumbnail_size,
         face_index=0,
+        dest_path=None,
     ):
         captured_indexes.append(face_index)
-        return Path(crops_dir) / f"img{image_id:06d}_face{face_index:03d}.jpg"
+        dest = dest_path or (Path(crops_dir) / f"img{image_id:06d}_face{face_index:06d}.jpg")
+        return dest
 
     monkeypatch.setattr(
         "app.services.detection_service.save_face_crop",
@@ -80,12 +88,21 @@ def test_detection_service_uses_unique_face_indexes(monkeypatch, tmp_path):
         detected = service.process([image_id])
 
     assert detected == 2
-    assert captured_indexes == [0, 1]
 
     with session_scope() as session:
         faces = session.query(Face).order_by(Face.id).all()
 
     assert len(faces) == 2
+    face_ids = [f.id for f in faces]
+
+    # face_index passed to save_face_crop must be the face's actual DB id,
+    # not a per-image sequential counter (0, 1, 2, ...).
+    assert captured_indexes == face_ids, (
+        "crop filename index must equal face.id to prevent collisions "
+        "with future bbox-update operations"
+    )
+
+    # Every face must have a distinct, non-None crop path.
+    assert faces[0].crop_path is not None
+    assert faces[1].crop_path is not None
     assert faces[0].crop_path != faces[1].crop_path
-    assert faces[0].crop_path.endswith("face000.jpg")
-    assert faces[1].crop_path.endswith("face001.jpg")

@@ -663,17 +663,11 @@ class MainWindow(QMainWindow):
             detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(
                 img_bgr.shape[1], img_bgr.shape[0]
             )
-            existing = session.query(Face).filter(Face.image_id == image_id).count()
             crops_dir = self._config.crops_dir_resolved
             crops_dir.mkdir(parents=True, exist_ok=True)
-            crop_path = save_face_crop(
-                img_bgr=img_bgr,
-                detection=detection,
-                crops_dir=crops_dir,
-                image_id=image_id,
-                thumbnail_size=self._config.scan.thumbnail_size,
-                face_index=existing,
-            )
+
+            # Insert face first to obtain its stable DB primary key, then name
+            # the crop after it to guarantee a globally-unique filename.
             face = Face(
                 image_id=image_id,
                 bbox_x=detection.x,
@@ -682,17 +676,28 @@ class MainWindow(QMainWindow):
                 bbox_h=detection.h,
                 confidence=1.0,
                 detector_backend="manual",
-                crop_path=str(crop_path) if crop_path else None,
+                crop_path=None,
             )
             session.add(face)
             session.flush()
             new_face_id = face.id
 
+            crop_path = save_face_crop(
+                img_bgr=img_bgr,
+                detection=detection,
+                crops_dir=crops_dir,
+                image_id=image_id,
+                thumbnail_size=self._config.scan.thumbnail_size,
+                face_index=new_face_id,
+            )
+            if crop_path is not None:
+                face.crop_path = str(crop_path)
+
         if new_face_id is None:
             return
 
         log.info(
-            "Manual face added from preview: image_id=%d face_id=%d (%d,%d,%d,%d)",
+            "Manual face added from preview: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
             image_id, new_face_id, x, y, w, h,
         )
         self._current_face_id = new_face_id
@@ -707,7 +712,12 @@ class MainWindow(QMainWindow):
         self, face_id: int, x: int, y: int, w: int, h: int
     ) -> None:
         """Update a face bounding box redrawn in the face-recognition preview."""
+        old_crop_path: Optional[str] = None
+        new_crop_path: Optional[str] = None
+
         with session_scope() as session:
+            from pathlib import Path as _Path
+
             from app.detectors.base import Detection
             from app.utils.image_utils import load_image_bgr, save_face_crop
 
@@ -728,6 +738,13 @@ class MainWindow(QMainWindow):
 
             crops_dir = self._config.crops_dir_resolved
             crops_dir.mkdir(parents=True, exist_ok=True)
+
+            # Overwrite the face's existing crop file in-place when available.
+            # This avoids filename collisions caused by mixing face.id-based and
+            # detection-index-based naming schemes from different code paths.
+            old_crop_path = face.crop_path
+            dest_override = _Path(old_crop_path) if old_crop_path else None
+
             crop_path = save_face_crop(
                 img_bgr=img_bgr,
                 detection=detection,
@@ -735,11 +752,21 @@ class MainWindow(QMainWindow):
                 image_id=face.image_id,
                 thumbnail_size=self._config.scan.thumbnail_size,
                 face_index=face.id,
+                dest_path=dest_override,
             )
             if crop_path is not None:
                 face.crop_path = str(crop_path)
+                new_crop_path = str(crop_path)
 
-        log.info("Face %d bbox updated from preview to (%d,%d,%d,%d)", face_id, x, y, w, h)
+        # Invalidate Qt's pixmap cache so the updated thumbnail is shown immediately.
+        if new_crop_path:
+            from PySide6.QtGui import QPixmapCache
+            QPixmapCache.remove(new_crop_path)
+
+        log.info(
+            "Face %d bbox updated from preview: bbox=(%d,%d,%d,%d) crop=%s",
+            face_id, x, y, w, h, new_crop_path,
+        )
         self._current_face_id = face_id
         self._show_face_in_preview(face_id)
         if self._current_person_id is not None:
@@ -888,7 +915,21 @@ class MainWindow(QMainWindow):
             target_id = dlg.target_person_id()
             if target_id is None:
                 return
+            face = session.get(Face, self._current_face_id)
+            log.debug(
+                "Reassign face: face_id=%d crop=%s bbox=(%s,%s,%s,%s) "
+                "from person_id=%s → target_person_id=%d",
+                self._current_face_id,
+                face.crop_path if face else "?",
+                face.bbox_x if face else "?", face.bbox_y if face else "?",
+                face.bbox_w if face else "?", face.bbox_h if face else "?",
+                self._current_person_id, target_id,
+            )
             IdentityService(session).reassign_face(self._current_face_id, target_id)
+            log.info(
+                "Reassign done: face_id=%d → person_id=%d",
+                self._current_face_id, target_id,
+            )
 
         if self._current_person_id:
             self._on_person_selected(self._current_person_id)

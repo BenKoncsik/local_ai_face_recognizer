@@ -45,20 +45,34 @@ class _FaceData:
 
 
 def _build_face_data(person: Person) -> _FaceData:
-    """Extract the representative face data from a Person (first face with a crop)."""
-    # Prefer thumbnail_path on the person itself
+    """Extract the representative face data from a Person.
+
+    When ``person.thumbnail_path`` is set we look for the matching face so
+    the hover-popup bbox/image stays consistent with the thumbnail crop.
+    Falls back to the first face that has a crop_path.
+    """
     thumb = person.thumbnail_path
+    rep_face = None
 
-    # Fallback: first face that has a crop_path
-    first_face = next((f for f in person.faces if f.crop_path), None)
-    crop = thumb or (first_face.crop_path if first_face else None)
+    if thumb:
+        # Find the exact face whose crop_path matches the stored thumbnail so
+        # the bbox shown in the hover popup matches the visible thumbnail.
+        rep_face = next((f for f in person.faces if f.crop_path == thumb), None)
 
-    image_path = None
-    bbox = None
-    if first_face and first_face.image:
-        image_path = first_face.image.file_path
-        bbox = (first_face.bbox_x, first_face.bbox_y,
-                first_face.bbox_w, first_face.bbox_h)
+    if rep_face is None:
+        # No thumbnail set, or no matching face — use first face with a crop.
+        rep_face = next((f for f in person.faces if f.crop_path), None)
+
+    if rep_face is None:
+        return _FaceData(crop_path=None, image_path=None, bbox=None)
+
+    crop = thumb if (thumb and rep_face.crop_path == thumb) else rep_face.crop_path
+    image_path = rep_face.image.file_path if rep_face.image else None
+    # bbox lives on the face row itself, always available
+    bbox: Optional[Tuple[int, int, int, int]] = (
+        rep_face.bbox_x, rep_face.bbox_y,
+        rep_face.bbox_w, rep_face.bbox_h
+    )
 
     return _FaceData(crop_path=crop, image_path=image_path, bbox=bbox)
 

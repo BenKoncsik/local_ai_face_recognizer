@@ -122,16 +122,10 @@ class DetectionService:
         # Remove stale face records for this image before adding new ones
         self._session.query(Face).filter(Face.image_id == image.id).delete()
 
-        for face_index, det in enumerate(detections):
-            crop_path = save_face_crop(
-                img_bgr=img_bgr,
-                detection=det,
-                crops_dir=self._crops_dir,
-                image_id=image.id,
-                thumbnail_size=self._config.scan.thumbnail_size,
-                face_index=face_index,
-            )
-
+        for det in detections:
+            # Insert face first to obtain its stable DB primary key, then name
+            # the crop file after it.  Using face.id guarantees uniqueness across
+            # all images and avoids collisions when bounding boxes are later edited.
             face = Face(
                 image_id=image.id,
                 bbox_x=det.x,
@@ -140,9 +134,25 @@ class DetectionService:
                 bbox_h=det.h,
                 confidence=det.confidence,
                 detector_backend=self._detector.backend_name,
-                crop_path=str(crop_path) if crop_path else None,
+                crop_path=None,
             )
             self._session.add(face)
+            self._session.flush()  # assigns face.id
+
+            crop_path = save_face_crop(
+                img_bgr=img_bgr,
+                detection=det,
+                crops_dir=self._crops_dir,
+                image_id=image.id,
+                thumbnail_size=self._config.scan.thumbnail_size,
+                face_index=face.id,
+            )
+            if crop_path is not None:
+                face.crop_path = str(crop_path)
+            log.debug(
+                "Detected face id=%d image_id=%d bbox=(%d,%d,%d,%d) crop=%s",
+                face.id, image.id, det.x, det.y, det.w, det.h, crop_path,
+            )
 
         log.debug("Image %s: %d face(s) detected", path.name, len(detections))
         return len(detections)

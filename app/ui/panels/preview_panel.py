@@ -515,6 +515,13 @@ class PreviewPanel(QWidget):
 
     def _on_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
         """Show context menu for the right-clicked face."""
+        # Select the face immediately so it's highlighted when the menu appears
+        if self._selected_face_id != face_id:
+            self._selected_face_id = face_id
+            self._render()
+            self._update_action_buttons()
+            self.face_selected.emit(face_id)
+
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         person_name = entry[5] if entry else None
 
@@ -531,13 +538,10 @@ class PreviewPanel(QWidget):
         chosen = menu.exec(QPoint(gx, gy))
 
         if chosen == assign_action:
-            self._select_face_for_action(face_id)
             self.face_assign_requested.emit(face_id)
         elif chosen == edit_action:
-            self._select_face_for_action(face_id)
             self._start_face_edit(face_id)
         elif chosen == delete_action:
-            self._select_face_for_action(face_id)
             self.face_delete_requested.emit(face_id)
 
     def _select_face_for_action(self, face_id: int) -> None:

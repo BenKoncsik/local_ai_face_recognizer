@@ -22,6 +22,7 @@ def save_face_crop(
     image_id: int,
     thumbnail_size: Tuple[int, int] = (128, 128),
     face_index: int = 0,
+    dest_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Extract a face crop and save it as a JPEG thumbnail.
 
@@ -32,6 +33,10 @@ def save_face_crop(
         image_id:       Parent image DB ID (used in filename).
         thumbnail_size: Target size ``(width, height)`` for the saved crop.
         face_index:     Index of this face within the image (for naming).
+                        Ignored when *dest_path* is provided.
+        dest_path:      Explicit output path; overrides the auto-generated name.
+                        Use this to overwrite an existing crop in-place without
+                        introducing filename collisions.
 
     Returns:
         :class:`Path` to the saved crop file, or ``None`` on failure.
@@ -59,8 +64,11 @@ def save_face_crop(
     # Resize to thumbnail
     thumb = cv2.resize(crop, thumbnail_size, interpolation=cv2.INTER_AREA)
 
-    filename = f"img{image_id:06d}_face{face_index:03d}.jpg"
-    dest = crops_dir / filename
+    if dest_path is not None:
+        dest = dest_path
+    else:
+        filename = f"img{image_id:06d}_face{face_index:06d}.jpg"
+        dest = crops_dir / filename
     success = save_image_bgr(dest, thumb, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
     if not success:

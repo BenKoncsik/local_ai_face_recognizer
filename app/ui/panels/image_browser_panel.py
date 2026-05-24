@@ -98,14 +98,9 @@ def _draw_faces(
 
     img = img_bgr.copy()
 
-    # Draw rectangles with OpenCV (fast, no encoding issues)
-    for face_id, x, y, w, h, _, _ in faces:
-        selected = face_id == selected_id
-        color = (50, 220, 50) if selected else (180, 180, 180)
-        thickness = 3 if selected else 2
-        cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
-
-    # Use PIL for text so UTF-8 / accented characters render correctly
+    # Phase 1 — draw text labels with PIL (UTF-8 support for accented names).
+    # Labels are drawn FIRST so that bounding-box rectangles (phase 2) can be
+    # drawn on top and are never hidden by a neighbouring label's background.
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     pil_img = PILImage.fromarray(img_rgb)
     draw = ImageDraw.Draw(pil_img)
@@ -154,7 +149,16 @@ def _draw_faces(
             fill=color_rgb,
         )
 
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    # Phase 2 — draw bounding-box rectangles with OpenCV on top of the labels.
+    # Doing this last guarantees that no label background can overwrite a box line.
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    for face_id, x, y, w, h, _, _ in faces:
+        selected = face_id == selected_id
+        color = (50, 220, 50) if selected else (180, 180, 180)
+        thickness = 3 if selected else 2
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
+
+    return img
 
 
 def _hline() -> QFrame:
@@ -179,6 +183,111 @@ class _FocusLineEdit(QLineEdit):
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:
             self.escape_pressed.emit()
+        else:
+            super().keyPressEvent(event)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Inline editor overlay — floating assign/create popup anchored to a BBox label
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _InlineFaceEditor(QFrame):
+    """Floating overlay widget for inline face-person assignment."""
+
+    assign_requested = Signal(int)   # person_id
+    create_requested = Signal(str)   # new person name
+    closed = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet(
+            "_InlineFaceEditor { background: #252525; border: 1px solid #666;"
+            " border-radius: 4px; }"
+        )
+        self.setFixedWidth(230)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(4)
+
+        hdr = QHBoxLayout()
+        self._name_lbl = QLabel("?")
+        self._name_lbl.setStyleSheet(
+            "color: #88ee88; font-weight: bold; font-size: 11px;"
+        )
+        hdr.addWidget(self._name_lbl, stretch=1)
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(16, 16)
+        close_btn.setFlat(True)
+        close_btn.setStyleSheet(
+            "QPushButton { color: #888; font-size: 14px; padding: 0; border: none; }"
+            "QPushButton:hover { color: #fff; }"
+        )
+        close_btn.clicked.connect(self.closed)
+        hdr.addWidget(close_btn)
+        layout.addLayout(hdr)
+
+        self._combo = QComboBox()
+        self._combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._combo.setMaxVisibleItems(12)
+        layout.addWidget(self._combo)
+
+        self._assign_btn = QPushButton()
+        self._assign_btn.clicked.connect(self._on_assign)
+        layout.addWidget(self._assign_btn)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #3a3a3a;")
+        layout.addWidget(sep)
+
+        self._new_edit = QLineEdit()
+        self._new_edit.returnPressed.connect(self._on_create)
+        layout.addWidget(self._new_edit)
+
+        self._create_btn = QPushButton()
+        self._create_btn.clicked.connect(self._on_create)
+        layout.addWidget(self._create_btn)
+
+        self.adjustSize()
+        self.hide()
+
+    def retranslate(self) -> None:
+        self._assign_btn.setText(t("ibp_assign_btn"))
+        self._new_edit.setPlaceholderText(t("ibp_new_placeholder"))
+        self._create_btn.setText(t("ibp_create_btn"))
+
+    def populate(
+        self,
+        person_name: Optional[str],
+        person_id: Optional[int],
+        persons: List[Tuple[int, str]],
+    ) -> None:
+        self._name_lbl.setText(person_name or "?")
+        self._combo.clear()
+        current_index = 0
+        for i, (pid, name) in enumerate(persons):
+            self._combo.addItem(name, userData=pid)
+            if pid == person_id:
+                current_index = i
+        if persons:
+            self._combo.setCurrentIndex(current_index)
+        self._new_edit.clear()
+
+    def _on_assign(self) -> None:
+        pid = self._combo.currentData()
+        if pid is not None:
+            self.assign_requested.emit(pid)
+
+    def _on_create(self) -> None:
+        name = self._new_edit.text().strip()
+        if name:
+            self.create_requested.emit(name)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.closed.emit()
         else:
             super().keyPressEvent(event)
 
@@ -336,6 +445,7 @@ class ImageBrowserPanel(QWidget):
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None   # face being bbox-edited
         self._renaming: bool = False                   # inline rename in progress
+        self._inline_editor_face_id: Optional[int] = None  # face shown in inline editor
         self._detection_done: bool = False             # whether current image was processed
         self._orig_img_bgr: Optional[np.ndarray] = None
         self._full_pixmap: Optional[QPixmap] = None
@@ -422,6 +532,13 @@ class ImageBrowserPanel(QWidget):
         self._image_label.right_clicked.connect(self._on_image_right_clicked)
         self._image_label.wheel_zoomed.connect(self._on_wheel_zoom)
         self._image_label.pan_moved.connect(self._on_pan_moved)
+
+        # Inline face editor — parented to the image label so it floats over it
+        self._inline_editor = _InlineFaceEditor(self._image_label)
+        self._inline_editor.assign_requested.connect(self._on_inline_assign)
+        self._inline_editor.create_requested.connect(self._on_inline_create)
+        self._inline_editor.closed.connect(self._hide_inline_editor)
+
         splitter.addWidget(self._image_label)
 
         # Right: scrollable info panel
@@ -576,6 +693,7 @@ class ImageBrowserPanel(QWidget):
         self._new_hdr.setText(t("ibp_new_hdr"))
         self._new_name_edit.setPlaceholderText(t("ibp_new_placeholder"))
         self._create_btn.setText(t("ibp_create_btn"))
+        self._inline_editor.retranslate()
 
     def refresh(self) -> None:
         """Reload image list from DB and redisplay current (or first) image."""
@@ -610,6 +728,7 @@ class ImageBrowserPanel(QWidget):
         if self._current_index > 0:
             self._current_index -= 1
             self._selected_face_id = None
+            self._hide_inline_editor()
             self._reset_zoom()
             self._load_current_image()
             self._update_nav_buttons()
@@ -618,6 +737,7 @@ class ImageBrowserPanel(QWidget):
         if self._current_index < len(self._image_ids) - 1:
             self._current_index += 1
             self._selected_face_id = None
+            self._hide_inline_editor()
             self._reset_zoom()
             self._load_current_image()
             self._update_nav_buttons()
@@ -632,6 +752,7 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _load_current_image(self) -> None:
+        self._hide_inline_editor()
         if not self._image_ids:
             return
 
@@ -684,6 +805,7 @@ class ImageBrowserPanel(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._hide_inline_editor()
         self._image_label.update()
 
     # ──────────────────────────────────────────────────────────────────
@@ -691,7 +813,6 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _on_image_clicked(self, lx: int, ly: int) -> None:
-        # Clear focus from any active text inputs so they commit or deactivate
         self._new_name_edit.clearFocus()
         self._rename_edit.clearFocus()
 
@@ -704,19 +825,19 @@ class ImageBrowserPanel(QWidget):
 
         clicked_id = self._hit_test(orig_x, orig_y)
 
-        if clicked_id == self._selected_face_id:
+        if clicked_id is None:
+            self._hide_inline_editor()
             self._selected_face_id = None
             self._redraw_faces()
             self._clear_face_panel()
             return
 
-        self._selected_face_id = clicked_id
-        self._redraw_faces()
-
-        if clicked_id is not None:
+        if self._selected_face_id != clicked_id:
+            self._selected_face_id = clicked_id
+            self._redraw_faces()
             self._show_face_info(clicked_id)
-        else:
-            self._clear_face_panel()
+
+        self._show_inline_editor(clicked_id)
 
     # ──────────────────────────────────────────────────────────────────
     # Manual face drawing
@@ -725,7 +846,9 @@ class ImageBrowserPanel(QWidget):
     def _on_draw_mode_toggled(self, active: bool) -> None:
         self._image_label.set_draw_mode(active)
         self._draw_hint.setVisible(active)
-        if not active:
+        if active:
+            self._hide_inline_editor()
+        else:
             # User manually toggled off — cancel any ongoing edit
             self._editing_face_id = None
             self._draw_hint.setText(t("ibp_draw_hint_add"))
@@ -776,8 +899,19 @@ class ImageBrowserPanel(QWidget):
             thumbnail_size = self._config.scan.thumbnail_size
 
         with session_scope() as session:
-            existing = session.query(Face).filter(Face.image_id == img_id).count()
-            crop_path = None
+            # Insert face first to obtain its stable DB primary key, then name
+            # the crop after it to guarantee a globally-unique filename.
+            face = Face(
+                image_id=img_id,
+                bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
+                confidence=1.0,
+                detector_backend="manual",
+                crop_path=None,
+            )
+            session.add(face)
+            session.flush()
+            new_id = face.id
+
             if crops_dir is not None and self._orig_img_bgr is not None:
                 crop_path = save_face_crop(
                     img_bgr=self._orig_img_bgr,
@@ -785,20 +919,15 @@ class ImageBrowserPanel(QWidget):
                     crops_dir=crops_dir,
                     image_id=img_id,
                     thumbnail_size=thumbnail_size,
-                    face_index=existing,
+                    face_index=new_id,
                 )
-            face = Face(
-                image_id=img_id,
-                bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
-                confidence=1.0,
-                detector_backend="manual",
-                crop_path=str(crop_path) if crop_path else None,
-            )
-            session.add(face)
-            session.flush()
-            new_id = face.id
+                if crop_path is not None:
+                    face.crop_path = str(crop_path)
 
-        log.info("Manual face saved for image_id=%d: (%d,%d,%d,%d)", img_id, x, y, w, h)
+        log.info(
+            "Manual face saved: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
+            img_id, new_id, x, y, w, h,
+        )
         return new_id
 
     # ──────────────────────────────────────────────────────────────────
@@ -812,6 +941,15 @@ class ImageBrowserPanel(QWidget):
         face_id = self._hit_test(orig_x, orig_y)
         if face_id is None:
             return
+
+        # Select the face first so it's visually highlighted when the menu appears
+        if self._selected_face_id != face_id:
+            self._selected_face_id = face_id
+            self._redraw_faces()
+            self._show_face_info(face_id)
+
+        # Hide inline editor — context menu takes priority
+        self._hide_inline_editor()
 
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         person_name = entry[5] if entry else None
@@ -838,6 +976,7 @@ class ImageBrowserPanel(QWidget):
 
     def _start_face_edit(self, face_id: int) -> None:
         """Select the face and enter draw mode so the user can redraw its bbox."""
+        self._hide_inline_editor()
         self._editing_face_id = face_id
         self._selected_face_id = face_id
         self._redraw_faces()
@@ -847,6 +986,8 @@ class ImageBrowserPanel(QWidget):
 
     def _delete_face(self, face_id: int) -> None:
         """Hard-delete a Face record from the DB."""
+        if self._inline_editor_face_id == face_id:
+            self._hide_inline_editor()
         with session_scope() as session:
             face = session.get(Face, face_id)
             if face is None:
@@ -909,6 +1050,21 @@ class ImageBrowserPanel(QWidget):
             y2 = min(max(y2, 0), ih - 1)
         return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
 
+    def _image_to_label(self, ix: int, iy: int) -> Tuple[int, int]:
+        """Convert original image pixel coordinates to label widget coordinates."""
+        if self._full_pixmap is None:
+            return -1, -1
+        cr = self._image_label.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
+        if pw == 0 or ph == 0:
+            return -1, -1
+        base_scale = min(lw / pw, lh / ph)
+        eff = base_scale * self._zoom
+        ox = cr.x() + (lw - pw * eff) / 2 + self._pan_x
+        oy = cr.y() + (lh - ph * eff) / 2 + self._pan_y
+        return int(ox + ix * eff), int(oy + iy * eff)
+
     def _hit_test(self, ox: int, oy: int) -> Optional[int]:
         """Return face_id whose bbox contains (ox, oy), or None."""
         for face_id, x, y, w, h, _, _ in self._face_data:
@@ -948,12 +1104,14 @@ class ImageBrowserPanel(QWidget):
         self._zoom = new_zoom
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
+        self._hide_inline_editor()
 
     def _on_pan_moved(self, dx: int, dy: int) -> None:
         self._pan_x += dx
         self._pan_y += dy
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
+        self._hide_inline_editor()
 
     def _clamp_pan(self) -> None:
         if self._full_pixmap is None:
@@ -974,6 +1132,85 @@ class ImageBrowserPanel(QWidget):
         self._pan_x = 0.0
         self._pan_y = 0.0
         self._image_label.set_zoom_pan(1.0, 0.0, 0.0)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Inline face editor
+    # ──────────────────────────────────────────────────────────────────
+
+    def _show_inline_editor(self, face_id: int) -> None:
+        """Position and show the inline editor near the BBox label of face_id."""
+        entry = next((f for f in self._face_data if f[0] == face_id), None)
+        if entry is None:
+            return
+        _, bx, by, bw, bh, person_name, person_id = entry
+
+        # Read persons in same order as the sidebar combo
+        persons: List[Tuple[int, str]] = [
+            (self._person_combo.itemData(i), self._person_combo.itemText(i))
+            for i in range(self._person_combo.count())
+        ]
+        self._inline_editor.populate(person_name, person_id, persons)
+        self._inline_editor.adjustSize()
+
+        # Compute BBox top and bottom in label-widget coordinates
+        lx_top, ly_top = self._image_to_label(bx, by)
+        _, ly_bot = self._image_to_label(bx, by + bh)
+        if lx_top < 0:
+            return
+
+        editor_w = self._inline_editor.width()
+        editor_h = self._inline_editor.sizeHint().height()
+        cr_w = self._image_label.contentsRect().width()
+        cr_h = self._image_label.contentsRect().height()
+
+        # Prefer above the BBox (mirror where the drawn label sits), fall back below
+        if ly_top - editor_h - 8 >= 0:
+            pos_y = ly_top - editor_h - 8
+        elif ly_bot >= 0 and ly_bot + editor_h + 8 <= cr_h:
+            pos_y = ly_bot + 8
+        else:
+            pos_y = max(4, ly_top - editor_h // 2)
+
+        pos_x = max(4, min(lx_top, cr_w - editor_w - 4))
+        pos_y = max(4, min(pos_y, cr_h - editor_h - 4))
+
+        self._inline_editor.move(pos_x, pos_y)
+        self._inline_editor.show()
+        self._inline_editor.raise_()
+        self._inline_editor_face_id = face_id
+
+    def _hide_inline_editor(self) -> None:
+        self._inline_editor.hide()
+        self._inline_editor_face_id = None
+
+    def _on_inline_assign(self, person_id: int) -> None:
+        face_id = self._inline_editor_face_id
+        if face_id is None:
+            return
+        self._hide_inline_editor()
+        with session_scope() as session:
+            IdentityService(session).reassign_face(face_id, person_id)
+        self._remember_recent_person(person_id)
+        self._reload_current_face_data()
+        self._reload_persons_combo()
+        self.person_data_changed.emit()
+
+    def _on_inline_create(self, name: str) -> None:
+        face_id = self._inline_editor_face_id
+        if face_id is None:
+            return
+        self._hide_inline_editor()
+        with session_scope() as session:
+            person = Person(name=name, is_auto_named=False)
+            session.add(person)
+            session.flush()
+            person_id = person.id
+            IdentityService(session).reassign_face(face_id, person_id)
+        self._remember_recent_person(person_id)
+        self._reload_current_face_data()
+        self._reload_persons_combo()
+        self.person_data_changed.emit()
+        self._open_person_info_dialog(person_id)
 
     # ──────────────────────────────────────────────────────────────────
     # Face info panel
