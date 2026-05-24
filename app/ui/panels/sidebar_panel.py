@@ -323,7 +323,8 @@ class SidebarPanel(QWidget):
             if w:
                 w.deleteLater()
 
-        for i, person in enumerate(persons):
+        visible = [p for p in persons if not p.is_protected]
+        for i, person in enumerate(visible):
             row, col = divmod(i, _FACE_COLS)
             thumb = _PersonThumb(person)
             thumb.clicked.connect(self.person_selected.emit)
