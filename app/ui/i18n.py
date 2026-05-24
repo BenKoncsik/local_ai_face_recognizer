@@ -451,6 +451,18 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_date_tooltip":      {"en": "The date or period when the image was taken (free text)",
                               "hu": "A kép készítésének dátuma vagy időszaka (szabad szöveg)"},
 
+    # ── 3-column image browser (ib3_*) ────────────────────────────────────
+    "ib3_folders_hdr":         {"en": "Folders",           "hu": "Mappák"},
+    "ib3_folders_hdr_n":       {"en": "Folders ({n})",     "hu": "Mappák ({n})"},
+    "ib3_no_folders":          {"en": "No images in database",
+                                "hu": "Nincs kép az adatbázisban"},
+    "ib3_select_folder_hint":  {"en": "← Select a folder",
+                                "hu": "← Válassz mappát"},
+    "ib3_select_image_hint":   {"en": "← Select an image",
+                                "hu": "← Válassz képet"},
+    "ib3_no_images_in_folder": {"en": "No images in this folder",
+                                "hu": "Nincs kép ebben a mappában"},
+
     # ── Name suggestions ──────────────────────────────────────────────────
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},
     "suggestions_title": {"en": "Name Suggestions — Unknown → Known",
