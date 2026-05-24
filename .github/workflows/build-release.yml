@@ -274,9 +274,8 @@ jobs:
           mkdir -p models
           if [ ! -f models/mobilefacenet.tflite ]; then
             mirrors=(
-              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+              "https://github.com/sirius-ai/MobileFaceNet_TF/releases/download/v1.0/mobilefacenet.tflite"
+              "https://github.com/deepinsight/insightface/releases/download/v0.7/mobilefacenet.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
@@ -454,9 +453,8 @@ jobs:
           $facenet = "models\mobilefacenet.tflite"
           if (-not (Test-Path $facenet)) {
             $mirrors = @(
-              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite",
-              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite",
-              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+              "https://github.com/sirius-ai/MobileFaceNet_TF/releases/download/v1.0/mobilefacenet.tflite",
+              "https://github.com/deepinsight/insightface/releases/download/v0.7/mobilefacenet.tflite"
             )
             $ok = $false
             foreach ($url in $mirrors) {
@@ -615,9 +613,8 @@ jobs:
           mkdir -p models
           if [ ! -f models/mobilefacenet.tflite ]; then
             mirrors=(
-              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+              "https://github.com/sirius-ai/MobileFaceNet_TF/releases/download/v1.0/mobilefacenet.tflite"
+              "https://github.com/deepinsight/insightface/releases/download/v0.7/mobilefacenet.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
@@ -724,9 +721,8 @@ jobs:
           mkdir -p models
           if [ ! -f models/mobilefacenet.tflite ]; then
             mirrors=(
-              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/estebanuri/face_recognition/raw/master/android/face-recognition/app/src/main/assets/mobile_face_net.tflite"
-              "https://github.com/Martlgap/FaceIDLight/raw/main/facelib/models/pretrained/mobileFaceNet.tflite"
+              "https://github.com/sirius-ai/MobileFaceNet_TF/releases/download/v1.0/mobilefacenet.tflite"
+              "https://github.com/deepinsight/insightface/releases/download/v0.7/mobilefacenet.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
