@@ -282,7 +282,7 @@ class TpuStatusDialog(QDialog):
         if info["ai_edge_litert"]:
             lines.append(f"✓ ai-edge-litert {info['ai_edge_litert_ver']}")
         else:
-            lines.append("✗ ai-edge-litert: nincs telepítve / not installed")
+            lines.append(f"✗ {t('tpu_ai_edge_missing')}")
 
         if info["libedgetpu"]:
             lines.append(f"✓ {t('tpu_libedge_ok')}")
@@ -298,7 +298,7 @@ class TpuStatusDialog(QDialog):
             for d in info["devices_pycoral"]:
                 lines.append(f"  • {d}")
         elif info["delegate_ok"]:
-            lines.append("  • EdgeTPU delegate sikeresen betöltve / loaded successfully")
+            lines.append(f"  • {t('tpu_delegate_loaded')}")
         else:
             lines.append(f"  {t('tpu_none')}")
 
@@ -325,10 +325,7 @@ class TpuStatusDialog(QDialog):
             cmds = _fix_commands()
 
             # Copyable script block
-            script_group = QGroupBox(
-                "Kézi telepítési parancsok / Manual install commands"
-                " (futtasd terminálban / run in terminal)"
-            )
+            script_group = QGroupBox(t("tpu_manual_commands"))
             script_layout = QVBoxLayout(script_group)
 
             script_box = QTextEdit()
@@ -341,7 +338,7 @@ class TpuStatusDialog(QDialog):
             script_box.setStyleSheet("background:#1e1e1e; color:#d4d4d4;")
             script_layout.addWidget(script_box)
 
-            copy_btn = QPushButton("📋 Parancsok másolása / Copy commands")
+            copy_btn = QPushButton(f"📋 {t('tpu_copy_commands')}")
             copy_btn.clicked.connect(
                 lambda: QApplication.clipboard().setText("\n".join(cmds))
             )
@@ -349,7 +346,7 @@ class TpuStatusDialog(QDialog):
             layout.addWidget(script_group)
 
             # Auto-fix button + output
-            fix_group = QGroupBox("Automatikus javítás / Auto-fix")
+            fix_group = QGroupBox(t("tpu_auto_fix"))
             fix_layout = QVBoxLayout(fix_group)
 
             self._fix_output = QTextEdit()
@@ -363,7 +360,7 @@ class TpuStatusDialog(QDialog):
             self._progress.setVisible(False)
             fix_layout.addWidget(self._progress)
 
-            self._fix_btn = QPushButton("🔧 Automatikus javítás indítása / Run auto-fix")
+            self._fix_btn = QPushButton(f"🔧 {t('tpu_run_auto_fix')}")
             self._fix_btn.clicked.connect(lambda: self._on_fix(cmds))
             fix_layout.addWidget(self._fix_btn)
 
@@ -388,12 +385,6 @@ class TpuStatusDialog(QDialog):
         self._progress.setVisible(False)
         self._fix_btn.setEnabled(True)
         if ok:
-            self._fix_output.append(
-                "\n✓ Kész! Indítsa újra az alkalmazást. / Done! Restart the app."
-            )
+            self._fix_output.append(t("tpu_fix_done"))
         else:
-            self._fix_output.append(
-                "\n✗ Néhány parancs meghiúsult — másolja ki a parancsokat és futtassa "
-                "terminálban rendszergazdaként.\n"
-                "Some commands failed — copy the commands above and run in terminal as admin."
-            )
+            self._fix_output.append(t("tpu_fix_failed"))

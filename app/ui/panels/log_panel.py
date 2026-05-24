@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class LogPanel(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        clear_btn = QPushButton("Clear")
+        clear_btn = QPushButton(t("clear"))
         clear_btn.setFixedWidth(60)
         clear_btn.clicked.connect(self._text.clear)
         btn_row.addWidget(clear_btn)

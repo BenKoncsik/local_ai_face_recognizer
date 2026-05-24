@@ -139,7 +139,7 @@ class ManualMarkDialog(QDialog):
     def _load_image(self) -> None:
         self._img_bgr = load_image_bgr(self._image_path)
         if self._img_bgr is None:
-            QMessageBox.warning(self, t("error"), f"Cannot load: {self._image_path}")
+            QMessageBox.warning(self, t("error"), t("cannot_load", path=self._image_path))
             self.reject()
             return
 

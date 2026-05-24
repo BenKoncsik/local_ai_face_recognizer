@@ -94,22 +94,20 @@ class SettingsDialog(QDialog):
         layout.addWidget(db_group)
 
         # ── Updates ───────────────────────────────────────────────────────
-        upd_group = QGroupBox("Frissítések / Updates")
+        upd_group = QGroupBox(t("updates_group"))
         upd_layout = QVBoxLayout(upd_group)
 
-        self._update_status_label = QLabel(f"Jelenlegi verzió / Current version: <b>v{__version__}</b>")
+        self._update_status_label = QLabel(t("current_version", version=__version__))
         self._update_status_label.setTextFormat(Qt.TextFormat.RichText)
         upd_layout.addWidget(self._update_status_label)
 
-        self._notify_check = QCheckBox(
-            "Értesítés ha új verzió érhető el / Notify when a new version is available"
-        )
+        self._notify_check = QCheckBox(t("notify_updates"))
         notify_enabled = _qsettings().value("updates/notify", True, type=bool)
         self._notify_check.setChecked(notify_enabled)
         upd_layout.addWidget(self._notify_check)
 
         upd_btn_row = QHBoxLayout()
-        self._check_upd_btn = QPushButton("🔄  Frissítés keresése / Check for updates")
+        self._check_upd_btn = QPushButton(f"🔄  {t('check_updates_btn')}")
         self._check_upd_btn.clicked.connect(self._on_check_update)
         upd_btn_row.addWidget(self._check_upd_btn)
         upd_btn_row.addStretch()
@@ -128,7 +126,7 @@ class SettingsDialog(QDialog):
         check_btn.clicked.connect(self._on_tpu_check)
         tpu_btn_row.addWidget(check_btn)
 
-        self._tpu_fix_btn = QPushButton("🔧 " + ("Javítás / Fix"))
+        self._tpu_fix_btn = QPushButton(f"🔧 {t('fix')}")
         self._tpu_fix_btn.clicked.connect(self._on_tpu_fix)
         self._tpu_fix_btn.setVisible(False)
         tpu_btn_row.addWidget(self._tpu_fix_btn)
@@ -151,7 +149,7 @@ class SettingsDialog(QDialog):
 
     def _start_tpu_probe(self) -> None:
         """Launch TPU probe in background — dialog opens immediately."""
-        self._tpu_summary_label.setText("⏳ Ellenőrzés... / Checking...")
+        self._tpu_summary_label.setText(f"⏳ {t('tpu_checking')}")
         self._tpu_summary_label.setStyleSheet("color: #888;")
         self._probe_thread = _TpuProbeThread(self)
         self._probe_thread.result_ready.connect(self._on_tpu_probe_done)
@@ -166,9 +164,9 @@ class SettingsDialog(QDialog):
         else:
             parts = []
             if not info["ai_edge_litert"]:
-                parts.append("ai-edge-litert missing")
+                parts.append(t("ai_edge_missing"))
             if not info["libedgetpu"]:
-                parts.append("libedgetpu missing")
+                parts.append(t("libedgetpu_missing_short"))
             if info["error"]:
                 parts.append(info["error"])
             detail = "; ".join(parts) if parts else t("tpu_none")
@@ -219,7 +217,7 @@ class SettingsDialog(QDialog):
         from app.ui.dialogs.update_dialog import UpdateDialog
 
         self._check_upd_btn.setEnabled(False)
-        self._update_status_label.setText("⏳ Ellenőrzés… / Checking…")
+        self._update_status_label.setText(f"⏳ {t('checking')}")
         from PySide6.QtWidgets import QApplication
         QApplication.processEvents()
 
@@ -228,19 +226,19 @@ class SettingsDialog(QDialog):
 
         if release is None:
             self._update_status_label.setText(
-                "⚠ Nem sikerült a kapcsolódás / Could not reach GitHub"
+                f"⚠ {t('could_not_reach_github')}"
             )
             return
 
         if not is_newer(release.version, __version__):
             self._update_status_label.setText(
-                f"✓ Naprakész / Up to date  —  v{__version__}"
+                f"✓ {t('up_to_date_version', version=__version__)}"
             )
             self._update_status_label.setStyleSheet("color: #4caf50;")
             return
 
         self._update_status_label.setText(
-            f"🆕 Új verzió: <b>v{release.version}</b>  (jelenlegi: v{__version__})"
+            f"🆕 {t('new_version_status', new=release.version, current=__version__)}"
         )
         self._update_status_label.setStyleSheet("color: #ffcc00;")
         dlg = UpdateDialog(release, parent=self)

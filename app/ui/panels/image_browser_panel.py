@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QTabWidget,
@@ -39,6 +40,7 @@ from app.db.database import session_scope
 from app.db.models import Face, Image, Person
 from app.services.identity_service import IdentityService
 from app.ui.dialogs.person_info_dialog import PersonInfoDialog
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -357,8 +359,8 @@ class ImageBrowserPanel(QWidget):
         # ── Navigation bar ────────────────────────────────────────────
         nav = QHBoxLayout()
 
-        self._prev_btn = QPushButton("◀  Előző")
-        self._prev_btn.setFixedWidth(110)
+        self._prev_btn = QPushButton()
+        self._prev_btn.setFixedWidth(90)
         self._prev_btn.clicked.connect(self._on_prev)
         nav.addWidget(self._prev_btn)
 
@@ -367,30 +369,28 @@ class ImageBrowserPanel(QWidget):
         self._counter_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #ccc;")
         nav.addWidget(self._counter_label, stretch=1)
 
-        self._next_btn = QPushButton("Következő  ▶")
-        self._next_btn.setFixedWidth(110)
+        self._next_btn = QPushButton()
+        self._next_btn.setFixedWidth(90)
         self._next_btn.clicked.connect(self._on_next)
         nav.addWidget(self._next_btn)
 
         nav.addSpacing(12)
 
-        self._draw_mode_btn = QPushButton("✏  Kézi jelölés")
+        self._draw_mode_btn = QPushButton()
         self._draw_mode_btn.setCheckable(True)
-        self._draw_mode_btn.setToolTip(
-            "Kattints, majd húzd az egeret a képen egy arc kézi megjelöléséhez"
-        )
+        self._draw_mode_btn.setToolTip(t("ibp_manual_mark_tooltip"))
         self._draw_mode_btn.toggled.connect(self._on_draw_mode_toggled)
         nav.addWidget(self._draw_mode_btn)
 
         nav.addSpacing(8)
 
-        self._fs_btn = QPushButton("⛶  Teljes képernyő")
-        self._fs_btn.setToolTip("Teljes képernyős nézet (F11)")
+        self._fs_btn = QPushButton()
+        self._fs_btn.setToolTip(t("ibp_fullscreen_tooltip"))
         self._fs_btn.clicked.connect(self._enter_fullscreen)
         nav.addWidget(self._fs_btn)
 
-        self._exit_fs_btn = QPushButton("✕  Kilépés a teljes képernyőből")
-        self._exit_fs_btn.setToolTip("Kilépés a teljes képernyős nézetből (F11)")
+        self._exit_fs_btn = QPushButton()
+        self._exit_fs_btn.setToolTip(t("ibp_exit_fullscreen_tooltip"))
         self._exit_fs_btn.setStyleSheet("QPushButton { color: #ff8888; font-weight: bold; }")
         self._exit_fs_btn.clicked.connect(self._exit_fullscreen)
         self._exit_fs_btn.setVisible(False)
@@ -399,9 +399,7 @@ class ImageBrowserPanel(QWidget):
         root.addLayout(nav)
 
         # ── Draw-mode hint (shown only when active) ───────────────────
-        self._draw_hint = QLabel(
-            "✏  Húzd az egeret az arc körül a jelöléshez — mentés automatikus"
-        )
+        self._draw_hint = QLabel()
         self._draw_hint.setAlignment(Qt.AlignCenter)
         self._draw_hint.setStyleSheet(
             "color: #ffcc00; font-size: 11px; background: #2a2000; padding: 3px;"
@@ -417,10 +415,6 @@ class ImageBrowserPanel(QWidget):
         self._image_label.setAlignment(Qt.AlignCenter)
         self._image_label.setMinimumSize(400, 300)
         self._image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._image_label.setText(
-            "Válassz mappát és futtass beolvasást\n"
-            "Select a folder and run a scan"
-        )
         self._image_label.clicked.connect(self._on_image_clicked)
         self._image_label.rect_drawn.connect(self._on_rect_drawn)
         self._image_label.right_clicked.connect(self._on_image_right_clicked)
@@ -428,17 +422,15 @@ class ImageBrowserPanel(QWidget):
         self._image_label.pan_moved.connect(self._on_pan_moved)
         splitter.addWidget(self._image_label)
 
-        # Right: info panel
-        info_widget = QWidget()
-        info_widget.setMinimumWidth(180)
-        info_widget.setMaximumWidth(360)
-        info_layout = QVBoxLayout(info_widget)
-        info_layout.setContentsMargins(10, 10, 10, 10)
-        info_layout.setSpacing(8)
+        # Right: scrollable info panel
+        info_content = QWidget()
+        info_layout = QVBoxLayout(info_content)
+        info_layout.setContentsMargins(8, 8, 8, 8)
+        info_layout.setSpacing(6)
 
-        folder_hdr = QLabel("Mappa:")
-        folder_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
-        info_layout.addWidget(folder_hdr)
+        self._folder_hdr = QLabel()
+        self._folder_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._folder_hdr)
 
         self._folder_label = QLabel("")
         self._folder_label.setWordWrap(True)
@@ -447,64 +439,50 @@ class ImageBrowserPanel(QWidget):
 
         info_layout.addWidget(_hline())
 
-        date_hdr = QLabel("Kép dátuma / időszaka:")
-        date_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
-        info_layout.addWidget(date_hdr)
+        self._date_hdr = QLabel()
+        self._date_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._date_hdr)
 
-        date_row = QHBoxLayout()
-        date_row.setSpacing(4)
         self._photo_date_edit = QLineEdit()
-        self._photo_date_edit.setPlaceholderText(
-            "pl. 1954  vagy  1954.03.12  vagy  1930-as évek"
-        )
-        self._photo_date_edit.setToolTip(
-            "A kép készítésének dátuma vagy időszaka (szabad szöveg)"
-        )
+        self._photo_date_edit.setToolTip(t("ibp_date_tooltip"))
         self._photo_date_edit.returnPressed.connect(self._save_photo_date)
         self._photo_date_edit.editingFinished.connect(self._save_photo_date)
-        date_row.addWidget(self._photo_date_edit, stretch=1)
-        info_layout.addLayout(date_row)
+        info_layout.addWidget(self._photo_date_edit)
 
         info_layout.addWidget(_hline())
 
-        face_hdr = QLabel("Kiválasztott arc:")
-        face_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
-        info_layout.addWidget(face_hdr)
+        self._face_hdr = QLabel()
+        self._face_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._face_hdr)
 
-        self._face_status_label = QLabel("Kattints egy arcra a képen")
+        self._face_status_label = QLabel()
         self._face_status_label.setWordWrap(True)
         self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         info_layout.addWidget(self._face_status_label)
 
-        name_row = QHBoxLayout()
-        name_row.setSpacing(4)
-
+        # Person name — teljes szélességű
         self._person_name_label = QLabel("")
         self._person_name_label.setWordWrap(True)
         self._person_name_label.setStyleSheet(
-            "font-size: 15px; font-weight: bold; color: #88ee88; padding: 4px 0px;"
+            "font-size: 14px; font-weight: bold; color: #88ee88; padding: 4px 0px;"
         )
         self._person_name_label.setVisible(False)
-        name_row.addWidget(self._person_name_label, stretch=1)
+        info_layout.addWidget(self._person_name_label)
 
-        self._rename_btn = QPushButton("✏")
-        self._rename_btn.setFixedSize(26, 26)
-        self._rename_btn.setToolTip("Személy átnevezése")
+        # Átnevezés gomb — teljes szélesség, a név alatt
+        self._rename_btn = QPushButton()
         self._rename_btn.setVisible(False)
         self._rename_btn.clicked.connect(self._start_rename)
-        name_row.addWidget(self._rename_btn)
+        info_layout.addWidget(self._rename_btn)
 
-        self._person_info_btn = QPushButton("📋")
-        self._person_info_btn.setFixedSize(26, 26)
-        self._person_info_btn.setToolTip("Személyadatok szerkesztése")
+        # Személyadatok gomb — teljes szélesség, az Átnevezés alatt
+        self._person_info_btn = QPushButton()
         self._person_info_btn.setVisible(False)
         self._person_info_btn.clicked.connect(self._on_person_info)
-        name_row.addWidget(self._person_info_btn)
+        info_layout.addWidget(self._person_info_btn)
 
-        info_layout.addLayout(name_row)
-
+        # Inline átnevezés mező
         self._rename_edit = _FocusLineEdit()
-        self._rename_edit.setPlaceholderText("Új név…")
         self._rename_edit.setVisible(False)
         self._rename_edit.returnPressed.connect(self._commit_rename)
         self._rename_edit.focus_lost.connect(self._commit_rename)
@@ -513,42 +491,51 @@ class ImageBrowserPanel(QWidget):
 
         info_layout.addWidget(_hline())
 
-        assign_hdr = QLabel("Hozzárendelés meglévő személyhez:")
-        assign_hdr.setWordWrap(True)
-        assign_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
-        info_layout.addWidget(assign_hdr)
+        self._assign_hdr = QLabel()
+        self._assign_hdr.setWordWrap(True)
+        self._assign_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._assign_hdr)
 
         self._person_combo = QComboBox()
         self._person_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         info_layout.addWidget(self._person_combo)
 
-        self._assign_btn = QPushButton("Hozzárendelés")
+        self._assign_btn = QPushButton()
         self._assign_btn.clicked.connect(self._on_assign_existing)
         self._assign_btn.setEnabled(False)
         info_layout.addWidget(self._assign_btn)
 
         info_layout.addWidget(_hline())
 
-        new_hdr = QLabel("Új személy létrehozása:")
-        new_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
-        info_layout.addWidget(new_hdr)
+        self._new_hdr = QLabel()
+        self._new_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._new_hdr)
 
         self._new_name_edit = QLineEdit()
-        self._new_name_edit.setPlaceholderText("Személy neve…")
         self._new_name_edit.returnPressed.connect(self._on_create_and_assign)
         info_layout.addWidget(self._new_name_edit)
 
-        self._create_btn = QPushButton("Létrehozás és hozzárendelés")
+        self._create_btn = QPushButton()
         self._create_btn.clicked.connect(self._on_create_and_assign)
         self._create_btn.setEnabled(False)
         info_layout.addWidget(self._create_btn)
 
         info_layout.addStretch()
-        splitter.addWidget(info_widget)
+
+        info_scroll = QScrollArea()
+        info_scroll.setWidget(info_content)
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        info_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        info_scroll.setFrameShape(QFrame.NoFrame)
+        info_scroll.setMinimumWidth(160)
+        info_scroll.setMaximumWidth(320)
+        splitter.addWidget(info_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
         root.addWidget(splitter, stretch=1)
+        self.retranslate()
 
     def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key_Left), self, self._on_prev)
@@ -558,6 +545,35 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
     # Public API
     # ──────────────────────────────────────────────────────────────────
+
+    def retranslate(self) -> None:
+        """Update all translatable UI texts (call after language change)."""
+        self._prev_btn.setText(t("ibp_prev"))
+        self._next_btn.setText(t("ibp_next"))
+        self._draw_mode_btn.setText(t("ibp_manual_mark"))
+        self._draw_mode_btn.setToolTip(t("ibp_manual_mark_tooltip"))
+        self._fs_btn.setText(t("ibp_fullscreen"))
+        self._fs_btn.setToolTip(t("ibp_fullscreen_tooltip"))
+        self._exit_fs_btn.setText(t("ibp_exit_fullscreen"))
+        self._exit_fs_btn.setToolTip(t("ibp_exit_fullscreen_tooltip"))
+        self._draw_hint.setText(t("ibp_draw_hint_add"))
+        self._image_label.setText(t("ibp_select_hint"))
+        self._folder_hdr.setText(t("ibp_folder_hdr"))
+        self._date_hdr.setText(t("ibp_date_hdr"))
+        self._photo_date_edit.setPlaceholderText(t("ibp_date_placeholder"))
+        self._photo_date_edit.setToolTip(t("ibp_date_tooltip"))
+        self._face_hdr.setText(t("ibp_face_hdr"))
+        self._face_status_label.setText(t("ibp_click_face"))
+        self._rename_btn.setText(t("ibp_rename_btn"))
+        self._rename_btn.setToolTip(t("ibp_rename_tooltip"))
+        self._person_info_btn.setText(t("ibp_person_info_btn"))
+        self._person_info_btn.setToolTip(t("ibp_person_info_tooltip"))
+        self._rename_edit.setPlaceholderText(t("ibp_rename_placeholder"))
+        self._assign_hdr.setText(t("ibp_assign_hdr"))
+        self._assign_btn.setText(t("ibp_assign_btn"))
+        self._new_hdr.setText(t("ibp_new_hdr"))
+        self._new_name_edit.setPlaceholderText(t("ibp_new_placeholder"))
+        self._create_btn.setText(t("ibp_create_btn"))
 
     def refresh(self) -> None:
         """Reload image list from DB and redisplay current (or first) image."""
@@ -574,7 +590,7 @@ class ImageBrowserPanel(QWidget):
             self._counter_label.setText("0 / 0")
             self._full_pixmap = None
             self._image_label.set_source_pixmap(None)
-            self._image_label.setText("Nincs kép az adatbázisban")
+            self._image_label.setText(t("ibp_no_images"))
             self._folder_label.setText("")
             self._clear_face_panel()
             self._update_nav_buttons()
@@ -655,7 +671,7 @@ class ImageBrowserPanel(QWidget):
             self._orig_img_bgr = None
             self._full_pixmap = None
             self._image_label.set_source_pixmap(None)
-            self._image_label.setText(f"Nem tölthető be:\n{self._current_path}")
+            self._image_label.setText(t("ibp_load_error", path=self._current_path))
             self._clear_face_panel()
             return
 
@@ -704,16 +720,13 @@ class ImageBrowserPanel(QWidget):
     # Manual face drawing
     # ──────────────────────────────────────────────────────────────────
 
-    _HINT_ADD  = "✏  Húzd az egeret az arc körül a jelöléshez — mentés automatikus"
-    _HINT_EDIT = "✏  Rajzold újra az arc körüli téglalapot — a régi helyére kerül"
-
     def _on_draw_mode_toggled(self, active: bool) -> None:
         self._image_label.set_draw_mode(active)
         self._draw_hint.setVisible(active)
         if not active:
             # User manually toggled off — cancel any ongoing edit
             self._editing_face_id = None
-            self._draw_hint.setText(self._HINT_ADD)
+            self._draw_hint.setText(t("ibp_draw_hint_add"))
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
         """Convert label-space rect to image coords; update existing or create new Face."""
@@ -730,7 +743,7 @@ class ImageBrowserPanel(QWidget):
             edited_id = self._editing_face_id
             self._update_face_bbox(edited_id, ix, iy, iw, ih)
             self._editing_face_id = None
-            self._draw_hint.setText(self._HINT_ADD)
+            self._draw_hint.setText(t("ibp_draw_hint_add"))
             self._reload_current_face_data()
             self._selected_face_id = edited_id
             self._redraw_faces()
@@ -804,13 +817,14 @@ class ImageBrowserPanel(QWidget):
         menu = QMenu(self)
 
         # Title (disabled)
-        title = menu.addAction(f"👤  {person_name}" if person_name else "👤  Ismeretlen arc")
+        title_text = person_name if person_name else t("ibp_ctx_unknown_face")
+        title = menu.addAction(f"[ {title_text} ]")
         title.setEnabled(False)
         menu.addSeparator()
 
-        edit_action = menu.addAction("✏  Bbox módosítása")
+        edit_action = menu.addAction(t("ibp_ctx_edit_bbox"))
         menu.addSeparator()
-        delete_action = menu.addAction("🗑  Törlés")
+        delete_action = menu.addAction(t("ibp_ctx_delete"))
 
         global_pos = self._image_label.mapToGlobal(QPoint(lx, ly))
         chosen = menu.exec(global_pos)
@@ -826,7 +840,7 @@ class ImageBrowserPanel(QWidget):
         self._selected_face_id = face_id
         self._redraw_faces()
         self._show_face_info(face_id)
-        self._draw_hint.setText(self._HINT_EDIT)
+        self._draw_hint.setText(t("ibp_draw_hint_edit"))
         self._draw_mode_btn.setChecked(True)   # triggers _on_draw_mode_toggled
 
     def _delete_face(self, face_id: int) -> None:
@@ -971,13 +985,13 @@ class ImageBrowserPanel(QWidget):
         self._assign_btn.setEnabled(True)
         self._create_btn.setEnabled(True)
         if person_name:
-            self._face_status_label.setText("Beazonosított személy:")
+            self._face_status_label.setText(t("ibp_identified"))
             self._person_name_label.setText(person_name)
             self._person_name_label.setVisible(True)
             self._rename_btn.setVisible(True)
             self._person_info_btn.setVisible(True)
         else:
-            self._face_status_label.setText("Ez az arc nincs kategorizálva")
+            self._face_status_label.setText(t("ibp_not_identified"))
             self._person_name_label.setVisible(False)
             self._rename_btn.setVisible(False)
             self._person_info_btn.setVisible(False)
@@ -986,12 +1000,12 @@ class ImageBrowserPanel(QWidget):
     def _clear_face_panel(self) -> None:
         self._cancel_rename()
         if self._detection_done and not self._face_data:
-            self._face_status_label.setText("Nincs felismert arc ezen a képen")
+            self._face_status_label.setText(t("ibp_no_face_detected"))
             self._face_status_label.setStyleSheet(
                 "color: #ffaa44; font-size: 11px; font-style: italic;"
             )
         else:
-            self._face_status_label.setText("Kattints egy arcra a képen")
+            self._face_status_label.setText(t("ibp_click_face"))
             self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         self._person_name_label.setVisible(False)
         self._rename_btn.setVisible(False)
@@ -1161,7 +1175,7 @@ class ImageBrowserPanel(QWidget):
             return
         name = self._new_name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "Üres név", "A személynév nem lehet üres.")
+            QMessageBox.warning(self, t("ibp_empty_name_title"), t("ibp_empty_name_msg"))
             return
         with session_scope() as session:
             person = Person(name=name, is_auto_named=False)

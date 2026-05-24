@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
 
     def _build_toolbar(self) -> None:
-        tb = QToolBar("Main")
+        tb = QToolBar(t("main_toolbar"))
         tb.setMovable(False)
         self.addToolBar(tb)
 
@@ -152,10 +152,7 @@ class MainWindow(QMainWindow):
 
         self._force_rescan_btn = QPushButton()
         self._force_rescan_btn.clicked.connect(self._on_force_rescan)
-        self._force_rescan_btn.setToolTip(
-            "Törli az összes arcot és újra futtatja a detektálást / "
-            "Deletes all faces and re-runs detection"
-        )
+        self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
         tb.addWidget(self._force_rescan_btn)
 
         self._no_face_btn = QPushButton()
@@ -165,10 +162,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         self._suggestions_btn = QPushButton()
-        self._suggestions_btn.setToolTip(
-            "Ismeretlen személyek összevetése az elnevezett személyekkel / "
-            "Match unknown people against named people"
-        )
+        self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._suggestions_btn.clicked.connect(self._on_show_suggestions)
         tb.addWidget(self._suggestions_btn)
 
@@ -182,20 +176,18 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        self._collage_btn = QPushButton("🖼 Kollázs import…")
+        self._collage_btn = QPushButton()
         self._collage_btn.clicked.connect(self._on_import_collage)
-        self._collage_btn.setToolTip(
-            "Picasa kollázs (.cxf/.cfx) beolvasása / Import Picasa collage file"
-        )
+        self._collage_btn.setToolTip(t("collage_import_tip"))
         tb.addWidget(self._collage_btn)
 
-        self._collage_html_btn = QPushButton("🌐 Kollázs HTML export")
+        self._collage_html_btn = QPushButton()
         self._collage_html_btn.clicked.connect(self._on_export_collage_html)
         tb.addWidget(self._collage_html_btn)
 
         tb.addSeparator()
 
-        self._update_btn = QPushButton("🔄 Frissítés keresése…")
+        self._update_btn = QPushButton()
         self._update_btn.clicked.connect(self._on_check_update_manual)
         tb.addWidget(self._update_btn)
 
@@ -248,16 +240,16 @@ class MainWindow(QMainWindow):
         splitter.setSizes([320, 300, 660])
 
         face_layout.addWidget(splitter)
-        self._tabs.addTab(face_widget, "👤 Arcfelismerés")
+        self._tabs.addTab(face_widget, t("tab_face_recognition"))
 
         # --- Tab 1: Képböngésző ---
         self._image_browser = ImageBrowserPanel(config=self._config)
         self._image_browser.person_data_changed.connect(self._refresh_persons)
-        self._tabs.addTab(self._image_browser, "🗂 Képböngésző")
+        self._tabs.addTab(self._image_browser, t("tab_image_browser"))
 
         # --- Tab 2: Kollázs nézet ---
         self._collage_panel = CollagePanel()
-        self._tabs.addTab(self._collage_panel, "🖼 Kollázs")
+        self._tabs.addTab(self._collage_panel, t("tab_collage"))
 
         self.setCentralWidget(self._tabs)
 
@@ -294,11 +286,9 @@ class MainWindow(QMainWindow):
         self._reassign_btn.clicked.connect(self._on_reassign_face)
         layout.addWidget(self._reassign_btn)
 
-        self._person_info_btn = QPushButton("👤 Személyadatok")
+        self._person_info_btn = QPushButton()
         self._person_info_btn.setEnabled(False)
-        self._person_info_btn.setToolTip(
-            "Vezetéknév, keresztnév, születési adatok és megjegyzés szerkesztése"
-        )
+        self._person_info_btn.setToolTip(t("person_info_tip"))
         self._person_info_btn.clicked.connect(self._on_person_info)
         layout.addWidget(self._person_info_btn)
 
@@ -338,18 +328,32 @@ class MainWindow(QMainWindow):
             self._folder_label.setText(f"  {t('no_folder')}")
         self._scan_btn.setText(t("scan_index"))
         self._stop_btn.setText(t("stop"))
-        self._export_btn.setText("📤  Export")
+        self._export_btn.setText(t("tb_export"))
         self._force_rescan_btn.setText(t("force_rescan"))
         self._no_face_btn.setText(t("view_no_face"))
         self._suggestions_btn.setText(t("suggestions_btn"))
+        self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._settings_btn.setText(t("settings"))
+        self._collage_btn.setText(t("tb_collage_import"))
+        self._collage_btn.setToolTip(t("collage_import_tip"))
+        self._collage_html_btn.setText(t("tb_collage_html_export"))
+        if not getattr(self, "_pending_release", None):
+            self._update_btn.setText(t("tb_update_check"))
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
         self._delete_person_btn.setText(t("delete_person"))
         self._remove_face_btn.setText(t("remove_face"))
         self._reassign_btn.setText(t("reassign_face"))
+        self._person_info_btn.setText(t("person_info"))
+        self._person_info_btn.setToolTip(t("person_info_tip"))
+        self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
+        self._tabs.setTabText(0, t("tab_face_recognition"))
+        self._tabs.setTabText(1, t("tab_image_browser"))
+        self._tabs.setTabText(2, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
+        if hasattr(self, "_image_browser"):
+            self._image_browser.retranslate()
 
     # ------------------------------------------------------------------
     # Logging
@@ -948,9 +952,9 @@ class MainWindow(QMainWindow):
         """Import one or more Picasa collage files (.cxf / .cfx)."""
         files, _ = QFileDialog.getOpenFileNames(
             self,
-            "Kollázs fájl megnyitása / Open collage file",
+            t("open_collage_file"),
             _last_dir("paths/last_collage", str(Path.home())),
-            "Picasa kollázs (*.cxf *.cfx);;Minden fájl (*)",
+            t("picasa_collage_filter"),
         )
         if not files:
             return
@@ -959,8 +963,7 @@ class MainWindow(QMainWindow):
         # Optionally ask for an extra search root to resolve Windows paths
         search_root = QFileDialog.getExistingDirectory(
             self,
-            "Keresési gyökérmappa (opcionális) — hagyd üresen, ha nem kell\n"
-            "Extra search root for resolving Windows paths (optional)",
+            t("extra_search_root"),
             _last_dir("paths/last_search_root", str(Path.home())),
         )
         if search_root:
@@ -989,10 +992,10 @@ class MainWindow(QMainWindow):
         self._collage_panel.refresh_collage_list()
         self._tabs.setCurrentIndex(2)
 
-        msg = f"{imported} kollázs importálva."
+        msg = t("collages_imported", n=imported)
         if errors:
-            msg += "\n\nHibák:\n" + "\n".join(errors)
-            QMessageBox.warning(self, "Kollázs import", msg)
+            msg += f"\n\n{t('import_errors')}\n" + "\n".join(errors)
+            QMessageBox.warning(self, t("collage_import_title"), msg)
         else:
             self._status_label.setText(msg)
             log.info(msg)
@@ -1002,7 +1005,7 @@ class MainWindow(QMainWindow):
         """Export all collages to a static HTML gallery."""
         target = QFileDialog.getExistingDirectory(
             self,
-            "HTML export mappa / Select export folder",
+            t("html_export_folder"),
             _last_dir("paths/last_export", str(Path.home())),
         )
         if not target:
@@ -1014,12 +1017,12 @@ class MainWindow(QMainWindow):
                 from app.services.export_service import ExportService
                 out = ExportService(session).export_collage_html(target)
             QMessageBox.information(
-                self, "Kollázs HTML export",
-                f"Statikus weboldal elkészült:\n{out}"
+                self, t("collage_html_export"),
+                t("static_site_ready", path=out)
             )
         except Exception as exc:
             log.exception("Collage HTML export failed")
-            QMessageBox.critical(self, "Export hiba", str(exc))
+            QMessageBox.critical(self, t("export_error"), str(exc))
 
     # ------------------------------------------------------------------
     # Export
@@ -1103,17 +1106,15 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_update_found(self, release) -> None:
         self._pending_release = release
-        self._update_btn.setText(f"🆕 Frissítés: v{release.version}")
+        self._update_btn.setText(t("update_available_short", version=release.version))
         self._update_btn.setStyleSheet(
             "QPushButton { color: #F9E2AF; font-weight: bold; "
             "background-color: #3D3020; border-color: #F9E2AF; }"
         )
-        self._status_label.setText(
-            f"Új verzió elérhető: v{release.version}  —  kattints a frissítésre"
-        )
+        self._status_label.setText(t("update_status_found", version=release.version))
         self._notify(
-            "Face-Local frissítés",
-            f"Új verzió elérhető: v{release.version}. Kattints a frissítéshez.",
+            t("update_notification_title"),
+            t("update_notification_msg", version=release.version),
         )
 
     @Slot()
@@ -1122,32 +1123,25 @@ class MainWindow(QMainWindow):
         from app.services.update_service import fetch_latest_release, is_newer
 
         self._update_btn.setEnabled(False)
-        self._update_btn.setText("⏳ Ellenőrzés…")
+        self._update_btn.setText(t("checking"))
         QApplication.processEvents()
 
         release = fetch_latest_release()
         self._update_btn.setEnabled(True)
 
         if release is None:
-            QMessageBox.warning(
-                self, "Frissítés",
-                "Nem sikerült kapcsolódni a GitHub-hoz.\n"
-                "Ellenőrizd az internet kapcsolatot."
-            )
-            self._update_btn.setText("🔄 Frissítés keresése…")
+            QMessageBox.warning(self, t("warning"), t("update_connection_failed"))
+            self._update_btn.setText(t("tb_update_check"))
             return
 
         if not is_newer(release.version, __version__):
             from app import __version__ as cv
-            QMessageBox.information(
-                self, "Frissítés",
-                f"Az alkalmazás naprakész.\nJelenlegi verzió: v{cv}"
-            )
-            self._update_btn.setText("✓ Naprakész")
+            QMessageBox.information(self, t("up_to_date"), t("app_is_current", version=cv))
+            self._update_btn.setText(t("up_to_date"))
             return
 
         self._pending_release = release
-        self._update_btn.setText(f"🆕 Frissítés: v{release.version}")
+        self._update_btn.setText(t("update_available_short", version=release.version))
         self._update_btn.setStyleSheet(
             "QPushButton { color: #F9E2AF; font-weight: bold; "
             "background-color: #3D3020; border-color: #F9E2AF; }"

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Face
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -92,10 +93,14 @@ class FaceThumbnail(QLabel):
         self.setAlignment(Qt.AlignCenter)
         person_name = face.person.name if face.person else "—"
         self.setToolTip(
-            f"<b>{person_name}</b><br>"
-            f"Face #{face.id} · confidence {face.confidence:.2f}<br>"
-            f"Backend: {face.detector_backend}<br>"
-            f"File: {Path(face.image.file_path).name if face.image else '?'}"
+            t(
+                "face_tooltip",
+                person=person_name,
+                id=face.id,
+                confidence=face.confidence,
+                backend=face.detector_backend,
+                file=Path(face.image.file_path).name if face.image else "?",
+            )
         )
         self.setStyleSheet(
             "QLabel { border: 1px solid #555; border-radius: 4px; }"
@@ -151,7 +156,7 @@ class ClusterPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
 
-        self._header = QLabel("Select a person from the sidebar")
+        self._header = QLabel(t("select_person_sidebar"))
         self._header.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._header)
 
@@ -170,9 +175,7 @@ class ClusterPanel(QWidget):
     def show_person(self, person_name: str, faces: list[Face]) -> None:
         """Populate the grid with *faces* belonging to *person_name*."""
         self._clear_grid()
-        self._header.setText(
-            f"{person_name}  —  {len(faces)} face(s)"
-        )
+        self._header.setText(t("face_count_header", name=person_name, n=len(faces)))
 
         for i, face in enumerate(faces):
             row, col = divmod(i, _THUMB_COLS)
@@ -191,7 +194,7 @@ class ClusterPanel(QWidget):
 
     def clear(self) -> None:
         self._clear_grid()
-        self._header.setText("Select a person from the sidebar")
+        self._header.setText(t("select_person_sidebar"))
 
     # ------------------------------------------------------------------
 

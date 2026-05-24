@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from app.ui.i18n import t
 
 
 class RenameDialog(QDialog):
@@ -23,12 +24,12 @@ class RenameDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Rename Person")
+        self.setWindowTitle(t("rename_person"))
         self.setMinimumWidth(320)
 
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel(f"Rename  <b>{current_name}</b>  to:"))
+        layout.addWidget(QLabel(t("rename_person_to", name=current_name)))
 
         self._input = QLineEdit(current_name)
         self._input.selectAll()

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from app.db.database import session_scope
 from app.db.models import Collage, CollageNode
 from app.services.collage_service import CollageService
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class _FaceOverlayItem(QGraphicsRectItem):
         pen = QPen(_FACE_COLOR, 1.5)
         self.setPen(pen)
         self.setBrush(QBrush(Qt.transparent))
-        self.setToolTip(self._person_name or "Ismeretlen / Unknown")
+        self.setToolTip(self._person_name or t("unknown"))
         self.setAcceptHoverEvents(True)
 
 
@@ -184,10 +185,10 @@ class CollagePanel(QWidget):
         self._collage_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._collage_combo.setMinimumWidth(200)
         self._collage_combo.currentIndexChanged.connect(self._on_combo_changed)
-        toolbar.addWidget(QLabel("Kollázs:"))
+        toolbar.addWidget(QLabel(t("collage_label")))
         toolbar.addWidget(self._collage_combo)
 
-        self._fit_btn = QPushButton("⊡ Illeszkedés")
+        self._fit_btn = QPushButton(f"⊡ {t('fit')}")
         self._fit_btn.clicked.connect(self._view.fit)
         self._fit_btn.setFixedWidth(110)
         toolbar.addWidget(self._fit_btn)
@@ -202,14 +203,14 @@ class CollagePanel(QWidget):
         self._zoom_out_btn.setFixedWidth(46)
         toolbar.addWidget(self._zoom_out_btn)
 
-        self._faces_btn = QPushButton("👤 Arcok")
+        self._faces_btn = QPushButton(f"👤 {t('faces')}")
         self._faces_btn.setCheckable(True)
         self._faces_btn.setChecked(True)
         self._faces_btn.clicked.connect(self._reload_current)
         self._faces_btn.setFixedWidth(90)
         toolbar.addWidget(self._faces_btn)
 
-        self._export_btn = QPushButton("📤 Export")
+        self._export_btn = QPushButton(f"📤 {t('export')}")
         self._export_btn.clicked.connect(self._on_export)
         self._export_btn.setFixedWidth(90)
         toolbar.addWidget(self._export_btn)
@@ -218,7 +219,7 @@ class CollagePanel(QWidget):
         layout.addWidget(self._view, 1)
 
         # --- info bar ---
-        self._info_label = QLabel("Válassz kollázst / Select a collage")
+        self._info_label = QLabel(t("select_collage"))
         self._info_label.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self._info_label)
 
@@ -237,7 +238,7 @@ class CollagePanel(QWidget):
             collages = svc.list_collages()
             items = []
             for c in collages:
-                label = c.album_title or f"Kollázs #{c.id}"
+                label = c.album_title or f"{t('tab_collage')} #{c.id}"
                 if c.album_date:
                     label += f"  ({c.album_date})"
                 items.append((label, c.id))
@@ -292,7 +293,7 @@ class CollagePanel(QWidget):
             svc = CollageService(session)
             collage = svc.get_collage(collage_id)
             if collage is None:
-                self._info_label.setText("Kollázs nem található.")
+                self._info_label.setText(t("collage_not_found"))
                 return
 
             # Determine canvas size
@@ -332,9 +333,9 @@ class CollagePanel(QWidget):
             face_data = svc.projected_faces(collage, render_w, render_h) if draw_faces else []
 
             info_txt = (
-                f"{collage.album_title or '(cím nélkül)'}  |  "
+                f"{collage.album_title or t('untitled')}  |  "
                 f"{collage.album_date or ''}  |  "
-                f"{len(collage.nodes)} elem"
+                f"{t('items_count', n=len(collage.nodes))}"
             )
 
         # Build scene outside of session
@@ -399,18 +400,18 @@ class CollagePanel(QWidget):
         if nd.get("src_raw"):
             from pathlib import Path as _P
             src_name = _P(nd["src_raw"].replace("\\", "/")).name
-        lines.append(f"<b>Fájlnév:</b> {src_name or '—'}")
+        lines.append(f"<b>{t('filename')}:</b> {src_name or '—'}")
         if nd.get("src_resolved"):
-            lines.append(f"<b>Elérési út:</b> {nd['src_resolved']}")
+            lines.append(f"<b>{t('path')}:</b> {nd['src_resolved']}")
         elif nd.get("src_raw"):
-            lines.append(f"<b>Elérési út (raw):</b> {nd['src_raw']}")
+            lines.append(f"<b>{t('raw_path')}:</b> {nd['src_raw']}")
         if nd.get("src_missing"):
-            lines.append("<b style='color:#e57373;'>⚠ Forrásfájl nem található!</b>")
+            lines.append(f"<b style='color:#e57373;'>{t('source_file_missing')}</b>")
         lines.append(f"<b>Node UID:</b> {nd.get('node_uid') or '—'}")
         if person_names:
-            lines.append(f"<b>Személyek:</b> {', '.join(person_names)}")
+            lines.append(f"<b>{t('persons')}:</b> {', '.join(person_names)}")
         else:
-            lines.append("<b>Személyek:</b> (nincs felismert arc)")
+            lines.append(f"<b>{t('persons')}:</b> {t('no_recognized_face')}")
 
         from app.ui.dialogs.collage_node_dialog import CollageNodeDialog
         dlg = CollageNodeDialog(node_id=node_id, info_lines=lines, parent=self)
@@ -424,14 +425,14 @@ class CollagePanel(QWidget):
     @Slot()
     def _on_export(self) -> None:
         if self._current_collage_id is None:
-            QMessageBox.warning(self, "Export", "Nincs kiválasztott kollázs.")
+            QMessageBox.warning(self, t("export"), t("no_collage_selected"))
             return
 
         from PySide6.QtCore import QSettings
         settings = QSettings("FaceLocal", "FaceLocal")
         start_dir = settings.value("paths/last_export", "", type=str)
         target = QFileDialog.getExistingDirectory(
-            self, "Exportálási mappa kiválasztása", start_dir
+            self, t("select_export_folder"), start_dir
         )
         if not target:
             return
@@ -448,12 +449,12 @@ class CollagePanel(QWidget):
                 out = svc.export_annotated_collage(collage, target)
 
             QMessageBox.information(
-                self, "Export",
-                f"Annotált kollázs exportálva:\n{out}"
+                self, t("export"),
+                t("collage_exported", path=out)
             )
         except Exception as exc:
             log.exception("Collage export failed")
-            QMessageBox.critical(self, "Export hiba", str(exc))
+            QMessageBox.critical(self, t("export_error"), str(exc))
 
 
 # ---------------------------------------------------------------------------

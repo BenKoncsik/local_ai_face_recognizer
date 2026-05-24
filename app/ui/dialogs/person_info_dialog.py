@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Person
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class PersonInfoDialog(QDialog):
 
     def __init__(self, person: Person, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Személyadatok — {person.name}")
+        self.setWindowTitle(t("person_info_title", name=person.name))
         self.setMinimumWidth(400)
 
         layout = QVBoxLayout(self)
@@ -43,53 +44,53 @@ class PersonInfoDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         self._last_name = QLineEdit(person.last_name or "")
-        self._last_name.setPlaceholderText("pl. Kovács")
-        form.addRow("Vezetéknév:", self._last_name)
+        self._last_name.setPlaceholderText(t("example_last_name"))
+        form.addRow(t("last_name"), self._last_name)
 
         self._first_name = QLineEdit(person.first_name or "")
-        self._first_name.setPlaceholderText("pl. János")
-        form.addRow("Keresztnév:", self._first_name)
+        self._first_name.setPlaceholderText(t("example_first_name"))
+        form.addRow(t("first_name"), self._first_name)
 
         self._second_name = QLineEdit(person.second_name or "")
-        self._second_name.setPlaceholderText("pl. István  (opcionális)")
-        form.addRow("Keresztnév 2:", self._second_name)
+        self._second_name.setPlaceholderText(t("example_second_name"))
+        form.addRow(t("second_name"), self._second_name)
 
         self._nickname = QLineEdit(person.nickname or "")
-        self._nickname.setPlaceholderText("pl. Jani  (opcionális)")
-        form.addRow("Becenév:", self._nickname)
+        self._nickname.setPlaceholderText(t("example_nickname"))
+        form.addRow(t("nickname"), self._nickname)
 
         self._married_name = QLineEdit(person.married_name or "")
-        self._married_name.setPlaceholderText("pl. Kovács Jánosné  (opcionális)")
-        form.addRow("Férjezett név:", self._married_name)
+        self._married_name.setPlaceholderText(t("example_married_name"))
+        form.addRow(t("married_name"), self._married_name)
 
         self._birth_place = QLineEdit(person.birth_place or "")
-        self._birth_place.setPlaceholderText("pl. Budapest")
-        form.addRow("Születési hely:", self._birth_place)
+        self._birth_place.setPlaceholderText(t("example_birth_place"))
+        form.addRow(t("birth_place"), self._birth_place)
 
         self._birth_date = QLineEdit(person.birth_date or "")
-        self._birth_date.setPlaceholderText("pl. 1954  vagy  1954.03.12  vagy  1930-as évek")
-        form.addRow("Születési idő:", self._birth_date)
+        self._birth_date.setPlaceholderText(t("example_birth_date"))
+        form.addRow(t("birth_date"), self._birth_date)
 
         separator = QLabel(" ")
         separator.setFixedHeight(4)
         form.addRow(separator)
 
         self._death_date = QLineEdit(person.death_date or "")
-        self._death_date.setPlaceholderText("pl. 2001  vagy  2001.11.23")
-        form.addRow("Halálozás ideje:", self._death_date)
+        self._death_date.setPlaceholderText(t("example_death_date"))
+        form.addRow(t("death_date"), self._death_date)
 
         self._death_place = QLineEdit(person.death_place or "")
-        self._death_place.setPlaceholderText("pl. Debrecen")
-        form.addRow("Halálozás helye:", self._death_place)
+        self._death_place.setPlaceholderText(t("example_death_place"))
+        form.addRow(t("death_place"), self._death_place)
 
         layout.addLayout(form)
 
-        notes_label = QLabel("Egyéb megjegyzés:")
+        notes_label = QLabel(t("notes"))
         notes_label.setStyleSheet("margin-top: 8px;")
         layout.addWidget(notes_label)
 
         self._notes = QTextEdit(person.notes or "")
-        self._notes.setPlaceholderText("Szabad szöveges megjegyzések…")
+        self._notes.setPlaceholderText(t("free_notes"))
         self._notes.setMaximumHeight(100)
         layout.addWidget(self._notes)
 

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Person
+from app.ui.i18n import t
 
 
 class MergeDialog(QDialog):
@@ -26,13 +27,13 @@ class MergeDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Merge Into …")
+        self.setWindowTitle(t("merge_into"))
         self.setMinimumWidth(380)
 
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                f"Merge  <b>{source_person.name}</b>  into:"
+                t("merge_source_into", name=source_person.name)
             )
         )
 
@@ -42,13 +43,13 @@ class MergeDialog(QDialog):
                 continue
             face_count = len(person.faces)
             self._combo.addItem(
-                f"{person.name}  ({face_count} faces)", userData=person.id
+                t("merge_faces_count", name=person.name, n=face_count), userData=person.id
             )
 
         layout.addWidget(self._combo)
         layout.addWidget(
             QLabel(
-                "<small>The source person will be deleted after merging.</small>"
+                f"<small>{t('merge_source_deleted')}</small>"
             )
         )
 

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from app import __version__
 from app.services.update_service import ReleaseInfo, apply_update, download_asset
+from app.ui.i18n import t
 
 
 class _DownloadThread(QThread):
@@ -48,7 +49,7 @@ class UpdateDialog(QDialog):
         self._downloaded_path: Optional[Path] = None
         self._thread: Optional[_DownloadThread] = None
 
-        self.setWindowTitle("Frissítés elérhető / Update available")
+        self.setWindowTitle(t("update_available_short", version=release.version))
         self.setMinimumWidth(460)
         self._build_ui()
 
@@ -58,10 +59,10 @@ class UpdateDialog(QDialog):
 
         # --- Version info ---
         info = QLabel(
-            f"<b>Új verzió elérhető / New version available</b><br><br>"
-            f"Jelenlegi / Current: &nbsp;<code>{__version__}</code><br>"
-            f"Legújabb / Latest: &nbsp;&nbsp;<code>{self._release.version}</code><br><br>"
-            f"Csomag / Package: <code>{self._release.asset_name}</code>"
+            f"<b>{t('update_available')}</b><br><br>"
+            f"{t('current')}: &nbsp;<code>{__version__}</code><br>"
+            f"{t('latest')}: &nbsp;&nbsp;<code>{self._release.version}</code><br><br>"
+            f"{t('package')}: <code>{self._release.asset_name}</code>"
         )
         info.setTextFormat(Qt.RichText)
         info.setWordWrap(True)
@@ -89,21 +90,21 @@ class UpdateDialog(QDialog):
         # --- Buttons ---
         btn_row = QHBoxLayout()
 
-        self._download_btn = QPushButton("⬇  Letöltés és telepítés / Download & Install")
+        self._download_btn = QPushButton(f"⬇  {t('download_install')}")
         self._download_btn.setDefault(True)
         self._download_btn.clicked.connect(self._on_download)
         btn_row.addWidget(self._download_btn)
 
         is_macos_dmg = sys.platform == "darwin"
-        apply_label = ("▶  Frissítés és újraindítás / Update & Restart"
+        apply_label = (f"▶  {t('update_restart')}"
                        if is_macos_dmg else
-                       "▶  Telepítő megnyitása / Open installer")
+                       f"▶  {t('open_installer')}")
         self._apply_btn = QPushButton(apply_label)
         self._apply_btn.setEnabled(False)
         self._apply_btn.clicked.connect(self._on_apply)
         btn_row.addWidget(self._apply_btn)
 
-        close_btn = QPushButton("Kihagyás / Skip")
+        close_btn = QPushButton(t("skip"))
         close_btn.clicked.connect(self.reject)
         btn_row.addWidget(close_btn)
 
@@ -115,7 +116,7 @@ class UpdateDialog(QDialog):
         self._download_btn.setEnabled(False)
         self._progress.setVisible(True)
         self._status_label.setVisible(True)
-        self._status_label.setText("Letöltés… / Downloading…")
+        self._status_label.setText(t("downloading"))
 
         self._thread = _DownloadThread(self._release)
         self._thread.progress.connect(self._on_progress)
@@ -139,16 +140,16 @@ class UpdateDialog(QDialog):
         self._apply_btn.setEnabled(True)
 
         if sys.platform == "darwin":
-            self._status_label.setText("✓ Letöltve — frissítés és újraindítás… / Downloaded — updating & restarting…")
+            self._status_label.setText(f"✓ {t('downloaded_updating')}")
             self._status_label.setStyleSheet("color: #4caf50; font-size: 11px;")
             QApplication.processEvents()
             self._on_apply()
         else:
-            self._status_label.setText("✓ Letöltve / Downloaded — kattints a telepítéshez")
+            self._status_label.setText(f"✓ {t('downloaded_click_install')}")
             self._status_label.setStyleSheet("color: #4caf50; font-size: 11px;")
 
     def _on_error(self, msg: str) -> None:
-        self._status_label.setText(f"✗ Hiba / Error: {msg}")
+        self._status_label.setText(f"✗ {t('error')}: {msg}")
         self._status_label.setStyleSheet("color: #f44336; font-size: 11px;")
         self._download_btn.setEnabled(True)
 

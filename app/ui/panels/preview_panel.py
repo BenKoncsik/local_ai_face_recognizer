@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Face
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ class _ZoomDialog(QDialog):
 
     def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Nagyítás / Zoom")
+        self.setWindowTitle(t("zoom"))
         screen = parent.screen().availableGeometry() if parent else pixmap.rect()
         self.resize(min(pixmap.width() + 40, screen.width() - 60),
                     min(pixmap.height() + 80, screen.height() - 80))
@@ -153,7 +154,7 @@ class _ZoomDialog(QDialog):
         scroll.setWidgetResizable(False)
         layout.addWidget(scroll)
 
-        close_btn = QPushButton("Bezárás / Close")
+        close_btn = QPushButton(t("close"))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignRight)
 
@@ -344,7 +345,7 @@ class PreviewPanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
 
         self._image_label = _FaceImageLabel()
-        self._image_label.setText("Click a face thumbnail to preview")
+        self._image_label.setText(t("preview_empty"))
         self._image_label.setAlignment(Qt.AlignCenter)
         self._image_label.setMinimumSize(300, 200)
         self._image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -352,9 +353,7 @@ class PreviewPanel(QWidget):
             "QLabel { background: #222; border: 1px solid #444; }"
         )
         self._image_label.setToolTip(
-            "Kattints egy arcra a kijelöléséhez / Click a face to select it\n"
-            "Jobb klikk a menühöz / Right-click for options\n"
-            "Üres területen kattints a nagyításhoz / Click empty area to zoom"
+            t("preview_tip")
         )
         self._image_label.face_clicked.connect(self._on_face_clicked)
         self._image_label.canvas_clicked.connect(self._open_zoom)
@@ -362,7 +361,7 @@ class PreviewPanel(QWidget):
         self._image_label.rect_drawn.connect(self._on_rect_drawn)
         layout.addWidget(self._image_label)
 
-        self._draw_hint = QLabel("Húzd az egeret az arc körül a kijelöléshez")
+        self._draw_hint = QLabel(t("draw_face_hint"))
         self._draw_hint.setAlignment(Qt.AlignCenter)
         self._draw_hint.setStyleSheet(
             "color: #ffcc00; font-size: 11px; background: #2a2000; padding: 3px;"
@@ -376,29 +375,29 @@ class PreviewPanel(QWidget):
         layout.addWidget(self._path_label)
 
         btn_row = QHBoxLayout()
-        self._open_btn = QPushButton("Open in File Manager")
+        self._open_btn = QPushButton(t("open_file_manager"))
         self._open_btn.setEnabled(False)
         self._open_btn.clicked.connect(self._open_in_filemanager)
         btn_row.addWidget(self._open_btn)
-        self._zoom_btn = QPushButton("🔍 Nagyítás / Zoom")
+        self._zoom_btn = QPushButton(f"🔍 {t('zoom')}")
         self._zoom_btn.setEnabled(False)
         self._zoom_btn.clicked.connect(self._open_zoom)
         btn_row.addWidget(self._zoom_btn)
-        self._draw_btn = QPushButton("✏ Kijelölés")
+        self._draw_btn = QPushButton(f"✏ {t('selection')}")
         self._draw_btn.setCheckable(True)
         self._draw_btn.setEnabled(False)
-        self._draw_btn.setToolTip("Új arc kijelölése a képen")
+        self._draw_btn.setToolTip(t("draw_face_hint"))
         self._draw_btn.toggled.connect(self._on_draw_mode_toggled)
         btn_row.addWidget(self._draw_btn)
-        self._edit_btn = QPushButton("Kijelölés módosítása")
+        self._edit_btn = QPushButton(t("modify_selection"))
         self._edit_btn.setEnabled(False)
         self._edit_btn.clicked.connect(self._start_selected_face_edit)
         btn_row.addWidget(self._edit_btn)
-        self._assign_btn = QPushButton("Személyhez adás…")
+        self._assign_btn = QPushButton(t("assign_to_person"))
         self._assign_btn.setEnabled(False)
         self._assign_btn.clicked.connect(self._assign_selected_face)
         btn_row.addWidget(self._assign_btn)
-        self._delete_btn = QPushButton("Kijelölés törlése")
+        self._delete_btn = QPushButton(t("delete_selection"))
         self._delete_btn.setEnabled(False)
         self._delete_btn.clicked.connect(self._delete_selected_face)
         btn_row.addWidget(self._delete_btn)
@@ -412,7 +411,7 @@ class PreviewPanel(QWidget):
     def show_face(self, face: Face) -> None:
         """Load and display the image for *face*, highlighting all faces."""
         if face.image is None:
-            self._image_label.setText("(no image reference)")
+            self._image_label.setText(t("no_recognized_face"))
             return
 
         img_path = face.image.file_path
@@ -422,7 +421,7 @@ class PreviewPanel(QWidget):
         from app.utils.image_utils import load_image_bgr
         img_bgr = load_image_bgr(img_path)
         if img_bgr is None:
-            self._image_label.setText(f"Cannot load:\n{img_path}")
+            self._image_label.setText(t("cannot_load", path=img_path))
             return
 
         self._orig_img_bgr = img_bgr
@@ -470,7 +469,7 @@ class PreviewPanel(QWidget):
         self._image_label.set_face_data([], 0, 0)
         self._image_label.set_draw_mode(False)
         self._image_label.clear()
-        self._image_label.setText("Click a face thumbnail to preview")
+        self._image_label.setText(t("preview_empty"))
         self._path_label.setText("")
         self._open_btn.setEnabled(False)
         self._zoom_btn.setEnabled(False)
@@ -521,13 +520,13 @@ class PreviewPanel(QWidget):
 
         menu = QMenu(self)
 
-        title = menu.addAction(f"👤  {person_name}" if person_name else "👤  Ismeretlen arc")
+        title = menu.addAction(f"👤  {person_name}" if person_name else f"👤  {t('unknown_face')}")
         title.setEnabled(False)
         menu.addSeparator()
 
-        assign_action = menu.addAction("👤  Személyhez adás…")
-        edit_action = menu.addAction("✏  Kijelölés módosítása")
-        delete_action = menu.addAction("🗑  Kijelölés törlése")
+        assign_action = menu.addAction(f"👤  {t('assign_to_person')}")
+        edit_action = menu.addAction(f"✏  {t('modify_selection')}")
+        delete_action = menu.addAction(f"🗑  {t('delete_selection')}")
 
         chosen = menu.exec(QPoint(gx, gy))
 
@@ -552,7 +551,7 @@ class PreviewPanel(QWidget):
         self._draw_hint.setVisible(active)
         if not active:
             self._editing_face_id = None
-            self._draw_hint.setText("Húzd az egeret az arc körül a kijelöléshez")
+            self._draw_hint.setText(t("draw_face_hint"))
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
         coords = self._label_rect_to_image(label_rect)
@@ -562,7 +561,7 @@ class PreviewPanel(QWidget):
         if self._editing_face_id is not None:
             face_id = self._editing_face_id
             self._editing_face_id = None
-            self._draw_hint.setText("Húzd az egeret az arc körül a kijelöléshez")
+            self._draw_hint.setText(t("draw_face_hint"))
             self._selected_face_id = face_id
             self.face_bbox_update_requested.emit(face_id, x, y, w, h)
         else:
@@ -606,7 +605,7 @@ class PreviewPanel(QWidget):
         self._selected_face_id = face_id
         self._render()
         self._update_action_buttons()
-        self._draw_hint.setText("Rajzold újra az arc körüli kijelölést")
+        self._draw_hint.setText(t("redraw_face_hint"))
         self._draw_btn.setChecked(True)
 
     def _assign_selected_face(self) -> None:

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Person
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -241,7 +242,7 @@ class SidebarPanel(QWidget):
         layout.setSpacing(6)
 
         # --- Face thumbnail grid at top ---
-        face_box = QGroupBox("All Faces")
+        face_box = QGroupBox(t("all_faces"))
         face_box_layout = QVBoxLayout(face_box)
         face_box_layout.setContentsMargins(4, 4, 4, 4)
 
@@ -257,11 +258,11 @@ class SidebarPanel(QWidget):
         layout.addWidget(face_box, stretch=1)
 
         # --- Searchable person list below ---
-        search_box = QGroupBox("People")
+        search_box = QGroupBox(t("people_label"))
         search_layout = QVBoxLayout(search_box)
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("Search person name …")
+        self._search_input.setPlaceholderText(t("search_placeholder"))
         self._search_input.textChanged.connect(self._on_search_changed)
         search_layout.addWidget(self._search_input)
 
@@ -270,14 +271,14 @@ class SidebarPanel(QWidget):
         self._person_list.currentItemChanged.connect(self._on_selection_changed)
         search_layout.addWidget(self._person_list)
 
-        self._count_label = QLabel("0 persons")
+        self._count_label = QLabel(t("n_persons", n=0))
         self._count_label.setAlignment(Qt.AlignCenter)
         search_layout.addWidget(self._count_label)
 
         layout.addWidget(search_box, stretch=1)
 
-        self._recluster_btn = QPushButton("Re-cluster All")
-        self._recluster_btn.setToolTip("Re-run clustering with current corrections")
+        self._recluster_btn = QPushButton(t("recluster_all"))
+        self._recluster_btn.setToolTip(t("recluster_tip"))
         layout.addWidget(self._recluster_btn)
 
     # ------------------------------------------------------------------
@@ -334,7 +335,7 @@ class SidebarPanel(QWidget):
             self._person_list.addItem(item)
             shown += 1
 
-        self._count_label.setText(f"{shown} person(s)")
+        self._count_label.setText(t("n_persons", n=shown))
 
     def _on_selection_changed(
         self, current: QListWidgetItem, previous: QListWidgetItem

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from app.db.database import session_scope
 from app.services.collage_service import CollageService
+from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class CollageNodeDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._node_id = node_id
-        self.setWindowTitle("Kollázs elem részletei")
+        self.setWindowTitle(t("collage_item_details"))
         self.setMinimumWidth(520)
         self._build_ui(info_lines)
         self._setup_completers()
@@ -70,22 +71,22 @@ class CollageNodeDialog(QDialog):
         form.setContentsMargins(0, 12, 0, 0)
 
         self._year_edit = QLineEdit()
-        self._year_edit.setPlaceholderText("pl. 1969")
+        self._year_edit.setPlaceholderText(t("example_year"))
         self._year_edit.setMaxLength(16)
-        form.addRow("Év:", self._year_edit)
+        form.addRow(t("year"), self._year_edit)
 
         self._location_edit = QLineEdit()
-        self._location_edit.setPlaceholderText("pl. Budapest, Balaton")
-        form.addRow("Helyszín:", self._location_edit)
+        self._location_edit.setPlaceholderText(t("example_location"))
+        form.addRow(t("location"), self._location_edit)
 
         self._event_edit = QLineEdit()
-        self._event_edit.setPlaceholderText("pl. Nyaralás, Esküvő")
-        form.addRow("Esemény:", self._event_edit)
+        self._event_edit.setPlaceholderText(t("example_event"))
+        form.addRow(t("event"), self._event_edit)
 
         self._notes_edit = QTextEdit()
-        self._notes_edit.setPlaceholderText("Szabad megjegyzés…")
+        self._notes_edit.setPlaceholderText(t("free_comment"))
         self._notes_edit.setFixedHeight(80)
-        form.addRow("Megjegyzés:", self._notes_edit)
+        form.addRow(t("notes"), self._notes_edit)
 
         layout.addLayout(form)
 
@@ -171,4 +172,4 @@ class CollageNodeDialog(QDialog):
         except Exception as exc:
             log.exception("Failed to save node metadata")
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Mentési hiba", str(exc))
+            QMessageBox.critical(self, t("save_error"), str(exc))
