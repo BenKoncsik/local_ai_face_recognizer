@@ -1,9 +1,9 @@
-"""Export dialog — CSV, JSON and image export in one place."""
+"""Export dialog — CSV, JSON, image and collage export in one place."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -29,26 +30,45 @@ from app.ui.i18n import t
 
 
 class ExportDialog(QDialog):
-    """Modal export window with CSV, JSON and image export options."""
+    """Modal export window with CSV, JSON, image and collage export options."""
 
     def __init__(
         self,
         current_person_id: Optional[int] = None,
         current_person_name: Optional[str] = None,
+        on_collage_import: Optional[Callable[[], None]] = None,
+        on_collage_html_export: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._person_id = current_person_id
         self._person_name = current_person_name
+        self._on_collage_import_cb = on_collage_import
+        self._on_collage_html_export_cb = on_collage_html_export
         self.setWindowTitle(t("export_title"))
         self.setMinimumWidth(500)
+        self.setMinimumHeight(300)
+        self.resize(520, 680)
         self._build_ui()
 
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        # Outer layout: scroll area + sticky Close button
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        # ── Scroll area ───────────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
         layout.setSpacing(12)
+        layout.setContentsMargins(2, 2, 2, 2)
 
         # --- Scope ---
         scope_box = QGroupBox(t("export_scope"))
@@ -114,10 +134,40 @@ class ExportDialog(QDialog):
         html_layout.addWidget(self._html_btn)
         layout.addWidget(html_box)
 
-        # --- Close ---
+        # --- Collage Import ---
+        col_import_box = QGroupBox(t("export_collage_import_group"))
+        col_import_layout = QVBoxLayout(col_import_box)
+        col_import_desc = QLabel(t("export_collage_import_desc"))
+        col_import_desc.setWordWrap(True)
+        col_import_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        col_import_layout.addWidget(col_import_desc)
+        self._collage_import_btn = QPushButton(f"📂  {t('export_collage_import_btn')}")
+        self._collage_import_btn.setEnabled(self._on_collage_import_cb is not None)
+        self._collage_import_btn.clicked.connect(self._on_collage_import_clicked)
+        col_import_layout.addWidget(self._collage_import_btn)
+        layout.addWidget(col_import_box)
+
+        # --- Collage HTML Gallery ---
+        col_html_box = QGroupBox(t("export_collage_html_group"))
+        col_html_layout = QVBoxLayout(col_html_box)
+        col_html_desc = QLabel(t("export_collage_html_desc"))
+        col_html_desc.setWordWrap(True)
+        col_html_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        col_html_layout.addWidget(col_html_desc)
+        self._collage_html_export_btn = QPushButton(f"🌍  {t('export_collage_html_btn')}")
+        self._collage_html_export_btn.setEnabled(self._on_collage_html_export_cb is not None)
+        self._collage_html_export_btn.clicked.connect(self._on_collage_html_clicked)
+        col_html_layout.addWidget(self._collage_html_export_btn)
+        layout.addWidget(col_html_box)
+
+        layout.addStretch()
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, stretch=1)
+
+        # --- Close — always visible outside the scroll area ---
         close_btn = QPushButton(t("close"))
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+        outer.addWidget(close_btn, alignment=Qt.AlignRight)
 
     # ------------------------------------------------------------------
 
@@ -189,3 +239,15 @@ class ExportDialog(QDialog):
         QMessageBox.information(
             self, t("images_exported"), t("files_copied", n=n, folder=folder)
         )
+
+    def _on_collage_import_clicked(self) -> None:
+        if self._on_collage_import_cb is None:
+            return
+        self.accept()
+        self._on_collage_import_cb()
+
+    def _on_collage_html_clicked(self) -> None:
+        if self._on_collage_html_export_cb is None:
+            return
+        self.accept()
+        self._on_collage_html_export_cb()

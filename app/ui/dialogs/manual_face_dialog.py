@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt, QPoint, QRect, QSize, Signal
 from PySide6.QtGui import QIcon, QImage, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -92,7 +91,12 @@ class _MarkerLabel(QLabel):
 # ── Manual-marking dialog ────────────────────────────────────────────────────
 
 class ManualMarkDialog(QDialog):
-    """Show an image and let the user drag a rectangle to mark a face."""
+    """Show an image and let the user drag rectangles to mark one or more faces.
+
+    Multiple faces can be added in a single dialog session.  Each "Add Face"
+    click saves one face to the DB and redraws the image with all saved faces
+    highlighted.  The dialog stays open until the user clicks "Done".
+    """
 
     _MAX_W = 900
     _MAX_H = 700
@@ -101,10 +105,9 @@ class ManualMarkDialog(QDialog):
         super().__init__(parent)
         self._image_id = image_id
         self._config = config
-        self._saved = False
+        self._saved_face_ids: List[int] = []
         self._img_bgr: Optional[np.ndarray] = None
         self._display_scale: float = 1.0
-        self._display_offset: Tuple[int, int] = (0, 0)
 
         with session_scope() as session:
             image = session.get(Image, image_id)
@@ -129,12 +132,24 @@ class ManualMarkDialog(QDialog):
         self._marker.rect_drawn.connect(self._on_rect_drawn)
         layout.addWidget(self._marker)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        self._save_btn = btns.button(QDialogButtonBox.Save)
-        self._save_btn.setEnabled(False)
-        btns.accepted.connect(self._on_save)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        self._status_label = QLabel(t("mark_face_none_yet"))
+        self._status_label.setStyleSheet("color: #aaa; font-size: 11px; padding: 2px 0;")
+        layout.addWidget(self._status_label)
+
+        btn_row = QHBoxLayout()
+        self._add_btn = QPushButton(t("mark_face_add_btn"))
+        self._add_btn.setEnabled(False)
+        self._add_btn.setToolTip(t("mark_face_hint"))
+        self._add_btn.clicked.connect(self._on_add_face)
+        btn_row.addWidget(self._add_btn)
+
+        btn_row.addStretch()
+
+        self._done_btn = QPushButton(t("mark_face_done_btn"))
+        self._done_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self._done_btn)
+
+        layout.addLayout(btn_row)
 
     def _load_image(self) -> None:
         self._img_bgr = load_image_bgr(self._image_path)
@@ -145,10 +160,34 @@ class ManualMarkDialog(QDialog):
 
         h, w = self._img_bgr.shape[:2]
         scale = min(self._MAX_W / w, self._MAX_H / h, 1.0)
-        disp_w, disp_h = int(w * scale), int(h * scale)
         self._display_scale = scale
+        self._refresh_marker_pixmap()
 
-        resized = cv2.resize(self._img_bgr, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
+    def _refresh_marker_pixmap(self) -> None:
+        """Redraw the displayed image with all already-saved faces highlighted."""
+        if self._img_bgr is None:
+            return
+
+        img = self._img_bgr.copy()
+
+        # Draw boxes for every face saved so far
+        if self._saved_face_ids:
+            with session_scope() as session:
+                for fid in self._saved_face_ids:
+                    face = session.get(Face, fid)
+                    if face is not None:
+                        cv2.rectangle(
+                            img,
+                            (face.bbox_x, face.bbox_y),
+                            (face.bbox_x + face.bbox_w, face.bbox_y + face.bbox_h),
+                            (50, 220, 50), 2,
+                        )
+
+        scale = self._display_scale
+        h_orig, w_orig = img.shape[:2]
+        disp_w = int(w_orig * scale)
+        disp_h = int(h_orig * scale)
+        resized = cv2.resize(img, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, disp_w, disp_h, 3 * disp_w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg.copy())
@@ -157,9 +196,9 @@ class ManualMarkDialog(QDialog):
         self._marker.setFixedSize(disp_w, disp_h)
 
     def _on_rect_drawn(self, rect: QRect) -> None:
-        self._save_btn.setEnabled(rect.width() >= 10 and rect.height() >= 10)
+        self._add_btn.setEnabled(rect.width() >= 10 and rect.height() >= 10)
 
-    def _on_save(self) -> None:
+    def _on_add_face(self) -> None:
         rect = self._marker.current_rect()
         if rect is None or self._img_bgr is None:
             return
@@ -209,12 +248,16 @@ class ManualMarkDialog(QDialog):
             "Manual face added: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
             self._image_id, new_face_id, x, y, w, h,
         )
-        self._saved = True
-        QMessageBox.information(self, t("mark_face"), t("mark_face_saved"))
-        self.accept()
+        self._saved_face_ids.append(new_face_id)
+
+        # Update status and refresh image overlay
+        self._status_label.setText(t("mark_face_count", n=len(self._saved_face_ids)))
+        self._add_btn.setEnabled(False)
+        self._marker.clear_rect()
+        self._refresh_marker_pixmap()
 
     def was_saved(self) -> bool:
-        return self._saved
+        return len(self._saved_face_ids) > 0
 
 
 _THUMB_SIZE = 64

@@ -19,7 +19,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from app import __version__
@@ -48,6 +50,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(t("settings_title"))
         self.setMinimumWidth(540)
+        self.setMinimumHeight(300)
+        self.resize(560, 640)
         self._current_db_path = current_db_path
         self._new_db_path: Optional[str] = None
         self._language_changed = False
@@ -55,8 +59,21 @@ class SettingsDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        # Outer layout: scroll area + sticky OK/Cancel buttons
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        # ── Scroll area ───────────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
         layout.setSpacing(14)
+        layout.setContentsMargins(2, 2, 2, 2)
 
         # ── Language ──────────────────────────────────────────────────────
         lang_group = QGroupBox(t("lang_label").rstrip(":"))
@@ -168,13 +185,17 @@ class SettingsDialog(QDialog):
         tpu_layout.addLayout(tpu_btn_row)
         layout.addWidget(tpu_group)
 
+        layout.addStretch()
         self._start_tpu_probe()
 
-        # ── Buttons ───────────────────────────────────────────────────────
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, stretch=1)
+
+        # ── Buttons — always visible outside the scroll area ──────────────
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        outer.addWidget(btns)
 
     # ------------------------------------------------------------------
     # TPU

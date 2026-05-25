@@ -173,24 +173,6 @@ class MainWindow(QMainWindow):
         self._settings_btn.clicked.connect(self._on_settings)
         tb.addWidget(self._settings_btn)
 
-        tb.addSeparator()
-
-        tb.addSeparator()
-
-        self._collage_btn = QPushButton()
-        self._collage_btn.clicked.connect(self._on_import_collage)
-        self._collage_btn.setToolTip(t("collage_import_tip"))
-        tb.addWidget(self._collage_btn)
-
-        self._collage_html_btn = QPushButton()
-        self._collage_html_btn.clicked.connect(self._on_export_collage_html)
-        tb.addWidget(self._collage_html_btn)
-
-        tb.addSeparator()
-
-        self._update_btn = QPushButton()
-        self._update_btn.clicked.connect(self._on_check_update_manual)
-        tb.addWidget(self._update_btn)
 
     def _build_central(self) -> None:
         # Outer tabs: Arcok | Kollázs
@@ -315,6 +297,16 @@ class MainWindow(QMainWindow):
         self._progress_bar.setMaximumWidth(300)
         status.addPermanentWidget(self._progress_bar)
 
+        self._update_notify_btn = QPushButton()
+        self._update_notify_btn.setVisible(False)
+        self._update_notify_btn.setStyleSheet(
+            "QPushButton { color: #F9E2AF; font-weight: bold; padding: 1px 6px; "
+            "background-color: #3D3020; border: 1px solid #F9E2AF; border-radius: 3px; }"
+            "QPushButton:hover { background-color: #5A4530; }"
+        )
+        self._update_notify_btn.clicked.connect(self._on_update_notify_clicked)
+        status.addPermanentWidget(self._update_notify_btn)
+
         self._status_label = QLabel()
         status.addWidget(self._status_label)
 
@@ -335,11 +327,6 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._settings_btn.setText(t("settings"))
-        self._collage_btn.setText(t("tb_collage_import"))
-        self._collage_btn.setToolTip(t("collage_import_tip"))
-        self._collage_html_btn.setText(t("tb_collage_html_export"))
-        if not getattr(self, "_pending_release", None):
-            self._update_btn.setText(t("tb_update_check"))
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
         self._delete_person_btn.setText(t("delete_person"))
@@ -1086,6 +1073,8 @@ class MainWindow(QMainWindow):
         dlg = ExportDialog(
             current_person_id=self._current_person_id,
             current_person_name=person_name,
+            on_collage_import=self._on_import_collage,
+            on_collage_html_export=self._on_export_collage_html,
             parent=self,
         )
         dlg.exec()
@@ -1153,11 +1142,10 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_update_found(self, release) -> None:
         self._pending_release = release
-        self._update_btn.setText(t("update_available_short", version=release.version))
-        self._update_btn.setStyleSheet(
-            "QPushButton { color: #F9E2AF; font-weight: bold; "
-            "background-color: #3D3020; border-color: #F9E2AF; }"
+        self._update_notify_btn.setText(
+            t("status_update_available", version=release.version)
         )
+        self._update_notify_btn.setVisible(True)
         self._status_label.setText(t("update_status_found", version=release.version))
         self._notify(
             t("update_notification_title"),
@@ -1165,36 +1153,10 @@ class MainWindow(QMainWindow):
         )
 
     @Slot()
-    def _on_check_update_manual(self) -> None:
-        from app import __version__
-        from app.services.update_service import fetch_latest_release, is_newer
-
-        self._update_btn.setEnabled(False)
-        self._update_btn.setText(t("checking"))
-        QApplication.processEvents()
-
-        release = fetch_latest_release()
-        self._update_btn.setEnabled(True)
-
-        if release is None:
-            QMessageBox.warning(self, t("warning"), t("update_connection_failed"))
-            self._update_btn.setText(t("tb_update_check"))
-            return
-
-        if not is_newer(release.version, __version__):
-            from app import __version__ as cv
-            QMessageBox.information(self, t("up_to_date"), t("app_is_current", version=cv))
-            self._update_btn.setText(t("up_to_date"))
-            return
-
-        self._pending_release = release
-        self._update_btn.setText(t("update_available_short", version=release.version))
-        self._update_btn.setStyleSheet(
-            "QPushButton { color: #F9E2AF; font-weight: bold; "
-            "background-color: #3D3020; border-color: #F9E2AF; }"
-        )
-        dlg = UpdateDialog(release, parent=self)
-        dlg.exec()
+    def _on_update_notify_clicked(self) -> None:
+        if self._pending_release:
+            dlg = UpdateDialog(self._pending_release, parent=self)
+            dlg.exec()
 
     def _refresh_persons(self) -> None:
         with session_scope() as session:

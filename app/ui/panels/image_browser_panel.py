@@ -913,13 +913,19 @@ class ImageBrowserPanel(QWidget):
             if self._current_image_id is None:
                 self._open_first_image()
 
-    def _reload_current_face_data(self) -> None:
-        """Reload face assignments for the current image (called from MainWindow)."""
+    def _fetch_face_data(self) -> None:
+        """Reload face list from DB without triggering any UI update."""
         if self._current_image_id is None:
             return
         with session_scope() as session:
             svc = ImageBrowserService(session)
             self._face_data = svc.get_image_faces(self._current_image_id)
+
+    def _reload_current_face_data(self) -> None:
+        """Reload face assignments for the current image and refresh the UI."""
+        if self._current_image_id is None:
+            return
+        self._fetch_face_data()
         if self._selected_face_id is not None:
             self._show_face_info(self._selected_face_id)
         self._redraw_faces()
@@ -1339,10 +1345,11 @@ class ImageBrowserPanel(QWidget):
 
         if self._editing_face_id is not None:
             edited_id = self._editing_face_id
-            self._update_face_bbox(edited_id, ix, iy, iw, ih)
             self._editing_face_id = None
             self._draw_hint.setText(t("ibp_draw_hint_add"))
-            self._reload_current_face_data()
+            self._update_face_bbox(edited_id, ix, iy, iw, ih)
+            # Reload data, select the edited face, redraw once
+            self._fetch_face_data()
             self._selected_face_id = edited_id
             self._redraw_faces()
             self._show_face_info(edited_id)
@@ -1350,7 +1357,10 @@ class ImageBrowserPanel(QWidget):
             new_face_id = self._save_manual_face(
                 self._current_image_id, ix, iy, iw, ih
             )
-            self._reload_current_face_data()
+            # Reload the full face list (includes the just-saved face),
+            # select it and redraw once — draw mode intentionally stays ON
+            # so the user can immediately add more faces without re-clicking.
+            self._fetch_face_data()
             if new_face_id is not None:
                 self._selected_face_id = new_face_id
                 self._redraw_faces()

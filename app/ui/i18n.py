@@ -275,11 +275,16 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "view_by_person":    {"en": "By Person", "hu": "Személy szerint"},
     "n_images_no_face":  {"en": "{n} image(s) with no detected face",
                           "hu": "{n} kép arc nélkül"},
-    "mark_face":         {"en": "Mark Face Manually", "hu": "Arc kézi jelölése"},
-    "mark_face_hint":    {"en": "Drag on the image to mark a face region.",
-                          "hu": "Húzd az egeret a képen az arc jelöléséhez."},
+    "mark_face":         {"en": "Mark Faces Manually", "hu": "Arcok kézi jelölése"},
+    "mark_face_hint":    {"en": "Drag on the image to mark a face region. You can add multiple faces.",
+                          "hu": "Húzd az egeret a képen az arc jelöléséhez. Több arcot is hozzáadhatsz."},
     "mark_face_saved":   {"en": "Face saved. Assign it to a person from the sidebar.",
                           "hu": "Arc mentve. Rendeld személyhez az oldalsávból."},
+    "mark_face_add_btn": {"en": "Add Face", "hu": "Arc hozzáadása"},
+    "mark_face_done_btn": {"en": "Done", "hu": "Kész"},
+    "mark_face_count":   {"en": "{n} face(s) marked", "hu": "{n} arc jelölve"},
+    "mark_face_none_yet": {"en": "Draw a rectangle to mark a face",
+                           "hu": "Rajzolj téglalapot egy arc jelöléséhez"},
     "previous":          {"en": "Previous", "hu": "Előző"},
     "next":              {"en": "Next", "hu": "Következő"},
     "manual_marking":    {"en": "Manual Marking", "hu": "Kézi jelölés"},
@@ -391,10 +396,29 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "unknown_face":      {"en": "Unknown face", "hu": "Ismeretlen arc"},
 
     # ── Toolbar — short labels (no emoji) ────────────────────────────────
-    "tb_collage_import":      {"en": "Collage+",    "hu": "Kollázs+"},
-    "tb_collage_html_export": {"en": "Collage HTML","hu": "Kollázs HTML"},
-    "tb_update_check":        {"en": "Update…",     "hu": "Frissítés…"},
     "tb_export":              {"en": "Export",       "hu": "Export"},
+
+    # ── Export dialog — collage sections ──────────────────────────────────
+    "export_collage_import_group": {"en": "Collage Import",
+                                    "hu": "Kollázs készítése"},
+    "export_collage_import_desc":  {"en": "Import a Picasa collage file (.cxf / .cfx) and "
+                                          "add it to the collage view.",
+                                    "hu": "Picasa kollázs fájl (.cxf / .cfx) beolvasása és "
+                                          "hozzáadása a kollázs nézethez."},
+    "export_collage_import_btn":   {"en": "Import Collage …",
+                                    "hu": "Kollázs importálása …"},
+    "export_collage_html_group":   {"en": "Collage HTML Gallery",
+                                    "hu": "Kollázs HTML galéria készítése"},
+    "export_collage_html_desc":    {"en": "Export all collages as a static HTML gallery "
+                                          "that can be opened in any web browser.",
+                                    "hu": "Az összes kollázs exportálása statikus HTML galériaként, "
+                                          "amely bármely böngészőben megnyitható."},
+    "export_collage_html_btn":     {"en": "Export HTML Gallery …",
+                                    "hu": "HTML galéria exportálása …"},
+
+    # ── Status bar update notification ────────────────────────────────────
+    "status_update_available":     {"en": "New version available: v{version}  ↑",
+                                    "hu": "Új verzió elérhető: v{version}  ↑"},
 
     # ── Image browser panel ───────────────────────────────────────────────
     "ibp_prev":               {"en": "< Prev",        "hu": "< Előző"},

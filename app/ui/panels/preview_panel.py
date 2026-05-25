@@ -409,12 +409,25 @@ class PreviewPanel(QWidget):
     # ------------------------------------------------------------------
 
     def show_face(self, face: Face) -> None:
-        """Load and display the image for *face*, highlighting all faces."""
+        """Load and display the image for *face*, highlighting all faces.
+
+        Draw mode is preserved when the same image is refreshed (e.g. after a
+        manual face is created while draw mode was active), so the user can
+        keep drawing additional faces without having to re-enable the mode.
+        """
         if face.image is None:
             self._image_label.setText(t("no_recognized_face"))
             return
 
         img_path = face.image.file_path
+        # Remember draw state BEFORE we reset it — restore if staying on same image
+        same_image = (face.image.id == self._current_image_id)
+        preserve_draw = (
+            same_image
+            and self._draw_btn.isChecked()
+            and self._editing_face_id is None
+        )
+
         self._current_image_path = img_path
         self._current_image_id = face.image.id
 
@@ -450,6 +463,11 @@ class PreviewPanel(QWidget):
         self._zoom_btn.setEnabled(True)
         self._draw_btn.setEnabled(True)
         self._update_action_buttons()
+
+        # Restore draw mode so the user can continue adding faces without
+        # having to click the draw button again after each creation.
+        if preserve_draw:
+            self._draw_btn.setChecked(True)
 
     def select_face(self, face_id: int) -> None:
         """Change the highlighted face without reloading the image from disk."""
