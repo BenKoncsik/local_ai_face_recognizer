@@ -987,15 +987,18 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
-          notes=$'Automated cross-platform build from `main`.\n\n'
-          notes+="- Commit: ${GITHUB_SHA}"$'\n'
-          notes+="- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"$'\n'
-          notes+="- macOS runner: ${{ needs.pick-runner.outputs.mac_runner_note }}"$'\n'
-          notes+="- Windows runner: ${{ needs.pick-runner.outputs.windows_runner_note }}"$'\n'
-          notes+="- macOS build: ${{ needs.build-macos.result }}"$'\n'
-          notes+="- Windows build: ${{ needs.build-windows.result }}"$'\n'
-          notes+="- Linux ARM64 build: ${{ needs.build-linux-arm64.result }}"$'\n'
-          notes+="- Linux x64 build on GitHub runner: ${{ needs.build-linux-x64.result }}"$'\n'
+          git fetch --tags --force --unshallow || git fetch --tags --force
+          notes="$(python3 scripts/github_release.py build-notes \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --runner-note "macOS runner: ${{ needs.pick-runner.outputs.mac_runner_note }}" \
+            --runner-note "Windows runner: ${{ needs.pick-runner.outputs.windows_runner_note }}" \
+            --build-result "macOS build: ${{ needs.build-macos.result }}" \
+            --build-result "Windows build: ${{ needs.build-windows.result }}" \
+            --build-result "Linux ARM64 build: ${{ needs.build-linux-arm64.result }}" \
+            --build-result "Linux x64 build on GitHub runner: ${{ needs.build-linux-x64.result }}")"
           python3 scripts/github_release.py update-notes \
             --repo "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \

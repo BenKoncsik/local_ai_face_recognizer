@@ -8,14 +8,26 @@ import glob
 import json
 import mimetypes
 import os
+import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 API_BASE = "https://api.github.com"
+ISSUE_REF_RE = re.compile(r"(?<![\w/-])#(\d+)\b")
+VERSION_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+
+
+@dataclass(frozen=True)
+class CommitNote:
+    sha: str
+    subject: str
+    body: str = ""
 
 
 def main() -> int:
@@ -30,7 +42,37 @@ def main() -> int:
     add_shared_release_args(notes_parser)
     notes_parser.add_argument("--notes", required=True, help="Release notes body.")
 
+    build_notes_parser = subparsers.add_parser("build-notes", help="Build release notes from Git history.")
+    build_notes_parser.add_argument("--repo", required=True, help="Repository in OWNER/REPO format.")
+    build_notes_parser.add_argument("--tag", required=True, help="Release tag.")
+    build_notes_parser.add_argument("--target", required=True, help="Target commit SHA.")
+    build_notes_parser.add_argument("--run-url", required=True, help="GitHub Actions run URL.")
+    build_notes_parser.add_argument(
+        "--runner-note",
+        action="append",
+        default=[],
+        help="Runner note to include, for example 'macOS runner: Runner name'.",
+    )
+    build_notes_parser.add_argument(
+        "--build-result",
+        action="append",
+        default=[],
+        help="Build result to include, for example 'macOS build: success'.",
+    )
+
     args = parser.parse_args()
+    if args.command == "build-notes":
+        notes = build_release_notes(
+            repo=args.repo,
+            tag=args.tag,
+            target=args.target,
+            run_url=args.run_url,
+            runner_notes=args.runner_note,
+            build_results=args.build_result,
+        )
+        print(notes)
+        return 0
+
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if not token:
         print("GITHUB_TOKEN or GH_TOKEN must be set.", file=sys.stderr)
@@ -92,6 +134,131 @@ def resolve_patterns(patterns: list[str]) -> list[Path]:
             deduped.append(file_path)
             seen.add(resolved)
     return deduped
+
+
+def build_release_notes(
+    repo: str,
+    tag: str,
+    target: str,
+    run_url: str,
+    runner_notes: list[str] | None = None,
+    build_results: list[str] | None = None,
+) -> str:
+    previous_tag = find_previous_release_tag(tag=tag, target=target)
+    commits = collect_commit_notes(target=target, previous_tag=previous_tag)
+
+    lines = [
+        "Automated cross-platform build from `main`.",
+        "",
+        "## Release summary",
+        f"- Commit: {target}",
+        f"- Run: {run_url}",
+    ]
+    if previous_tag:
+        lines.append(f"- Changes since: {previous_tag}")
+    else:
+        lines.append("- Changes since: first release")
+
+    for note in runner_notes or []:
+        lines.append(f"- {note}")
+    for result in build_results or []:
+        lines.append(f"- {result}")
+
+    lines.extend(["", "## Elkészült jegyek"])
+    issue_numbers = extract_issue_numbers_from_commits(commits)
+    if issue_numbers:
+        for issue_number in issue_numbers:
+            lines.append(f"- {format_issue_ref(repo, issue_number)}")
+    else:
+        lines.append("- Nincs commit üzenetben hivatkozott jegy.")
+
+    lines.extend(["", "## Commit kommentek"])
+    if commits:
+        for commit in commits:
+            lines.append(format_commit_note(repo=repo, commit=commit))
+    else:
+        lines.append("- Nincs új commit az előző release óta.")
+
+    return "\n".join(lines) + "\n"
+
+
+def find_previous_release_tag(tag: str, target: str) -> str | None:
+    try:
+        tags = run_git("tag", "--merged", target, "--list", "v[0-9]*", "--sort=-v:refname")
+    except RuntimeError:
+        return None
+
+    for candidate in tags.splitlines():
+        candidate = candidate.strip()
+        if candidate and candidate != tag and VERSION_TAG_RE.fullmatch(candidate):
+            return candidate
+    return None
+
+
+def collect_commit_notes(target: str, previous_tag: str | None) -> list[CommitNote]:
+    revision = f"{previous_tag}..{target}" if previous_tag else target
+    try:
+        raw = run_git("log", "--format=%H%x1f%s%x1f%b%x1e", revision)
+    except RuntimeError:
+        return []
+
+    commits: list[CommitNote] = []
+    for record in raw.rstrip("\x1e\n").split("\x1e"):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split("\x1f", 2)
+        if len(parts) < 2:
+            continue
+        sha = parts[0].strip()
+        subject = normalize_commit_text(parts[1])
+        body = normalize_commit_text(parts[2]) if len(parts) == 3 else ""
+        commits.append(CommitNote(sha=sha, subject=subject, body=body))
+    return commits
+
+
+def extract_issue_numbers_from_commits(commits: list[CommitNote]) -> list[str]:
+    seen: set[str] = set()
+    numbers: list[str] = []
+    for commit in commits:
+        for issue_number in ISSUE_REF_RE.findall(f"{commit.subject}\n{commit.body}"):
+            if issue_number not in seen:
+                seen.add(issue_number)
+                numbers.append(issue_number)
+    return numbers
+
+
+def format_commit_note(repo: str, commit: CommitNote) -> str:
+    subject = commit.subject or "(no commit message)"
+    message = subject
+    if commit.body:
+        message = f"{subject} - {commit.body}"
+    issues = ISSUE_REF_RE.findall(f"{commit.subject}\n{commit.body}")
+    issue_suffix = ""
+    if issues:
+        linked_issues = ", ".join(format_issue_ref(repo, issue) for issue in dict.fromkeys(issues))
+        issue_suffix = f" (jegy: {linked_issues})"
+    return f"- `{commit.sha[:7]}` {message}{issue_suffix}"
+
+
+def format_issue_ref(repo: str, issue_number: str) -> str:
+    return f"[#{issue_number}](https://github.com/{repo}/issues/{issue_number})"
+
+
+def normalize_commit_text(text: str) -> str:
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def run_git(*args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or f"git {' '.join(args)} failed")
+    return completed.stdout
 
 
 class GitHubReleaseClient:
