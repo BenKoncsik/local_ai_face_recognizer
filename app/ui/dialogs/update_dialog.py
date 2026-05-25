@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,8 @@ from app import __version__
 from app.services.update_service import ReleaseInfo, apply_update, download_asset
 from app.ui.i18n import t
 
+log = logging.getLogger(__name__)
+
 
 class _DownloadThread(QThread):
     progress = Signal(int, int)   # downloaded, total
@@ -34,9 +37,15 @@ class _DownloadThread(QThread):
 
     def run(self) -> None:
         try:
+            log.info(
+                "Update download thread started: version=%s asset=%s",
+                self._release.version,
+                self._release.asset_name,
+            )
             path = download_asset(self._release, self.progress.emit)
             self.finished.emit(str(path))
         except Exception as exc:
+            log.exception("Update download failed")
             self.error.emit(str(exc))
 
 
@@ -113,6 +122,12 @@ class UpdateDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _on_download(self) -> None:
+        log.info(
+            "Update download requested: version=%s asset=%s size=%d",
+            self._release.version,
+            self._release.asset_name,
+            self._release.asset_size,
+        )
         self._download_btn.setEnabled(False)
         self._progress.setVisible(True)
         self._status_label.setVisible(True)
@@ -136,6 +151,7 @@ class UpdateDialog(QDialog):
 
     def _on_done(self, path: str) -> None:
         self._downloaded_path = Path(path)
+        log.info("Update download ready for install: %s", self._downloaded_path)
         self._progress.setValue(100)
         self._apply_btn.setEnabled(True)
 
@@ -149,11 +165,21 @@ class UpdateDialog(QDialog):
             self._status_label.setStyleSheet("color: #4caf50; font-size: 11px;")
 
     def _on_error(self, msg: str) -> None:
+        log.error("Update dialog error: %s", msg)
         self._status_label.setText(f"✗ {t('error')}: {msg}")
         self._status_label.setStyleSheet("color: #f44336; font-size: 11px;")
         self._download_btn.setEnabled(True)
 
     def _on_apply(self) -> None:
         if self._downloaded_path:
-            apply_update(self._downloaded_path)
+            log.info("Update install/apply requested: %s", self._downloaded_path)
+            try:
+                apply_update(self._downloaded_path)
+            except Exception as exc:
+                log.exception("Update install/apply failed")
+                self._status_label.setVisible(True)
+                self._status_label.setText(f"✗ {t('error')}: {exc}")
+                self._status_label.setStyleSheet("color: #f44336; font-size: 11px;")
+                self._apply_btn.setEnabled(True)
+                return
             self.accept()
