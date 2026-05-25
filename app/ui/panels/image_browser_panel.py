@@ -553,6 +553,8 @@ class ImageBrowserPanel(QWidget):
 
         self._build_ui()
         self._setup_shortcuts()
+        self._prev_btn.setEnabled(False)
+        self._next_btn.setEnabled(False)
 
     # ──────────────────────────────────────────────────────────────────
     # UI construction
@@ -621,13 +623,40 @@ class ImageBrowserPanel(QWidget):
         im_layout.setContentsMargins(4, 4, 4, 4)
         im_layout.setSpacing(4)
 
-        # Draw mode toggle + fullscreen row
+        # Draw mode toggle + nav buttons + fullscreen row
         top_bar = QHBoxLayout()
 
         self._draw_mode_btn = QPushButton()
         self._draw_mode_btn.setCheckable(True)
         self._draw_mode_btn.toggled.connect(self._on_draw_mode_toggled)
         top_bar.addWidget(self._draw_mode_btn)
+
+        top_bar.addStretch()
+
+        _nav_style = (
+            "QPushButton {"
+            "  font-size: 16px; padding: 0 10px; min-width: 32px; min-height: 26px;"
+            "  background: #313244; border: 1px solid #45475a; border-radius: 4px;"
+            "  color: #cdd6f4;"
+            "}"
+            "QPushButton:hover  { background: #45475a; }"
+            "QPushButton:pressed { background: #585b70; }"
+            "QPushButton:disabled { color: #45475a; border-color: #313244; }"
+        )
+
+        self._prev_btn = QPushButton("◀")
+        self._prev_btn.setToolTip("Előző kép  (←)")
+        self._prev_btn.setStyleSheet(_nav_style)
+        self._prev_btn.clicked.connect(self._navigate_prev)
+        top_bar.addWidget(self._prev_btn)
+
+        self._next_btn = QPushButton("▶")
+        self._next_btn.setToolTip("Következő kép  (→)")
+        self._next_btn.setStyleSheet(_nav_style)
+        self._next_btn.clicked.connect(self._navigate_next)
+        top_bar.addWidget(self._next_btn)
+
+        top_bar.addStretch()
 
         self._fs_btn = QPushButton()
         self._fs_btn.clicked.connect(self._enter_fullscreen)
@@ -641,7 +670,6 @@ class ImageBrowserPanel(QWidget):
         self._exit_fs_btn.setVisible(False)
         top_bar.addWidget(self._exit_fs_btn)
 
-        top_bar.addStretch()
         im_layout.addLayout(top_bar)
 
         self._draw_hint = QLabel()
@@ -871,6 +899,19 @@ class ImageBrowserPanel(QWidget):
             self._file_tree.blockSignals(False)
             # Load children without re-triggering the expanded signal
             self._load_folder_children(restore_item)
+            # Re-select the previously open image if still present
+            if self._current_image_id is not None:
+                cache_key = f"thumb_{self._current_image_id}"
+                item = self._tree_items.get(cache_key)
+                if item is not None:
+                    self._file_tree.setCurrentItem(item)
+                    self._file_tree.scrollToItem(item)
+                    self._current_tree_item = item
+                    self._update_nav_buttons()
+        else:
+            # No previously open folder — auto-open first image in first folder
+            if self._current_image_id is None:
+                self._open_first_image()
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image (called from MainWindow)."""
@@ -1029,6 +1070,45 @@ class ImageBrowserPanel(QWidget):
         self._file_tree.setCurrentItem(item)
         self._file_tree.scrollToItem(item)
         self._load_image(item.data(0, _ROLE_PAYLOAD))
+        self._update_nav_buttons()
+
+    def _update_nav_buttons(self) -> None:
+        """Grey out ◀ / ▶ when at the very first / last image across all folders."""
+        current = self._current_tree_item
+        if current is None:
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            return
+
+        parent = current.parent()
+        if parent is None:
+            self._prev_btn.setEnabled(False)
+            self._next_btn.setEnabled(False)
+            return
+
+        idx = parent.indexOfChild(current)
+        folder_idx = self._file_tree.indexOfTopLevelItem(parent)
+
+        has_prev = (idx > 0) or (folder_idx > 0)
+        has_next = (idx < parent.childCount() - 1) or (
+            folder_idx < self._file_tree.topLevelItemCount() - 1
+        )
+
+        self._prev_btn.setEnabled(has_prev)
+        self._next_btn.setEnabled(has_next)
+
+    def _open_first_image(self) -> None:
+        """Expand the first folder and select its first image."""
+        if self._file_tree.topLevelItemCount() == 0:
+            return
+        first_folder = self._file_tree.topLevelItem(0)
+        if not first_folder.isExpanded():
+            first_folder.setExpanded(True)
+        if first_folder.childCount() == 0:
+            return
+        first_child = first_folder.child(0)
+        if first_child.data(0, _ROLE_TYPE) == "image":
+            self._select_tree_item(first_child)
 
     def _navigate_prev(self) -> None:
         self._navigate(-1)
