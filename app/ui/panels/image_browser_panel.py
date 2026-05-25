@@ -124,6 +124,30 @@ def _is_visible_dir(folder_path: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# EXIF helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _read_exif_date(path: str) -> Optional[str]:
+    """Return DateTimeOriginal from EXIF as 'YYYY.MM.DD', or None if unavailable."""
+    try:
+        from PIL import Image as PilImage
+        with PilImage.open(path) as img:
+            exif = img._getexif()  # type: ignore[attr-defined]
+            if not exif:
+                return None
+        # Tag 36867 = DateTimeOriginal, 36868 = DateTimeDigitized, 306 = DateTime
+        for tag_id in (36867, 36868, 306):
+            val = exif.get(tag_id)
+            if val:
+                # Format is "YYYY:MM:DD HH:MM:SS"
+                date_part = val.split(" ")[0]
+                return date_part.replace(":", ".")
+    except Exception:
+        pass
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Rendering helpers (shared with image display)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -718,6 +742,17 @@ class ImageBrowserPanel(QWidget):
         self._folder_label.setStyleSheet("color: #88aaff; font-size: 11px;")
         info_layout.addWidget(self._folder_label)
 
+        self._filename_hdr = QLabel()
+        self._filename_hdr.setStyleSheet(
+            "font-weight: bold; color: #888; font-size: 11px;"
+        )
+        info_layout.addWidget(self._filename_hdr)
+
+        self._filename_label = QLabel("")
+        self._filename_label.setWordWrap(True)
+        self._filename_label.setStyleSheet("color: #ddaa55; font-size: 11px;")
+        info_layout.addWidget(self._filename_label)
+
         info_layout.addWidget(_hline())
 
         self._date_hdr = QLabel()
@@ -730,6 +765,27 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.returnPressed.connect(self._save_photo_date)
         self._photo_date_edit.editingFinished.connect(self._save_photo_date)
         info_layout.addWidget(self._photo_date_edit)
+
+        # EXIF suggestion row
+        exif_row = QWidget()
+        exif_row_layout = QHBoxLayout(exif_row)
+        exif_row_layout.setContentsMargins(0, 0, 0, 0)
+        exif_row_layout.setSpacing(4)
+        self._exif_suggestion_hdr = QLabel()
+        self._exif_suggestion_hdr.setStyleSheet(
+            "font-weight: bold; color: #888; font-size: 11px;"
+        )
+        exif_row_layout.addWidget(self._exif_suggestion_hdr)
+        self._exif_suggestion_label = QLabel("")
+        self._exif_suggestion_label.setStyleSheet("color: #aaddaa; font-size: 11px;")
+        exif_row_layout.addWidget(self._exif_suggestion_label, 1)
+        self._exif_accept_btn = QPushButton()
+        self._exif_accept_btn.setFixedWidth(64)
+        self._exif_accept_btn.clicked.connect(self._accept_exif_suggestion)
+        exif_row_layout.addWidget(self._exif_accept_btn)
+        self._exif_row_widget = exif_row
+        self._exif_row_widget.setVisible(False)
+        info_layout.addWidget(self._exif_row_widget)
 
         info_layout.addWidget(_hline())
 
@@ -844,9 +900,13 @@ class ImageBrowserPanel(QWidget):
         self._draw_hint.setText(t("ibp_draw_hint_add"))
         self._image_label.setText(t("ib3_select_image_hint"))
         self._folder_hdr.setText(t("ibp_folder_hdr"))
+        self._filename_hdr.setText(t("ibp_filename_hdr"))
         self._date_hdr.setText(t("ibp_date_hdr"))
         self._photo_date_edit.setPlaceholderText(t("ibp_date_placeholder"))
         self._photo_date_edit.setToolTip(t("ibp_date_tooltip"))
+        self._exif_suggestion_hdr.setText(t("ibp_exif_suggestion"))
+        self._exif_accept_btn.setText(t("ibp_accept_exif"))
+        self._exif_accept_btn.setToolTip(t("ibp_accept_exif_tooltip"))
         self._face_hdr.setText(t("ibp_face_hdr"))
         self._face_status_label.setText(t("ibp_click_face"))
         self._rename_btn.setText(t("ibp_rename_btn"))
@@ -1223,7 +1283,10 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.setText(photo_date)
         self._photo_date_edit.blockSignals(False)
 
-        self._folder_label.setText(str(Path(self._current_path).parent))
+        p = Path(self._current_path)
+        self._folder_label.setText(str(p.parent))
+        self._filename_label.setText(p.name)
+        self._load_exif_suggestion(self._current_path)
 
         from app.utils.image_utils import load_image_bgr
         img_bgr = load_image_bgr(self._current_path)
@@ -1254,6 +1317,8 @@ class ImageBrowserPanel(QWidget):
         self._image_label.set_source_pixmap(None)
         self._image_label.setText(t("ib3_select_image_hint"))
         self._folder_label.setText("")
+        self._filename_label.setText("")
+        self._exif_row_widget.setVisible(False)
         self._clear_face_panel()
         self._hide_inline_editor()
         self._draw_mode_btn.setChecked(False)
@@ -1704,6 +1769,26 @@ class ImageBrowserPanel(QWidget):
         log.debug(
             "photo_date saved for image %d: %r", self._current_image_id, value
         )
+
+    def _load_exif_suggestion(self, path: str) -> None:
+        """Read EXIF DateTimeOriginal and show as a suggestion (not auto-fill)."""
+        suggestion = _read_exif_date(path)
+        if suggestion:
+            self._exif_suggestion_label.setText(suggestion)
+            self._exif_row_widget.setVisible(True)
+        else:
+            self._exif_suggestion_label.setText("")
+            self._exif_row_widget.setVisible(False)
+
+    def _accept_exif_suggestion(self) -> None:
+        suggested = self._exif_suggestion_label.text()
+        if not suggested:
+            return
+        self._photo_date_edit.blockSignals(True)
+        self._photo_date_edit.setText(suggested)
+        self._photo_date_edit.blockSignals(False)
+        self._save_photo_date()
+        self._exif_row_widget.setVisible(False)
 
     # ──────────────────────────────────────────────────────────────────
     # Inline rename
