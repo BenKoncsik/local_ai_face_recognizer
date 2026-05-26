@@ -702,8 +702,6 @@ class ImageBrowserPanel(QWidget):
         self._next_btn.clicked.connect(self._navigate_next)
         top_bar.addWidget(self._next_btn)
 
-        top_bar.addStretch()
-
         self._fs_btn = QPushButton()
         self._fs_btn.clicked.connect(self._enter_fullscreen)
         top_bar.addWidget(self._fs_btn)
