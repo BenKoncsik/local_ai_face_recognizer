@@ -35,7 +35,6 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
-    QComboBox,
     QDockWidget,
     QFrame,
     QHBoxLayout,
@@ -54,6 +53,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from app.ui.widgets.person_search_select import PersonSearchSelect
 
 from app.db.database import session_scope
 from app.db.models import Face, Image, Person
@@ -332,10 +333,9 @@ class _InlineFaceEditor(QFrame):
         hdr.addWidget(close_btn)
         layout.addLayout(hdr)
 
-        self._combo = QComboBox()
-        self._combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._combo.setMaxVisibleItems(12)
-        layout.addWidget(self._combo)
+        self._person_search = PersonSearchSelect()
+        self._person_search.person_selected.connect(self._on_assign)
+        layout.addWidget(self._person_search)
 
         self._assign_btn = QPushButton()
         self._assign_btn.clicked.connect(self._on_assign)
@@ -361,26 +361,23 @@ class _InlineFaceEditor(QFrame):
         self._assign_btn.setText(t("ibp_assign_btn"))
         self._new_edit.setPlaceholderText(t("ibp_new_placeholder"))
         self._create_btn.setText(t("ibp_create_btn"))
+        self._person_search.retranslate()
 
     def populate(
         self,
         person_name: Optional[str],
         person_id: Optional[int],
-        persons: List[Tuple[int, str]],
+        persons: List[Person],
+        priority_ids: Optional[List[int]] = None,
     ) -> None:
         self._name_lbl.setText(person_name or "?")
-        self._combo.clear()
-        current_index = 0
-        for i, (pid, name) in enumerate(persons):
-            self._combo.addItem(name, userData=pid)
-            if pid == person_id:
-                current_index = i
-        if persons:
-            self._combo.setCurrentIndex(current_index)
+        self._person_search.set_persons(persons, priority_ids=priority_ids)
+        if person_id is not None:
+            self._person_search.set_current_by_id(person_id)
         self._new_edit.clear()
 
-    def _on_assign(self) -> None:
-        pid = self._combo.currentData()
+    def _on_assign(self, _person_id: int = 0) -> None:
+        pid = self._person_search.current_person_id()
         if pid is not None:
             self.assign_requested.emit(pid)
 
@@ -582,6 +579,7 @@ class ImageBrowserPanel(QWidget):
         self._orig_img_bgr: Optional[np.ndarray] = None
         self._full_pixmap: Optional[QPixmap] = None
         self._recent_assignment_person_ids: List[int] = []
+        self._all_persons: List[Person] = []
 
         # Zoom / pan
         self._zoom: float = 1.0
@@ -608,16 +606,16 @@ class ImageBrowserPanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(8, 0, 8, 0)
         root.setSpacing(0)
 
         main_splitter = QSplitter(Qt.Horizontal)
 
         # ── Column 1: Finder-style folder/image tree ──────────────────
-        tree_panel = QWidget()
-        tree_panel.setMinimumWidth(200)
-        tree_panel.setMaximumWidth(420)
-        tp_layout = QVBoxLayout(tree_panel)
+        self._tree_panel = QWidget()
+        self._tree_panel.setMinimumWidth(200)
+        self._tree_panel.setMaximumWidth(420)
+        tp_layout = QVBoxLayout(self._tree_panel)
         tp_layout.setContentsMargins(4, 4, 4, 4)
         tp_layout.setSpacing(4)
 
@@ -657,7 +655,7 @@ class ImageBrowserPanel(QWidget):
         self._file_tree.go_next.connect(self._navigate_next)
         tp_layout.addWidget(self._file_tree, stretch=1)
 
-        main_splitter.addWidget(tree_panel)
+        main_splitter.addWidget(self._tree_panel)
 
         # ── Column 2: Preview + info sub-splitter ────────────────────
         preview_splitter = QSplitter(Qt.Horizontal)
@@ -672,13 +670,6 @@ class ImageBrowserPanel(QWidget):
         # Draw mode toggle + nav buttons + fullscreen row
         top_bar = QHBoxLayout()
 
-        self._draw_mode_btn = QPushButton()
-        self._draw_mode_btn.setCheckable(True)
-        self._draw_mode_btn.toggled.connect(self._on_draw_mode_toggled)
-        top_bar.addWidget(self._draw_mode_btn)
-
-        top_bar.addStretch()
-
         _nav_style = (
             "QPushButton {"
             "  font-size: 16px; padding: 0 10px; min-width: 32px; min-height: 26px;"
@@ -688,7 +679,23 @@ class ImageBrowserPanel(QWidget):
             "QPushButton:hover  { background: #45475a; }"
             "QPushButton:pressed { background: #585b70; }"
             "QPushButton:disabled { color: #45475a; border-color: #313244; }"
+            "QPushButton:checked { background: #585b70; border-color: #88aaff; }"
         )
+
+        # Toggle for the left (folder) panel
+        self._toggle_left_btn = QPushButton("◧")
+        self._toggle_left_btn.setCheckable(True)
+        self._toggle_left_btn.setChecked(True)
+        self._toggle_left_btn.setStyleSheet(_nav_style)
+        self._toggle_left_btn.toggled.connect(self._on_toggle_left_panel)
+        top_bar.addWidget(self._toggle_left_btn)
+
+        self._draw_mode_btn = QPushButton()
+        self._draw_mode_btn.setCheckable(True)
+        self._draw_mode_btn.toggled.connect(self._on_draw_mode_toggled)
+        top_bar.addWidget(self._draw_mode_btn)
+
+        top_bar.addStretch()
 
         self._prev_btn = QPushButton("◀")
         self._prev_btn.setToolTip("Előző kép  (←)")
@@ -713,6 +720,14 @@ class ImageBrowserPanel(QWidget):
         self._exit_fs_btn.clicked.connect(self._exit_fullscreen)
         self._exit_fs_btn.setVisible(False)
         top_bar.addWidget(self._exit_fs_btn)
+
+        # Toggle for the right (info) panel
+        self._toggle_right_btn = QPushButton("◨")
+        self._toggle_right_btn.setCheckable(True)
+        self._toggle_right_btn.setChecked(True)
+        self._toggle_right_btn.setStyleSheet(_nav_style)
+        self._toggle_right_btn.toggled.connect(self._on_toggle_right_panel)
+        top_bar.addWidget(self._toggle_right_btn)
 
         im_layout.addLayout(top_bar)
 
@@ -759,6 +774,8 @@ class ImageBrowserPanel(QWidget):
 
         self._folder_label = QLabel("")
         self._folder_label.setWordWrap(True)
+        self._folder_label.setMinimumWidth(0)
+        self._folder_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._folder_label.setStyleSheet("color: #88aaff; font-size: 11px;")
         info_layout.addWidget(self._folder_label)
 
@@ -770,12 +787,17 @@ class ImageBrowserPanel(QWidget):
 
         self._filename_label = QLabel("")
         self._filename_label.setWordWrap(True)
+        self._filename_label.setMinimumWidth(0)
+        self._filename_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._filename_label.setStyleSheet("color: #ddaa55; font-size: 11px;")
         info_layout.addWidget(self._filename_label)
 
         info_layout.addWidget(_hline())
 
         self._date_hdr = QLabel()
+        self._date_hdr.setWordWrap(True)
+        self._date_hdr.setMinimumWidth(0)
+        self._date_hdr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._date_hdr.setStyleSheet(
             "font-weight: bold; color: #888; font-size: 11px;"
         )
@@ -786,23 +808,30 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.editingFinished.connect(self._save_photo_date)
         info_layout.addWidget(self._photo_date_edit)
 
-        # EXIF suggestion row
+        # EXIF suggestion section — header on its own line, value + button below
         exif_row = QWidget()
-        exif_row_layout = QHBoxLayout(exif_row)
+        exif_row_layout = QVBoxLayout(exif_row)
         exif_row_layout.setContentsMargins(0, 0, 0, 0)
-        exif_row_layout.setSpacing(4)
+        exif_row_layout.setSpacing(2)
         self._exif_suggestion_hdr = QLabel()
         self._exif_suggestion_hdr.setStyleSheet(
             "font-weight: bold; color: #888; font-size: 11px;"
         )
         exif_row_layout.addWidget(self._exif_suggestion_hdr)
+        exif_val_row = QHBoxLayout()
+        exif_val_row.setContentsMargins(0, 0, 0, 0)
+        exif_val_row.setSpacing(4)
         self._exif_suggestion_label = QLabel("")
+        self._exif_suggestion_label.setWordWrap(True)
+        self._exif_suggestion_label.setMinimumWidth(0)
+        self._exif_suggestion_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._exif_suggestion_label.setStyleSheet("color: #aaddaa; font-size: 11px;")
-        exif_row_layout.addWidget(self._exif_suggestion_label, 1)
+        exif_val_row.addWidget(self._exif_suggestion_label, 1)
         self._exif_accept_btn = QPushButton()
-        self._exif_accept_btn.setFixedWidth(64)
+        self._exif_accept_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._exif_accept_btn.clicked.connect(self._accept_exif_suggestion)
-        exif_row_layout.addWidget(self._exif_accept_btn)
+        exif_val_row.addWidget(self._exif_accept_btn, 0)
+        exif_row_layout.addLayout(exif_val_row)
         self._exif_row_widget = exif_row
         self._exif_row_widget.setVisible(False)
         info_layout.addWidget(self._exif_row_widget)
@@ -817,11 +846,15 @@ class ImageBrowserPanel(QWidget):
 
         self._face_status_label = QLabel()
         self._face_status_label.setWordWrap(True)
+        self._face_status_label.setMinimumWidth(0)
+        self._face_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._face_status_label.setStyleSheet("color: #aaa; font-size: 11px;")
         info_layout.addWidget(self._face_status_label)
 
         self._person_name_label = QLabel("")
         self._person_name_label.setWordWrap(True)
+        self._person_name_label.setMinimumWidth(0)
+        self._person_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._person_name_label.setStyleSheet(
             "font-size: 14px; font-weight: bold; color: #88ee88; padding: 4px 0px;"
         )
@@ -849,14 +882,16 @@ class ImageBrowserPanel(QWidget):
 
         self._assign_hdr = QLabel()
         self._assign_hdr.setWordWrap(True)
+        self._assign_hdr.setMinimumWidth(0)
+        self._assign_hdr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._assign_hdr.setStyleSheet(
             "font-weight: bold; color: #888; font-size: 11px;"
         )
         info_layout.addWidget(self._assign_hdr)
 
-        self._person_combo = QComboBox()
-        self._person_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        info_layout.addWidget(self._person_combo)
+        self._person_search = PersonSearchSelect()
+        self._person_search.person_selected.connect(self._on_person_search_selected)
+        info_layout.addWidget(self._person_search)
 
         self._assign_btn = QPushButton()
         self._assign_btn.clicked.connect(self._on_assign_existing)
@@ -882,15 +917,15 @@ class ImageBrowserPanel(QWidget):
 
         info_layout.addStretch()
 
-        info_scroll = QScrollArea()
-        info_scroll.setWidget(info_content)
-        info_scroll.setWidgetResizable(True)
-        info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        info_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        info_scroll.setFrameShape(QFrame.NoFrame)
-        info_scroll.setMinimumWidth(160)
-        info_scroll.setMaximumWidth(300)
-        preview_splitter.addWidget(info_scroll)
+        self._info_scroll = QScrollArea()
+        self._info_scroll.setWidget(info_content)
+        self._info_scroll.setWidgetResizable(True)
+        self._info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._info_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._info_scroll.setFrameShape(QFrame.NoFrame)
+        self._info_scroll.setMinimumWidth(160)
+        self._info_scroll.setMaximumWidth(340)
+        preview_splitter.addWidget(self._info_scroll)
 
         preview_splitter.setStretchFactor(0, 3)
         preview_splitter.setStretchFactor(1, 1)
@@ -913,6 +948,8 @@ class ImageBrowserPanel(QWidget):
 
     def retranslate(self) -> None:
         self._tree_hdr_lbl.setText(t("ib3_folders_hdr"))
+        self._toggle_left_btn.setToolTip(t("ib3_toggle_left_tip"))
+        self._toggle_right_btn.setToolTip(t("ib3_toggle_right_tip"))
         self._draw_mode_btn.setText(t("ibp_manual_mark"))
         self._draw_mode_btn.setToolTip(t("ibp_manual_mark_tooltip"))
         self._fs_btn.setText(t("ibp_fullscreen"))
@@ -1389,32 +1426,40 @@ class ImageBrowserPanel(QWidget):
         if orig_x < 0 or orig_y < 0:
             return
         face_id = self._hit_test(orig_x, orig_y)
-        if face_id is None:
-            return
-
-        if self._selected_face_id != face_id:
-            self._selected_face_id = face_id
-            self._redraw_faces()
-            self._show_face_info(face_id)
-        self._hide_inline_editor()
-
-        entry = next((f for f in self._face_data if f[0] == face_id), None)
-        person_name = entry[5] if entry else None
 
         menu = QMenu(self)
-        title_text = person_name if person_name else t("ibp_ctx_unknown_face")
-        title = menu.addAction(f"[ {title_text} ]")
-        title.setEnabled(False)
-        menu.addSeparator()
-        edit_action = menu.addAction(t("ibp_ctx_edit_bbox"))
-        menu.addSeparator()
-        delete_action = menu.addAction(t("ibp_ctx_delete"))
+
+        if face_id is not None:
+            if self._selected_face_id != face_id:
+                self._selected_face_id = face_id
+                self._redraw_faces()
+                self._show_face_info(face_id)
+            self._hide_inline_editor()
+
+            entry = next((f for f in self._face_data if f[0] == face_id), None)
+            person_name = entry[5] if entry else None
+
+            title_text = person_name if person_name else t("ibp_ctx_unknown_face")
+            title = menu.addAction(f"[ {title_text} ]")
+            title.setEnabled(False)
+            menu.addSeparator()
+            edit_action = menu.addAction(t("ibp_ctx_edit_bbox"))
+            menu.addSeparator()
+            delete_action = menu.addAction(t("ibp_ctx_delete"))
+            menu.addSeparator()
+        else:
+            edit_action = None
+            delete_action = None
+
+        manual_mark_action = menu.addAction(t("ibp_ctx_manual_mark"))
 
         chosen = menu.exec(self._image_label.mapToGlobal(QPoint(lx, ly)))
-        if chosen == edit_action:
+        if chosen == edit_action and face_id is not None:
             self._start_face_edit(face_id)
-        elif chosen == delete_action:
+        elif chosen == delete_action and face_id is not None:
             self._delete_face(face_id)
+        elif chosen == manual_mark_action:
+            self._draw_mode_btn.setChecked(True)
 
     # ──────────────────────────────────────────────────────────────────
     # Draw mode
@@ -1670,11 +1715,12 @@ class ImageBrowserPanel(QWidget):
             return
         _, bx, by, bw, bh, person_name, person_id = entry
 
-        persons: List[Tuple[int, str]] = [
-            (self._person_combo.itemData(i), self._person_combo.itemText(i))
-            for i in range(self._person_combo.count())
-        ]
-        self._inline_editor.populate(person_name, person_id, persons)
+        self._inline_editor.populate(
+            person_name,
+            person_id,
+            self._all_persons,
+            priority_ids=list(self._recent_assignment_person_ids),
+        )
         self._inline_editor.adjustSize()
 
         lx_top, ly_top = self._image_to_label(bx, by)
@@ -1897,18 +1943,12 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _reload_persons_combo(self) -> None:
-        self._person_combo.clear()
         with session_scope() as session:
-            persons = session.query(Person).order_by(Person.name).all()
-            recent_rank = self._recent_person_rank(session)
-            persons.sort(
-                key=lambda p: (
-                    recent_rank.get(p.id, len(recent_rank) + 10_000),
-                    p.name.casefold(),
-                )
-            )
-            for p in persons:
-                self._person_combo.addItem(p.name, userData=p.id)
+            self._all_persons = session.query(Person).order_by(Person.name).all()
+        self._person_search.set_persons(
+            self._all_persons,
+            priority_ids=list(self._recent_assignment_person_ids),
+        )
 
     def _recent_person_rank(self, session) -> Dict[int, int]:
         rank: Dict[int, int] = {}
@@ -1927,10 +1967,17 @@ class ImageBrowserPanel(QWidget):
     # Assign / create actions (info panel buttons)
     # ──────────────────────────────────────────────────────────────────
 
+    def _on_person_search_selected(self, person_id: int) -> None:
+        """Called when user picks a person via the search widget (single click or Enter)."""
+        # Store pending selection; the Assign button still commits it.
+        # This makes the widget's selection immediately visible but doesn't
+        # save until the user presses Assign.
+        pass  # selection is already reflected in current_person_id()
+
     def _on_assign_existing(self) -> None:
         if self._selected_face_id is None:
             return
-        person_id = self._person_combo.currentData()
+        person_id = self._person_search.current_person_id()
         if person_id is None:
             return
         log.info(
@@ -2055,6 +2102,22 @@ class ImageBrowserPanel(QWidget):
             main_win.showMaximized()
         else:
             main_win.showNormal()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Side panel visibility toggles
+    # ──────────────────────────────────────────────────────────────────
+
+    def _on_toggle_left_panel(self, checked: bool) -> None:
+        """Show / hide the folder tree column. Image area grows to fill the space."""
+        self._tree_panel.setVisible(checked)
+        self._hide_inline_editor()
+        self._image_label.update()
+
+    def _on_toggle_right_panel(self, checked: bool) -> None:
+        """Show / hide the info column. Image area grows to fill the space."""
+        self._info_scroll.setVisible(checked)
+        self._hide_inline_editor()
+        self._image_label.update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

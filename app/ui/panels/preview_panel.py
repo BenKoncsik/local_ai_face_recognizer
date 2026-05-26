@@ -371,6 +371,8 @@ class PreviewPanel(QWidget):
 
         self._path_label = QLabel("")
         self._path_label.setWordWrap(True)
+        self._path_label.setMinimumWidth(0)
+        self._path_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._path_label.setStyleSheet("QLabel { color: #aaa; font-size: 10px; }")
         layout.addWidget(self._path_label)
 

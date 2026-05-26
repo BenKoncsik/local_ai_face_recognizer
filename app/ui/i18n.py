@@ -457,6 +457,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_assign_hdr":         {"en": "Assign to existing person:",
                                "hu": "Hozzárendelés meglévő személyhez:"},
     "ibp_assign_btn":         {"en": "Assign",          "hu": "Hozzárendelés"},
+    "pss_search_placeholder": {"en": "Search person…",  "hu": "Személy keresése…"},
+    "pss_no_results":         {"en": "No results",      "hu": "Nincs találat"},
     "ibp_new_hdr":            {"en": "Create new person:", "hu": "Új személy létrehozása:"},
     "ibp_new_placeholder":    {"en": "Person name…",    "hu": "Személy neve…"},
     "ibp_create_btn":         {"en": "Create & Assign", "hu": "Létrehozás és hozzárendelés"},
@@ -470,6 +472,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_ctx_edit_bbox":      {"en": "Edit bbox",        "hu": "Bbox módosítása"},
     "ibp_ctx_delete":         {"en": "Delete",           "hu": "Törlés"},
     "ibp_ctx_unknown_face":   {"en": "Unknown face",     "hu": "Ismeretlen arc"},
+    "ibp_ctx_manual_mark":    {"en": "Manual face selection", "hu": "Kézi arc kijelölés"},
     "ibp_select_hint":        {"en": "Select a folder and run a scan",
                                "hu": "Válassz mappát és futtass beolvasást"},
     "ibp_manual_mark_tooltip": {"en": "Click, then drag on the image to manually mark a face",
@@ -492,6 +495,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                 "hu": "← Válassz képet"},
     "ib3_no_images_in_folder": {"en": "No images in this folder",
                                 "hu": "Nincs kép ebben a mappában"},
+    "ib3_toggle_left_tip":     {"en": "Show / hide the folder panel",
+                                "hu": "Mappa panel mutatása / elrejtése"},
+    "ib3_toggle_right_tip":    {"en": "Show / hide the info panel",
+                                "hu": "Infó panel mutatása / elrejtése"},
 
     # ── Image library ─────────────────────────────────────────────────────
     "img_lib_group":            {"en": "Image Library",

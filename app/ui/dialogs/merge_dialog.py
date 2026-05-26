@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -15,6 +14,8 @@ from PySide6.QtWidgets import (
 
 from app.db.models import Person
 from app.ui.i18n import t
+from app.ui.widgets.person_search_select import PersonSearchSelect
+from app.utils.person_search import PersonEntry
 
 
 class MergeDialog(QDialog):
@@ -28,29 +29,29 @@ class MergeDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("merge_into"))
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
         layout.addWidget(
-            QLabel(
-                t("merge_source_into", name=source_person.name)
-            )
+            QLabel(t("merge_source_into", name=source_person.name))
         )
 
-        self._combo = QComboBox()
-        for person in all_persons:
-            if person.id == source_person.id:
-                continue
-            face_count = len(person.faces)
-            self._combo.addItem(
-                t("merge_faces_count", name=person.name, n=face_count), userData=person.id
+        entries = [
+            PersonEntry(
+                person_id=p.id,
+                name=p.name,
+                display_text=t("merge_faces_count", name=p.name, n=len(p.faces)),
             )
+            for p in all_persons
+            if p.id != source_person.id
+        ]
 
-        layout.addWidget(self._combo)
+        self._selector = PersonSearchSelect()
+        self._selector.set_entries(entries)
+
+        layout.addWidget(self._selector)
         layout.addWidget(
-            QLabel(
-                f"<small>{t('merge_source_deleted')}</small>"
-            )
+            QLabel(f"<small>{t('merge_source_deleted')}</small>")
         )
 
         buttons = QDialogButtonBox(
@@ -62,5 +63,4 @@ class MergeDialog(QDialog):
 
     def target_person_id(self) -> Optional[int]:
         """Return the selected target person ID, or ``None`` if empty."""
-        data = self._combo.currentData()
-        return int(data) if data is not None else None
+        return self._selector.current_person_id()

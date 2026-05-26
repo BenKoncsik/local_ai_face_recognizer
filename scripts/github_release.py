@@ -144,7 +144,7 @@ def build_release_notes(
     runner_notes: list[str] | None = None,
     build_results: list[str] | None = None,
 ) -> str:
-    previous_tag = find_previous_release_tag(tag=tag, target=target)
+    previous_tag = find_previous_release_tag(repo=repo, tag=tag, target=target)
     commits = collect_commit_notes(target=target, previous_tag=previous_tag)
 
     lines = [
@@ -182,9 +182,14 @@ def build_release_notes(
     return "\n".join(lines) + "\n"
 
 
-def find_previous_release_tag(tag: str, target: str) -> str | None:
+def find_previous_release_tag(tag: str, target: str, repo: str | None = None) -> str | None:
+    if repo:
+        github_release_tag = find_previous_github_release_tag(repo=repo, tag=tag, target=target)
+        if github_release_tag:
+            return github_release_tag
+
     try:
-        tags = run_git("tag", "--merged", target, "--list", "v[0-9]*", "--sort=-v:refname")
+        tags = run_git("tag", "--merged", target, "--list", "v[0-9]*", "--sort=-creatordate")
     except RuntimeError:
         return None
 
@@ -193,6 +198,56 @@ def find_previous_release_tag(tag: str, target: str) -> str | None:
         if candidate and candidate != tag and VERSION_TAG_RE.fullmatch(candidate):
             return candidate
     return None
+
+
+def find_previous_github_release_tag(repo: str, tag: str, target: str) -> str | None:
+    releases = github_api_get_json(f"/repos/{repo}/releases?per_page=100")
+    if not isinstance(releases, list):
+        return None
+
+    for release in releases:
+        if not isinstance(release, dict):
+            continue
+        candidate = str(release.get("tag_name") or "").strip()
+        if (
+            not candidate
+            or candidate == tag
+            or not VERSION_TAG_RE.fullmatch(candidate)
+            or release.get("draft")
+            or release.get("prerelease")
+        ):
+            continue
+        if is_ref_ancestor(candidate, target):
+            return candidate
+    return None
+
+
+def github_api_get_json(path: str) -> Any | None:
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "face-local-release-script",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urllib.request.Request(f"{API_BASE}{path}", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.load(response)
+    except (OSError, urllib.error.HTTPError, json.JSONDecodeError):
+        return None
+
+
+def is_ref_ancestor(ref: str, target: str) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ref, target],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
 
 
 def collect_commit_notes(target: str, previous_tag: str | None) -> list[CommitNote]:
