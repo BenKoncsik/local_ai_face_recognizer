@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -144,6 +145,27 @@ def _read_exif_date(path: str) -> Optional[str]:
                 return date_part.replace(":", ".")
     except Exception:
         pass
+    return None
+
+
+_RE_FILENAME_DATETIME = re.compile(
+    r"^(\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2})"
+)
+_RE_FILENAME_DATE = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})")
+
+
+def _parse_date_from_filename(path: str) -> Optional[str]:
+    """Return 'YYYY.MM.DD HH:MM:SS' or 'YYYY.MM.DD' if the filename starts with a
+    date/datetime pattern, else None."""
+    stem = Path(path).stem
+    m = _RE_FILENAME_DATETIME.match(stem)
+    if m:
+        yyyy, mm, dd, hh, mi, ss = m.groups()
+        return f"{yyyy}.{mm}.{dd} {hh}:{mi}:{ss}"
+    m = _RE_FILENAME_DATE.match(stem)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{yyyy}.{mm}.{dd}"
     return None
 
 
@@ -1266,6 +1288,16 @@ class ImageBrowserPanel(QWidget):
             self._current_path = img.file_path
             self._detection_done = img.detection_done
             photo_date = img.photo_date or ""
+            # Auto-fill date from filename when not yet set
+            if not photo_date:
+                from_name = _parse_date_from_filename(img.file_path)
+                if from_name:
+                    img.photo_date = from_name
+                    photo_date = from_name
+                    log.debug(
+                        "photo_date auto-set from filename for image %d: %r",
+                        image_id, from_name,
+                    )
             # Track current folder
             self._current_folder = str(Path(img.file_path).parent)
             self._face_data = [
