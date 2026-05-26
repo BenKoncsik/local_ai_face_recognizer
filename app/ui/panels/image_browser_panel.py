@@ -1720,6 +1720,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
+        self._image_label.setFocus()
 
     def _on_inline_create(self, name: str) -> None:
         face_id = self._inline_editor_face_id
@@ -1740,6 +1741,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
+        self._image_label.setFocus()
         self._open_person_info_dialog(person_id)
 
     # ──────────────────────────────────────────────────────────────────
@@ -1941,6 +1943,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
+        self._image_label.setFocus()
 
     def _on_create_and_assign(self) -> None:
         if self._selected_face_id is None:
@@ -1966,6 +1969,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
+        self._image_label.setFocus()
         self._open_person_info_dialog(person_id)
 
     def _open_person_info_dialog(self, person_id: int) -> None:
