@@ -56,11 +56,13 @@ class PipelineWorker(QThread):
         root_folder: str,
         config: AppConfig,
         parent=None,
+        high_accuracy: bool = False,
     ) -> None:
         super().__init__(parent)
         self._root_folder = root_folder
         self._config = config
         self._abort = False
+        self._high_accuracy = high_accuracy
 
     def abort(self) -> None:
         """Request a graceful stop (checked between pipeline stages)."""
@@ -92,8 +94,9 @@ class PipelineWorker(QThread):
 
         # --- Stage 2: Detection ---
         all_pending = self._get_pending_detection_ids()
+        mode_label = "high-accuracy" if self._high_accuracy else "fast"
         self.log_message.emit(
-            f"Stage 2/5: Detecting faces in {len(all_pending)} image(s) …"
+            f"Stage 2/5: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
         )
         total_faces = self._run_detection(all_pending)
         if self._abort:
@@ -184,6 +187,7 @@ class PipelineWorker(QThread):
                 detector=detector,
                 config=self._config,
                 progress_cb=cb,
+                high_accuracy=self._high_accuracy,
             )
             return svc.process(image_ids)
 

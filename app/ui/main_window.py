@@ -156,6 +156,16 @@ class MainWindow(QMainWindow):
         self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
         tb.addWidget(self._force_rescan_btn)
 
+        self._redetect_btn = QPushButton()
+        self._redetect_btn.clicked.connect(self._on_redetect_fast)
+        tb.addWidget(self._redetect_btn)
+
+        self._redetect_accurate_btn = QPushButton()
+        self._redetect_accurate_btn.clicked.connect(self._on_redetect_accurate)
+        tb.addWidget(self._redetect_accurate_btn)
+
+        tb.addSeparator()
+
         self._no_face_btn = QPushButton()
         self._no_face_btn.clicked.connect(self._on_no_face_images)
         tb.addWidget(self._no_face_btn)
@@ -335,6 +345,10 @@ class MainWindow(QMainWindow):
         self._person_info_btn.setText(t("person_info"))
         self._person_info_btn.setToolTip(t("person_info_tip"))
         self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
+        self._redetect_btn.setText(t("redetect_faces"))
+        self._redetect_btn.setToolTip(t("redetect_faces_tip"))
+        self._redetect_accurate_btn.setText(t("redetect_faces_accurate"))
+        self._redetect_accurate_btn.setToolTip(t("redetect_faces_accurate_tip"))
         self._tabs.setTabText(0, t("tab_face_recognition"))
         self._tabs.setTabText(1, t("tab_image_browser"))
         self._tabs.setTabText(2, t("tab_collage"))
@@ -412,7 +426,11 @@ class MainWindow(QMainWindow):
 
         with session_scope() as session:
             from app.db.models import Face, Image
-            session.query(Face).delete()
+            deleted = (
+                session.query(Face)
+                .filter(Face.detector_backend != "manual")
+                .delete(synchronize_session="fetch")
+            )
             session.query(Image).update({"detection_done": False, "embedding_done": False})
 
         self._current_person_id = None
@@ -420,8 +438,101 @@ class MainWindow(QMainWindow):
         self._cluster_panel.clear()
         self._preview_panel.clear()
         self._refresh_persons()
-        log.info("Force rescan: reset all %d images.", n_images)
+        log.info("Force rescan: reset all %d images, deleted %d auto-detected face(s).", n_images, deleted)
         self._on_scan()
+
+    def _prepare_redetect(self) -> Optional[int]:
+        """Reset detection flags for all images and delete auto-detected faces.
+
+        Returns the number of images reset, or ``None`` if the caller should
+        abort (e.g. worker already running).
+        """
+        if not hasattr(self, "_root_folder"):
+            QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
+            return None
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return None
+
+        with session_scope() as session:
+            from app.db.models import Face, Image
+            n_images = session.query(Image).count()
+
+        return n_images
+
+    @Slot()
+    def _on_redetect_fast(self) -> None:
+        n_images = self._prepare_redetect()
+        if n_images is None:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("redetect_title"),
+            t("redetect_msg", n=n_images),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._reset_detection_state()
+        log.info("Re-detect (fast): reset %d images.", n_images)
+        self._start_pipeline(high_accuracy=False)
+
+    @Slot()
+    def _on_redetect_accurate(self) -> None:
+        n_images = self._prepare_redetect()
+        if n_images is None:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("redetect_accurate_title"),
+            t("redetect_accurate_msg", n=n_images),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._reset_detection_state()
+        log.info("Re-detect (accurate): reset %d images.", n_images)
+        self._start_pipeline(high_accuracy=True)
+
+    def _reset_detection_state(self) -> None:
+        """Delete auto-detected faces and reset detection flags on all images."""
+        with session_scope() as session:
+            from app.db.models import Face, Image
+            deleted = (
+                session.query(Face)
+                .filter(Face.detector_backend != "manual")
+                .delete(synchronize_session="fetch")
+            )
+            session.query(Image).update({"detection_done": False, "embedding_done": False})
+        log.debug("Reset detection: %d auto face(s) deleted.", deleted)
+        self._current_person_id = None
+        self._current_face_id = None
+        self._cluster_panel.clear()
+        self._preview_panel.clear()
+        self._refresh_persons()
+
+    def _start_pipeline(self, high_accuracy: bool = False) -> None:
+        """Launch the pipeline worker with the given mode."""
+        if not hasattr(self, "_root_folder"):
+            return
+        self._set_scanning_state(True)
+        self._worker = PipelineWorker(
+            root_folder=self._root_folder,
+            config=self._config,
+            parent=self,
+            high_accuracy=high_accuracy,
+        )
+        self._pending_suggestion_count = 0
+        self._worker.progress.connect(self._on_progress)
+        self._worker.log_message.connect(self._log_panel.append_plain)
+        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
+        self._worker.finished.connect(self._on_pipeline_finished)
+        self._worker.error.connect(self._on_pipeline_error)
+        self._worker.start()
 
     @Slot()
     def _on_scan(self) -> None:
@@ -433,19 +544,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
-        self._set_scanning_state(True)
-        self._worker = PipelineWorker(
-            root_folder=self._root_folder,
-            config=self._config,
-            parent=self,
-        )
-        self._pending_suggestion_count = 0
-        self._worker.progress.connect(self._on_progress)
-        self._worker.log_message.connect(self._log_panel.append_plain)
-        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
-        self._worker.finished.connect(self._on_pipeline_finished)
-        self._worker.error.connect(self._on_pipeline_error)
-        self._worker.start()
+        self._start_pipeline(high_accuracy=False)
 
     @Slot()
     def _on_stop(self) -> None:

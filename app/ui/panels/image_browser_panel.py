@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QThreadPool, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -595,6 +595,11 @@ class ImageBrowserPanel(QWidget):
         self._fs_hidden_widgets: List[QWidget] = []
         self._fs_was_maximized: bool = False
 
+        # Deoldified pairing state (reset on each image load)
+        self._deol_pair_orig_id: Optional[int] = None  # original image ID when current is deoldified
+        self._deol_pair_color_path: str = ""           # path to colorized variant
+        self._deol_viewing_color: bool = False         # True = showing colorized pixels
+
         self._build_ui()
         self._setup_shortcuts()
         self._prev_btn.setEnabled(False)
@@ -738,6 +743,28 @@ class ImageBrowserPanel(QWidget):
         )
         self._draw_hint.setVisible(False)
         im_layout.addWidget(self._draw_hint)
+
+        # ── Deoldified pair toggle bar ────────────────────────────────────
+        self._deoldified_bar = QWidget()
+        _deol_row = QHBoxLayout(self._deoldified_bar)
+        _deol_row.setContentsMargins(0, 2, 0, 2)
+        _deol_row.setSpacing(6)
+        self._deol_lbl = QLabel()
+        self._deol_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        _deol_row.addWidget(self._deol_lbl)
+        self._btn_view_bw = QPushButton()
+        self._btn_view_bw.setCheckable(True)
+        self._btn_view_bw.setStyleSheet(_nav_style)
+        self._btn_view_bw.clicked.connect(lambda: self._on_deol_view_toggle(False))
+        _deol_row.addWidget(self._btn_view_bw)
+        self._btn_view_color = QPushButton()
+        self._btn_view_color.setCheckable(True)
+        self._btn_view_color.setStyleSheet(_nav_style)
+        self._btn_view_color.clicked.connect(lambda: self._on_deol_view_toggle(True))
+        _deol_row.addWidget(self._btn_view_color)
+        _deol_row.addStretch()
+        self._deoldified_bar.setVisible(False)
+        im_layout.addWidget(self._deoldified_bar)
 
         self._image_label = _DrawableImageLabel()
         self._image_label.setAlignment(Qt.AlignCenter)
@@ -977,6 +1004,9 @@ class ImageBrowserPanel(QWidget):
         self._new_name_edit.setPlaceholderText(t("ibp_new_placeholder"))
         self._create_btn.setText(t("ibp_create_btn"))
         self._inline_editor.retranslate()
+        self._deol_lbl.setText(t("ibp_deol_pair_lbl"))
+        self._btn_view_bw.setText(t("ibp_view_original_bw"))
+        self._btn_view_color.setText(t("ibp_view_colorized"))
 
     def refresh(self) -> None:
         """Reload folder list from DB; keep the selected folder expanded if still present."""
@@ -1030,13 +1060,109 @@ class ImageBrowserPanel(QWidget):
             if self._current_image_id is None:
                 self._open_first_image()
 
+    # ──────────────────────────────────────────────────────────────────
+    # Deoldified pairing
+    # ──────────────────────────────────────────────────────────────────
+
+    def _setup_deoldified_pair(self, image_id: int, image_path: str) -> None:
+        """Detect deoldified pairing and configure the toggle bar."""
+        settings = QSettings("FaceLocal", "FaceLocal")
+        if not settings.value("deoldified/auto_pair", False, type=bool):
+            return
+
+        from app.services.deoldified_pairing_service import (
+            is_deoldified_path,
+            DeoldifiedPairingService,
+        )
+        from app.services.image_library_service import resolve_image_path
+
+        if is_deoldified_path(image_path):
+            # Current image IS the colorized one → find its original
+            with session_scope() as session:
+                img = session.get(Image, image_id)
+                if img is None:
+                    return
+                svc = DeoldifiedPairingService(session)
+                orig = svc.find_original_for_deoldified(img)
+                if orig is None:
+                    return
+                self._deol_pair_orig_id = orig.id
+
+            self._deol_pair_color_path = image_path
+            self._deol_viewing_color = True
+            self._btn_view_bw.setChecked(False)
+            self._btn_view_color.setChecked(True)
+            self._deoldified_bar.setVisible(True)
+            log.debug(
+                "Deoldified pair: color=%s → orig_id=%d",
+                image_path, self._deol_pair_orig_id,
+            )
+        else:
+            # Current image is the original → look for a colorized variant
+            with session_scope() as session:
+                img = session.get(Image, image_id)
+                if img is None:
+                    return
+                svc = DeoldifiedPairingService(session)
+                color_img = svc.find_deoldified_for_original(img)
+                if color_img is None:
+                    return
+                color_resolved = resolve_image_path(color_img)
+                self._deol_pair_color_path = (
+                    str(color_resolved) if color_resolved else color_img.file_path
+                )
+
+            self._deol_viewing_color = False
+            self._btn_view_bw.setChecked(True)
+            self._btn_view_color.setChecked(False)
+            self._deoldified_bar.setVisible(True)
+            log.debug(
+                "Deoldified pair: orig=%s → color=%s",
+                image_path, self._deol_pair_color_path,
+            )
+
+    def _on_deol_view_toggle(self, show_colorized: bool) -> None:
+        """Switch between original B&W and colorized pixel view."""
+        if show_colorized == self._deol_viewing_color:
+            return
+
+        from app.utils.image_utils import load_image_bgr
+        from app.services.image_library_service import resolve_image_path
+
+        if show_colorized:
+            path = self._deol_pair_color_path
+        elif self._deol_pair_orig_id is not None:
+            # Current image in the tree is the deoldified one; load original pixels
+            with session_scope() as session:
+                orig = session.get(Image, self._deol_pair_orig_id)
+                if orig is None:
+                    return
+                resolved = resolve_image_path(orig)
+                path = str(resolved) if resolved else orig.file_path
+        else:
+            path = self._current_path  # current IS the original
+
+        img_bgr = load_image_bgr(path)
+        if img_bgr is None:
+            log.warning("Cannot load image for deoldified toggle: %s", path)
+            return
+
+        self._deol_viewing_color = show_colorized
+        self._btn_view_bw.setChecked(not show_colorized)
+        self._btn_view_color.setChecked(show_colorized)
+        self._orig_img_bgr = img_bgr
+        self._reset_zoom()
+        self._redraw_faces()
+
     def _fetch_face_data(self) -> None:
         """Reload face list from DB without triggering any UI update."""
-        if self._current_image_id is None:
+        # When pairing is active and current is deoldified, reload from the original
+        source_id = self._deol_pair_orig_id or self._current_image_id
+        if source_id is None:
             return
         with session_scope() as session:
             svc = ImageBrowserService(session)
-            self._face_data = svc.get_image_faces(self._current_image_id)
+            self._face_data = svc.get_image_faces(source_id)
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image and refresh the UI."""
@@ -1312,6 +1438,12 @@ class ImageBrowserPanel(QWidget):
         self._hide_inline_editor()
         self._cancel_rename()
 
+        # Reset deoldified pairing state
+        self._deol_pair_orig_id = None
+        self._deol_pair_color_path = ""
+        self._deol_viewing_color = False
+        self._deoldified_bar.setVisible(False)
+
         with session_scope() as session:
             img = session.get(Image, image_id)
             if img is None:
@@ -1346,6 +1478,29 @@ class ImageBrowserPanel(QWidget):
                 if not f.is_excluded
             ]
 
+        # Detect deoldified pair and override state if pairing is enabled
+        self._setup_deoldified_pair(image_id, self._current_path)
+
+        # When current image is deoldified: load face data from the original
+        if self._deol_pair_orig_id is not None:
+            with session_scope() as session:
+                orig = session.get(Image, self._deol_pair_orig_id)
+                if orig is not None:
+                    for f in orig.faces:
+                        _ = f.person
+                    self._face_data = [
+                        (
+                            f.id,
+                            f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
+                            f.person.name if f.person else None,
+                            f.person_id,
+                        )
+                        for f in orig.faces
+                        if not f.is_excluded
+                    ]
+                    if not photo_date:
+                        photo_date = orig.photo_date or ""
+
         self._photo_date_edit.blockSignals(True)
         self._photo_date_edit.setText(photo_date)
         self._photo_date_edit.blockSignals(False)
@@ -1356,14 +1511,19 @@ class ImageBrowserPanel(QWidget):
         self._load_exif_suggestion(self._current_path)
 
         from app.utils.image_utils import load_image_bgr
-        img_bgr = load_image_bgr(self._current_path)
+        display_path = (
+            self._deol_pair_color_path
+            if (self._deol_viewing_color and self._deol_pair_color_path)
+            else self._current_path
+        )
+        img_bgr = load_image_bgr(display_path)
         if img_bgr is None:
             self._orig_img_bgr = None
             self._full_pixmap = None
             self._image_label.set_source_pixmap(None)
-            self._image_label.setText(t("ibp_load_error", path=self._current_path))
+            self._image_label.setText(t("ibp_load_error", path=display_path))
             self._clear_face_panel()
-            log.warning("Cannot load image file: %s", self._current_path)
+            log.warning("Cannot load image file: %s", display_path)
             return
 
         self._orig_img_bgr = img_bgr
@@ -1381,6 +1541,10 @@ class ImageBrowserPanel(QWidget):
         self._editing_face_id = None
         self._orig_img_bgr = None
         self._full_pixmap = None
+        self._deol_pair_orig_id = None
+        self._deol_pair_color_path = ""
+        self._deol_viewing_color = False
+        self._deoldified_bar.setVisible(False)
         self._image_label.set_source_pixmap(None)
         self._image_label.setText(t("ib3_select_image_hint"))
         self._folder_label.setText("")
@@ -1494,8 +1658,10 @@ class ImageBrowserPanel(QWidget):
             self._redraw_faces()
             self._show_face_info(edited_id)
         else:
+            # Always save manual faces to the canonical (non-deoldified) image
+            face_img_id = self._deol_pair_orig_id or self._current_image_id
             new_face_id = self._save_manual_face(
-                self._current_image_id, ix, iy, iw, ih
+                face_img_id, ix, iy, iw, ih
             )
             # Reload the full face list (includes the just-saved face),
             # select it and redraw once — draw mode intentionally stays ON
@@ -1836,17 +2002,17 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _save_photo_date(self) -> None:
-        if self._current_image_id is None:
+        # Save to the original image when viewing a deoldified pair
+        target_id = self._deol_pair_orig_id or self._current_image_id
+        if target_id is None:
             return
         value = self._photo_date_edit.text().strip() or None
         with session_scope() as session:
-            img = session.get(Image, self._current_image_id)
+            img = session.get(Image, target_id)
             if img is None:
                 return
             img.photo_date = value
-        log.debug(
-            "photo_date saved for image %d: %r", self._current_image_id, value
-        )
+        log.debug("photo_date saved for image %d: %r", target_id, value)
 
     def _load_exif_suggestion(self, path: str) -> None:
         """Read EXIF DateTimeOriginal and show as a suggestion (not auto-fill)."""

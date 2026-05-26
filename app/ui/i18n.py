@@ -34,9 +34,42 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "force_rescan":       {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
     "force_rescan_title": {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
     "force_rescan_msg":   {"en": "Delete all detected faces and re-run detection on all {n} images?\n"
-                                 "This will use the current detector (Coral TPU if available).",
-                           "hu": "Törli az összes felismert arcot és újra futtatja a detektálást mind a(z) {n} képen?\n"
-                                 "A jelenlegi detektor lesz használva (Coral TPU ha elérhető)."},
+                                 "This will use the current detector (Coral TPU if available).\n"
+                                 "Manually marked faces are preserved.",
+                           "hu": "Törli az összes automatikusan felismert arcot és újra futtatja a detektálást mind a(z) {n} képen?\n"
+                                 "A jelenlegi detektor lesz használva (Coral TPU ha elérhető).\n"
+                                 "A kézzel jelölt arcok megmaradnak."},
+    "redetect_faces":          {"en": "Re-detect Faces", "hu": "Arcok újrakeresése"},
+    "redetect_faces_accurate": {"en": "Re-detect (Accurate)", "hu": "Újrakeresés (pontos)"},
+    "redetect_faces_tip":      {"en": "Re-run face detection on all images, fast mode.\n"
+                                      "Manually marked faces are preserved.",
+                                "hu": "Arcok újrakeresése az összes képen, gyors módban.\n"
+                                      "A kézzel jelölt arcok megmaradnak."},
+    "redetect_faces_accurate_tip": {"en": "Re-run face detection in high-accuracy mode:\n"
+                                         "multiple preprocessing variants, lower confidence threshold.\n"
+                                         "Slower but finds more faces.\n"
+                                         "Manually marked faces are preserved.",
+                                    "hu": "Arcok újrakeresése pontos módban:\n"
+                                         "több képfeldolgozási variáció, alacsonyabb konfidencia küszöb.\n"
+                                         "Lassabb, de több arcot talál.\n"
+                                         "A kézzel jelölt arcok megmaradnak."},
+    "redetect_title":          {"en": "Re-detect Faces", "hu": "Arcok újrakeresése"},
+    "redetect_accurate_title": {"en": "Re-detect Faces — Accurate Mode",
+                                "hu": "Arcok újrakeresése — Pontos mód"},
+    "redetect_msg":            {"en": "Re-run fast face detection on all {n} images?\n"
+                                      "Existing auto-detected faces will be replaced.\n"
+                                      "Manually marked faces are preserved.",
+                                "hu": "Újra futtatja a gyors arcdetektálást mind a(z) {n} képen?\n"
+                                      "A meglévő automatikusan felismert arcok lecserélődnek.\n"
+                                      "A kézzel jelölt arcok megmaradnak."},
+    "redetect_accurate_msg":   {"en": "Re-run face detection in HIGH ACCURACY mode on all {n} images?\n"
+                                      "Uses multiple preprocessing variants (contrast, brightness)\n"
+                                      "and a lower confidence threshold — slower but finds more faces.\n\n"
+                                      "Manually marked faces are preserved.",
+                                "hu": "Újra futtatja az arcdetektálást PONTOS módban mind a(z) {n} képen?\n"
+                                      "Több képfeldolgozási variációt (kontraszt, fényesség) és\n"
+                                      "alacsonyabb konfidencia küszöböt használ — lassabb, de több arcot talál.\n\n"
+                                      "A kézzel jelölt arcok megmaradnak."},
     "people_label":       {"en": "People", "hu": "Személyek"},
     "search_placeholder": {"en": "Search person name …", "hu": "Személy neve …"},
     "n_persons":          {"en": "{n} person(s)", "hu": "{n} személy"},
@@ -499,6 +532,27 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                 "hu": "Mappa panel mutatása / elrejtése"},
     "ib3_toggle_right_tip":    {"en": "Show / hide the info panel",
                                 "hu": "Infó panel mutatása / elrejtése"},
+
+    # ── Settings tabs ────────────────────────────────────────────────────
+    "settings_tab_general":     {"en": "General",          "hu": "Általános"},
+    "settings_tab_pairing":     {"en": "Image Pairing",    "hu": "Képpárosítás"},
+
+    # ── Deoldified pairing ────────────────────────────────────────────────
+    "deoldified_group":         {"en": "Deoldified / Colorized Pairing",
+                                 "hu": "Deoldified / Színezett képpárosítás"},
+    "deoldified_toggle":        {"en": "Automatically pair deoldified (colorized) images",
+                                 "hu": "Deoldified képek automatikus párosítása"},
+    "deoldified_toggle_tip":    {"en": "When enabled, images containing '-deoldified' in their "
+                                       "filename are automatically paired with their original "
+                                       "black-and-white counterpart. Face data from the original "
+                                       "is shown on both versions.",
+                                 "hu": "Ha be van kapcsolva, a '-deoldified' szót tartalmazó "
+                                       "képek automatikusan párosítódnak az eredeti "
+                                       "fekete-fehér képpel. Az arcadatok az eredetiről "
+                                       "mindkét változaton megjelennek."},
+    "ibp_deol_pair_lbl":        {"en": "View:",               "hu": "Nézet:"},
+    "ibp_view_original_bw":     {"en": "Original B&W",        "hu": "Eredeti fekete-fehér"},
+    "ibp_view_colorized":       {"en": "Colorized",            "hu": "Színezett változat"},
 
     # ── Image library ─────────────────────────────────────────────────────
     "img_lib_group":            {"en": "Image Library",

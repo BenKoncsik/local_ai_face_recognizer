@@ -37,6 +37,19 @@ class DetectionConfig:
     # Input size expected by the CPU DNN model (width, height)
     cpu_model_input_size: tuple[int, int] = (300, 300)
 
+    # --- High accuracy mode parameters ---
+
+    # Lower confidence threshold used in high-accuracy multi-pass detection.
+    # More detections are kept; IoU-based deduplication removes overlaps.
+    # 0.25 works well for old / B&W photos where the SSD model gives lower scores.
+    # Tested against res10_300x300_ssd: genuine faces typically score 0.25–0.95,
+    # while most false positives are below 0.20.
+    high_accuracy_confidence_threshold: float = 0.25
+
+    # IoU threshold for merging overlapping bounding boxes from multiple
+    # preprocessing variants in high-accuracy mode.
+    iou_merge_threshold: float = 0.35
+
 
 @dataclass
 class EmbeddingConfig:
@@ -244,6 +257,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             cpu_model_path=det.get("cpu_model_path"),
             cpu_model_input_size=tuple(
                 det.get("cpu_model_input_size", list(cfg.detection.cpu_model_input_size))
+            ),
+            high_accuracy_confidence_threshold=det.get(
+                "high_accuracy_confidence_threshold",
+                cfg.detection.high_accuracy_confidence_threshold,
+            ),
+            iou_merge_threshold=det.get(
+                "iou_merge_threshold", cfg.detection.iou_merge_threshold
             ),
         )
 

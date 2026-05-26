@@ -8,11 +8,14 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image as PilImage
+from PIL import Image as PilImage, ImageOps
 
 from app.detectors.base import Detection
 
 log = logging.getLogger(__name__)
+
+# Standard EXIF tag id for Orientation
+_EXIF_ORIENTATION_TAG = 274
 
 
 def save_face_crop(
@@ -76,6 +79,138 @@ def save_face_crop(
         return None
 
     return dest
+
+
+def load_image_bgr_normalized(path: str) -> Optional[np.ndarray]:
+    """Load an image and apply EXIF orientation correction.
+
+    Uses Pillow's exif_transpose for correct orientation on all platforms.
+    Falls back to load_image_bgr when EXIF reading fails.
+
+    Args:
+        path: Absolute or relative path to the image file.
+
+    Returns:
+        BGR uint8 numpy array with correct orientation, or ``None`` on failure.
+    """
+    try:
+        with PilImage.open(path) as pil:
+            exif = pil.getexif()
+            orientation = exif.get(_EXIF_ORIENTATION_TAG, 1) if exif else 1
+            if orientation in (None, 1):
+                # Normal orientation — fast OpenCV path
+                pass
+            else:
+                pil_corrected = ImageOps.exif_transpose(pil)
+                log.debug(
+                    "EXIF orientation=%d applied for: %s", orientation, Path(path).name
+                )
+                return cv2.cvtColor(
+                    np.array(pil_corrected.convert("RGB")), cv2.COLOR_RGB2BGR
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("EXIF normalisation failed for %s: %s", path, exc)
+
+    return load_image_bgr(path)
+
+
+def get_exif_orientation(path: str) -> int:
+    """Return the EXIF Orientation tag value for *path*, or 1 if absent/unreadable."""
+    try:
+        with PilImage.open(path) as pil:
+            exif = pil.getexif()
+            return exif.get(_EXIF_ORIENTATION_TAG, 1) if exif else 1
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def apply_clahe(img_bgr: np.ndarray, clip_limit: float = 2.0) -> np.ndarray:
+    """Apply CLAHE contrast enhancement in the L channel of LAB colour space.
+
+    Args:
+        img_bgr:    BGR uint8 image.
+        clip_limit: CLAHE clip limit (higher = stronger contrast).
+
+    Returns:
+        Contrast-enhanced BGR uint8 image.
+    """
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def apply_histeq(img_bgr: np.ndarray) -> np.ndarray:
+    """Apply global histogram equalization to each BGR channel independently.
+
+    Helps old / underexposed photos where the face-detector was trained on
+    well-exposed modern images.
+
+    Args:
+        img_bgr: BGR uint8 image.
+
+    Returns:
+        Histogram-equalised BGR uint8 image.
+    """
+    b, g, r = cv2.split(img_bgr)
+    return cv2.merge([cv2.equalizeHist(b), cv2.equalizeHist(g), cv2.equalizeHist(r)])
+
+
+def apply_bilateral(img_bgr: np.ndarray, d: int = 9, sigma: float = 75.0) -> np.ndarray:
+    """Apply bilateral filter to reduce noise while preserving edges.
+
+    Useful for grainy scanned or old photographs where high-frequency noise
+    can lower detector confidence.
+
+    Args:
+        img_bgr: BGR uint8 image.
+        d:       Pixel neighbourhood diameter.
+        sigma:   Colour and space sigma for the filter.
+
+    Returns:
+        Filtered BGR uint8 image.
+    """
+    return cv2.bilateralFilter(img_bgr, d, sigma, sigma)
+
+
+def apply_gamma(img_bgr: np.ndarray, gamma: float = 0.7) -> np.ndarray:
+    """Apply gamma correction to brighten (gamma<1) or darken (gamma>1) an image.
+
+    Args:
+        img_bgr: BGR uint8 image.
+        gamma:   Gamma value; 0.7 brightens, 1.3 darkens.
+
+    Returns:
+        Gamma-corrected BGR uint8 image.
+    """
+    inv_gamma = 1.0 / gamma
+    table = np.array(
+        [((i / 255.0) ** inv_gamma) * 255 for i in range(256)], dtype=np.uint8
+    )
+    return cv2.LUT(img_bgr, table)
+
+
+def compute_dhash(img_bgr: np.ndarray, hash_size: int = 8) -> int:
+    """Compute a difference hash (dHash) of *img_bgr*.
+
+    Two images with the same or very similar content produce close hash values.
+    Use ``bin(a ^ b).count('1')`` to count differing bits between hashes.
+
+    Args:
+        img_bgr:   BGR uint8 image.
+        hash_size: Side length of the internal hash grid.
+
+    Returns:
+        Integer hash (hash_size ** 2 bits).
+    """
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    resized = cv2.resize(gray, (hash_size + 1, hash_size), interpolation=cv2.INTER_AREA)
+    diff = resized[:, 1:] > resized[:, :-1]
+    bits = diff.flatten()
+    value = 0
+    for bit in bits:
+        value = (value << 1) | int(bit)
+    return value
 
 
 def load_image_bgr(path: str) -> Optional[np.ndarray]:

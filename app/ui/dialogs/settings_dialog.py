@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -59,12 +60,25 @@ class SettingsDialog(QDialog):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        # Outer layout: scroll area + sticky OK/Cancel buttons
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        # ── Scroll area ───────────────────────────────────────────────────
+        tabs = QTabWidget()
+        tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
+        tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
+        outer.addWidget(tabs, stretch=1)
+
+        # ── Buttons — always visible outside the tabs ─────────────────────
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        outer.addWidget(btns)
+
+        self._start_tpu_probe()
+
+    def _build_tab_general(self) -> QWidget:
+        """Build the first tab containing all existing settings."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -186,16 +200,29 @@ class SettingsDialog(QDialog):
         layout.addWidget(tpu_group)
 
         layout.addStretch()
-        self._start_tpu_probe()
-
         scroll.setWidget(inner)
-        outer.addWidget(scroll, stretch=1)
+        return scroll
 
-        # ── Buttons — always visible outside the scroll area ──────────────
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        outer.addWidget(btns)
+    def _build_tab_pairing(self) -> QWidget:
+        """Build the second tab for image-pairing settings."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(14)
+
+        deol_group = QGroupBox(t("deoldified_group"))
+        deol_layout = QVBoxLayout(deol_group)
+
+        self._deoldified_check = QCheckBox(t("deoldified_toggle"))
+        self._deoldified_check.setChecked(
+            _qsettings().value("deoldified/auto_pair", False, type=bool)
+        )
+        self._deoldified_check.setToolTip(t("deoldified_toggle_tip"))
+        deol_layout.addWidget(self._deoldified_check)
+
+        layout.addWidget(deol_group)
+        layout.addStretch()
+        return widget
 
     # ------------------------------------------------------------------
     # TPU
@@ -421,6 +448,9 @@ class SettingsDialog(QDialog):
 
     def _on_accept(self) -> None:
         _qsettings().setValue("updates/notify", self._notify_check.isChecked())
+        _qsettings().setValue(
+            "deoldified/auto_pair", self._deoldified_check.isChecked()
+        )
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)
