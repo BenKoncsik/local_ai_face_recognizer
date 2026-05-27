@@ -16,9 +16,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -28,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from app.db.models import Person
 from app.ui.i18n import t
+from app.ui.widgets.person_search_select import PersonSearchSelect
+from app.utils.person_search import PersonEntry
 
 log = logging.getLogger(__name__)
 
@@ -274,21 +273,6 @@ class _PersonThumb(QLabel):
             self.clicked.emit(self._person_id)
 
 
-class PersonListItem(QListWidgetItem):
-    """List item that carries a Person reference."""
-
-    def __init__(self, person: Person) -> None:
-        face_count = len(person.faces)
-        prefix = "🔒 " if person.is_protected else ""
-        label = f"{prefix}{person.name}  ({face_count})"
-        super().__init__(label)
-        self.person_id = person.id
-        self.person_name = person.name
-        if person.is_protected:
-            from PySide6.QtGui import QColor
-            self.setForeground(QColor("#A6ADC8"))
-
-
 class SidebarPanel(QWidget):
     """Left sidebar showing persons as face thumbnails + searchable list.
 
@@ -328,15 +312,10 @@ class SidebarPanel(QWidget):
         search_box = QGroupBox(t("people_label"))
         search_layout = QVBoxLayout(search_box)
 
-        self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText(t("search_placeholder"))
-        self._search_input.textChanged.connect(self._on_search_changed)
-        search_layout.addWidget(self._search_input)
-
-        self._person_list = QListWidget()
-        self._person_list.setAlternatingRowColors(True)
-        self._person_list.currentItemChanged.connect(self._on_selection_changed)
-        search_layout.addWidget(self._person_list)
+        self._person_select = PersonSearchSelect()
+        self._person_select.person_selected.connect(self.person_selected.emit)
+        self._person_select.person_double_clicked.connect(self.person_selected.emit)
+        search_layout.addWidget(self._person_select)
 
         self._count_label = QLabel(t("n_persons", n=0))
         self._count_label.setAlignment(Qt.AlignCenter)
@@ -356,16 +335,22 @@ class SidebarPanel(QWidget):
         """Rebuild the list and thumbnail grid with the given persons."""
         self._all_persons = persons
         self._rebuild_thumb_grid(persons)
-        self._apply_filter(self._search_input.text())
+        entries = [
+            PersonEntry(
+                person_id=p.id,
+                name=p.name,
+                display_text=f"{'🔒 ' if p.is_protected else ''}{p.name}  ({len(p.faces)})",
+            )
+            for p in persons
+        ]
+        self._person_select.set_entries(entries)
+        self._count_label.setText(t("n_persons", n=len(persons)))
 
     def set_recluster_callback(self, cb: Callable) -> None:
         self._recluster_btn.clicked.connect(cb)
 
     def current_person_id(self) -> Optional[int]:
-        item = self._person_list.currentItem()
-        if isinstance(item, PersonListItem):
-            return item.person_id
-        return None
+        return self._person_select.current_person_id()
 
     # ------------------------------------------------------------------
 
@@ -386,27 +371,3 @@ class SidebarPanel(QWidget):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
-
-    def _on_search_changed(self, text: str) -> None:
-        self._apply_filter(text)
-
-    def _apply_filter(self, text: str) -> None:
-        self._person_list.clear()
-        persons = self._all_persons
-        text = text.strip().lower()
-
-        shown = 0
-        for person in persons:
-            if text and text not in person.name.lower():
-                continue
-            item = PersonListItem(person)
-            self._person_list.addItem(item)
-            shown += 1
-
-        self._count_label.setText(t("n_persons", n=shown))
-
-    def _on_selection_changed(
-        self, current: QListWidgetItem, previous: QListWidgetItem
-    ) -> None:
-        if isinstance(current, PersonListItem):
-            self.person_selected.emit(current.person_id)

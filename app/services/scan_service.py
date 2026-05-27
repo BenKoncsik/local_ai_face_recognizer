@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 from app.config import ScanConfig
 from app.db.models import Image
 from app.services.image_library_service import ImageLibraryService
+from app.services.place_service import PlaceService
+from app.utils.exif import read_exif_gps
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +214,7 @@ class ScanService:
             existing.file_mtime = mtime
             existing.detection_done = False
             existing.embedding_done = False
+            self._apply_exif_gps(existing, path)
             log.debug("Content changed — requeued: %s", path.name)
             return existing.id
         else:
@@ -224,5 +227,34 @@ class ScanService:
             )
             self._session.add(image)
             self._session.flush()  # populate image.id before returning
+            self._apply_exif_gps(image, path)
             log.debug("Indexed new file: %s (id=%d)", path.name, image.id)
             return image.id
+
+    def _apply_exif_gps(self, image: Image, path: Path) -> None:
+        """Read EXIF GPS and link an anonymous/nearby Place without aborting scan."""
+        try:
+            gps = read_exif_gps(path)
+            if gps is None:
+                log.debug("No EXIF GPS data for: %s", path.name)
+                return
+            latitude, longitude = gps
+            if image.place_id is None:
+                place = PlaceService(self._session).link_exif_gps_to_image(
+                    image.id,
+                    latitude,
+                    longitude,
+                )
+                log.info(
+                    "EXIF GPS linked image %d to place %d (%s): %.6f, %.6f",
+                    image.id,
+                    place.id,
+                    place.name,
+                    latitude,
+                    longitude,
+                )
+            else:
+                image.exif_latitude = latitude
+                image.exif_longitude = longitude
+        except Exception as exc:  # noqa: BLE001
+            log.info("EXIF GPS processing skipped for %s: %s", path, exc)

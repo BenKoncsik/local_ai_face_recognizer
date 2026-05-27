@@ -1,0 +1,528 @@
+"""Family relationship and person/image search service."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, Optional
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.db.models import Face, Image, Person, Relationship
+
+REL_PARENT_CHILD = "ParentChild"
+REL_SPOUSE = "Spouse"
+
+RelationshipFilter = Literal["any", "spouse", "parent", "child", "sibling"]
+ImageSearchMode = Literal["both", "exact"]
+
+_FAMILY_CODE_RE = re.compile(r"^[A-Z](?:0|[1-9]+0?)?$")
+
+
+@dataclass(frozen=True)
+class FamilyCodeInfo:
+    code: str
+    root: str
+    path: str
+    generation: int
+    parent_code: Optional[str]
+    spouse_of_code: Optional[str]
+
+    @property
+    def is_spouse(self) -> bool:
+        return self.spouse_of_code is not None
+
+
+@dataclass(frozen=True)
+class FamilyImageResult:
+    image_id: int
+    file_path: str
+    filename: str
+    width: Optional[int]
+    height: Optional[int]
+    person_count: int
+    face_count: int
+
+
+def normalize_family_code(value: Optional[str]) -> Optional[str]:
+    """Return the canonical FamilyCode form, or None for an empty value."""
+    if value is None:
+        return None
+    code = value.strip().upper()
+    return code or None
+
+
+def validate_family_code(value: Optional[str]) -> Optional[str]:
+    """Validate and canonicalise a FamilyCode.
+
+    Accepted examples: C, C0, C8, C85, C851, C80.  A trailing 0 marks a
+    spouse; other path digits must be child indexes 1-9.
+    """
+    code = normalize_family_code(value)
+    if code is None:
+        return None
+    if not _FAMILY_CODE_RE.fullmatch(code):
+        raise ValueError(
+            "Invalid family code. Use one root letter followed by child indexes 1-9; "
+            "a single trailing 0 may mark a spouse (for example C85 or C80)."
+        )
+    return code
+
+
+def parse_family_code(value: Optional[str]) -> Optional[FamilyCodeInfo]:
+    """Parse a FamilyCode into derived relationship hints."""
+    code = validate_family_code(value)
+    if code is None:
+        return None
+
+    root = code[0]
+    raw_path = code[1:]
+    spouse_of_code: Optional[str] = None
+    child_path = raw_path
+    is_spouse = False
+    if raw_path.endswith("0"):
+        is_spouse = True
+        spouse_of_code = root + raw_path[:-1]
+        child_path = raw_path[:-1]
+
+    parent_code: Optional[str] = None
+    if child_path and not is_spouse:
+        parent_code = root if len(child_path) == 1 else root + child_path[:-1]
+
+    return FamilyCodeInfo(
+        code=code,
+        root=root,
+        path=raw_path,
+        generation=len(child_path),
+        parent_code=parent_code,
+        spouse_of_code=spouse_of_code,
+    )
+
+
+def family_codes_are_siblings(code_a: Optional[str], code_b: Optional[str]) -> bool:
+    """Return True when two non-spouse FamilyCodes have the same derived parent."""
+    info_a = parse_family_code(code_a)
+    info_b = parse_family_code(code_b)
+    if info_a is None or info_b is None or info_a.code == info_b.code:
+        return False
+    if info_a.is_spouse or info_b.is_spouse:
+        return False
+    return info_a.parent_code is not None and info_a.parent_code == info_b.parent_code
+
+
+class FamilyService:
+    """Validated family relationships plus optimized image/person queries."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    # ------------------------------------------------------------------
+    # FamilyCode helpers
+    # ------------------------------------------------------------------
+
+    def parse_person_code(self, person_id: int) -> Optional[FamilyCodeInfo]:
+        person = self._require_person(person_id)
+        return parse_family_code(person.family_code)
+
+    def find_by_family_code(self, family_code: Optional[str]) -> Optional[Person]:
+        code = validate_family_code(family_code)
+        if code is None:
+            return None
+        return (
+            self._session.query(Person)
+            .filter(Person.family_code == code)
+            .first()
+        )
+
+    def ensure_unique_family_code(
+        self,
+        family_code: Optional[str],
+        *,
+        current_person_id: Optional[int] = None,
+    ) -> Optional[str]:
+        code = validate_family_code(family_code)
+        if code is None:
+            return None
+        q = self._session.query(Person).filter(Person.family_code == code)
+        if current_person_id is not None:
+            q = q.filter(Person.id != current_person_id)
+        existing = q.first()
+        if existing is not None:
+            raise ValueError(
+                f"Family code {code} is already assigned to {existing.name}."
+            )
+        return code
+
+    def family_root(self, family_code: Optional[str]) -> Optional[str]:
+        info = parse_family_code(family_code)
+        return info.root if info is not None else None
+
+    def generation_level(self, family_code: Optional[str]) -> Optional[int]:
+        info = parse_family_code(family_code)
+        return info.generation if info is not None else None
+
+    def parent_family_code(self, family_code: Optional[str]) -> Optional[str]:
+        info = parse_family_code(family_code)
+        return info.parent_code if info is not None else None
+
+    def spouse_family_code(self, family_code: Optional[str]) -> Optional[str]:
+        info = parse_family_code(family_code)
+        return info.spouse_of_code if info is not None else None
+
+    def list_children_by_family_code(self, family_code: Optional[str]) -> list[Person]:
+        code = validate_family_code(family_code)
+        if code is None:
+            return []
+        child_pattern = f"{code}_"
+        spouse_pattern = f"{code}0"
+        return (
+            self._session.query(Person)
+            .filter(Person.family_code.like(child_pattern))
+            .filter(Person.family_code != spouse_pattern)
+            .all()
+        )
+
+    def list_siblings_by_family_code(self, family_code: Optional[str]) -> list[Person]:
+        info = parse_family_code(family_code)
+        if info is None or info.parent_code is None or info.is_spouse:
+            return []
+        sibling_pattern = f"{info.parent_code}_"
+        spouse_pattern = f"{info.parent_code}%0"
+        return (
+            self._session.query(Person)
+            .filter(Person.family_code.like(sibling_pattern))
+            .filter(Person.family_code != info.code)
+            .filter(~Person.family_code.like(spouse_pattern))
+            .all()
+        )
+
+    def list_branch_by_family_code(self, family_code: Optional[str]) -> list[Person]:
+        code = validate_family_code(family_code)
+        if code is None:
+            return []
+        return (
+            self._session.query(Person)
+            .filter(Person.family_code.like(f"{code}%"))
+            .order_by(Person.family_code)
+            .all()
+        )
+
+    def codes_are_siblings(
+        self,
+        family_code_a: Optional[str],
+        family_code_b: Optional[str],
+    ) -> bool:
+        return family_codes_are_siblings(family_code_a, family_code_b)
+
+    # ------------------------------------------------------------------
+    # Relationship commands
+    # ------------------------------------------------------------------
+
+    def add_spouse(self, person_id_a: int, person_id_b: int) -> Relationship:
+        if person_id_a == person_id_b:
+            raise ValueError("A person cannot be their own spouse.")
+        self._require_person(person_id_a)
+        self._require_person(person_id_b)
+        a_id, b_id = sorted((person_id_a, person_id_b))
+        return self._get_or_create_relationship(REL_SPOUSE, a_id, b_id)
+
+    def add_parent_child(self, parent_id: int, child_id: int) -> Relationship:
+        if parent_id == child_id:
+            raise ValueError("A person cannot be their own parent.")
+        self._require_person(parent_id)
+        self._require_person(child_id)
+        if self._has_ancestor(parent_id, child_id):
+            raise ValueError("This parent/child relationship would create a cycle.")
+        return self._get_or_create_relationship(REL_PARENT_CHILD, parent_id, child_id)
+
+    def are_spouses(self, person_id_a: int, person_id_b: int) -> bool:
+        if person_id_a == person_id_b:
+            return False
+        a_id, b_id = sorted((person_id_a, person_id_b))
+        stored = (
+            self._session.query(Relationship.id)
+            .filter(
+                Relationship.relationship_type == REL_SPOUSE,
+                Relationship.person_a_id == a_id,
+                Relationship.person_b_id == b_id,
+            )
+            .first()
+            is not None
+        )
+        if stored:
+            return True
+        person_a = self._session.get(Person, person_id_a)
+        person_b = self._session.get(Person, person_id_b)
+        info_a = self._safe_parse_person_code(person_a)
+        info_b = self._safe_parse_person_code(person_b)
+        if info_a is None or info_b is None:
+            return False
+        return info_a.spouse_of_code == info_b.code or info_b.spouse_of_code == info_a.code
+
+    def is_parent_child(self, parent_id: int, child_id: int) -> bool:
+        if parent_id == child_id:
+            return False
+        stored = (
+            self._session.query(Relationship.id)
+            .filter(
+                Relationship.relationship_type == REL_PARENT_CHILD,
+                Relationship.person_a_id == parent_id,
+                Relationship.person_b_id == child_id,
+            )
+            .first()
+            is not None
+        )
+        if stored:
+            return True
+        parent = self._session.get(Person, parent_id)
+        child = self._session.get(Person, child_id)
+        parent_info = self._safe_parse_person_code(parent)
+        child_info = self._safe_parse_person_code(child)
+        if parent_info is None or child_info is None or child_info.is_spouse:
+            return False
+        return child_info.parent_code == parent_info.code
+
+    def are_siblings(self, person_id_a: int, person_id_b: int) -> bool:
+        if person_id_a == person_id_b:
+            return False
+        person_a = self._session.get(Person, person_id_a)
+        person_b = self._session.get(Person, person_id_b)
+        info_a = self._safe_parse_person_code(person_a)
+        info_b = self._safe_parse_person_code(person_b)
+        if info_a is not None and info_b is not None:
+            if family_codes_are_siblings(info_a.code, info_b.code):
+                return True
+        common_parent = (
+            self._session.query(Relationship.person_a_id)
+            .filter(
+                Relationship.relationship_type == REL_PARENT_CHILD,
+                Relationship.person_b_id == person_id_a,
+                Relationship.person_a_id.in_(
+                    self._session.query(Relationship.person_a_id).filter(
+                        Relationship.relationship_type == REL_PARENT_CHILD,
+                        Relationship.person_b_id == person_id_b,
+                    )
+                ),
+            )
+            .first()
+        )
+        return common_parent is not None
+
+    def relationship_matches(
+        self,
+        person_id_a: int,
+        person_id_b: int,
+        relationship_filter: RelationshipFilter,
+    ) -> bool:
+        if relationship_filter == "any":
+            return True
+        if relationship_filter == "spouse":
+            return self.are_spouses(person_id_a, person_id_b)
+        if relationship_filter == "parent":
+            return self.is_parent_child(person_id_a, person_id_b)
+        if relationship_filter == "child":
+            return self.is_parent_child(person_id_b, person_id_a)
+        if relationship_filter == "sibling":
+            return self.are_siblings(person_id_a, person_id_b)
+        return False
+
+    def describe_relationship(self, person_id_a: int, person_id_b: int) -> str:
+        """Return a compact Hungarian relationship summary for display."""
+        a = self._session.get(Person, person_id_a)
+        b = self._session.get(Person, person_id_b)
+        if a is None or b is None or person_id_a == person_id_b:
+            return ""
+        parts: list[str] = []
+        if self.are_spouses(person_id_a, person_id_b):
+            parts.append("házastársak")
+        if self.is_parent_child(person_id_a, person_id_b):
+            parts.append(f"{a.name}: {self._parent_label(a)}")
+        if self.is_parent_child(person_id_b, person_id_a):
+            parts.append(f"{a.name}: {self._child_label(a)}")
+        if self.are_siblings(person_id_a, person_id_b):
+            parts.append("testvérek")
+        return ", ".join(parts)
+
+    # ------------------------------------------------------------------
+    # Image queries
+    # ------------------------------------------------------------------
+
+    def search_images_for_people(
+        self,
+        person_id_a: int,
+        person_id_b: int,
+        *,
+        mode: ImageSearchMode = "both",
+        relationship_filter: RelationshipFilter = "any",
+        limit: int = 50,
+        offset: int = 0,
+        folder_path: Optional[str] = None,
+        place_id: Optional[int] = None,
+    ) -> tuple[list[FamilyImageResult], int]:
+        """Find images containing both people.
+
+        The filtering is performed in SQL via grouped ``faces`` queries.  In
+        ``exact`` mode only images with exactly these two assigned people are
+        returned; unassigned faces do not count as a third person.
+        """
+        if person_id_a == person_id_b:
+            return [], 0
+        if not self.relationship_matches(person_id_a, person_id_b, relationship_filter):
+            return [], 0
+
+        matched = (
+            self._session.query(Face.image_id.label("image_id"))
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(Face.person_id.in_([person_id_a, person_id_b]))
+            .group_by(Face.image_id)
+            .having(func.count(func.distinct(Face.person_id)) == 2)
+            .subquery()
+        )
+
+        totals = (
+            self._session.query(
+                Face.image_id.label("image_id"),
+                func.count(Face.id).label("face_count"),
+                func.count(func.distinct(Face.person_id)).label("person_count"),
+            )
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(Face.person_id.isnot(None))
+            .group_by(Face.image_id)
+            .subquery()
+        )
+
+        q = (
+            self._session.query(
+                Image.id,
+                Image.file_path,
+                Image.width,
+                Image.height,
+                totals.c.person_count,
+                totals.c.face_count,
+            )
+            .join(matched, matched.c.image_id == Image.id)
+            .join(totals, totals.c.image_id == Image.id)
+        )
+        if mode == "exact":
+            q = q.filter(totals.c.person_count == 2)
+        if place_id is not None:
+            q = q.filter(Image.place_id == place_id)
+        if folder_path:
+            safe_prefix = folder_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            q = q.filter(Image.file_path.like(f"{safe_prefix}%", escape="\\"))
+
+        total = q.count()
+        rows = q.order_by(Image.file_path).limit(limit).offset(offset).all()
+
+        results = [
+            FamilyImageResult(
+                image_id=row.id,
+                file_path=row.file_path,
+                filename=Path(row.file_path).name,
+                width=row.width,
+                height=row.height,
+                person_count=int(row.person_count or 0),
+                face_count=int(row.face_count or 0),
+            )
+            for row in rows
+            if not folder_path or str(Path(row.file_path).parent) == folder_path
+        ]
+        return results, total
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _get_or_create_relationship(
+        self,
+        relationship_type: str,
+        person_a_id: int,
+        person_b_id: int,
+    ) -> Relationship:
+        rel = (
+            self._session.query(Relationship)
+            .filter(
+                Relationship.relationship_type == relationship_type,
+                Relationship.person_a_id == person_a_id,
+                Relationship.person_b_id == person_b_id,
+            )
+            .first()
+        )
+        if rel is not None:
+            return rel
+        rel = Relationship(
+            relationship_type=relationship_type,
+            person_a_id=person_a_id,
+            person_b_id=person_b_id,
+        )
+        self._session.add(rel)
+        try:
+            self._session.flush()
+        except IntegrityError:
+            self._session.rollback()
+            rel = (
+                self._session.query(Relationship)
+                .filter(
+                    Relationship.relationship_type == relationship_type,
+                    Relationship.person_a_id == person_a_id,
+                    Relationship.person_b_id == person_b_id,
+                )
+                .one()
+            )
+        return rel
+
+    def _has_ancestor(self, person_id: int, ancestor_id: int) -> bool:
+        pending = [person_id]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            parent_ids = [
+                row[0]
+                for row in self._session.query(Relationship.person_a_id)
+                .filter(
+                    Relationship.relationship_type == REL_PARENT_CHILD,
+                    Relationship.person_b_id == current,
+                )
+                .all()
+            ]
+            if ancestor_id in parent_ids:
+                return True
+            pending.extend(parent_ids)
+        return False
+
+    def _require_person(self, person_id: int) -> Person:
+        person = self._session.get(Person, person_id)
+        if person is None:
+            raise ValueError(f"Person not found: {person_id}")
+        return person
+
+    @staticmethod
+    def _safe_parse_person_code(person: Optional[Person]) -> Optional[FamilyCodeInfo]:
+        if person is None or not person.family_code:
+            return None
+        try:
+            return parse_family_code(person.family_code)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parent_label(person: Person) -> str:
+        if person.gender == "male":
+            return "apa"
+        if person.gender == "female":
+            return "anya"
+        return "szülő"
+
+    @staticmethod
+    def _child_label(person: Person) -> str:
+        if person.gender == "male":
+            return "fiúgyermek"
+        if person.gender == "female":
+            return "lánygyermek"
+        return "gyerek"

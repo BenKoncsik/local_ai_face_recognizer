@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import pytest
+
+from app.db.database import init_db, session_scope
+from app.db.models import Face, Image, Person, Relationship
+from app.services.family_service import FamilyService, REL_PARENT_CHILD, REL_SPOUSE
+
+
+@pytest.fixture()
+def db(tmp_path):
+    init_db(tmp_path / "family.db")
+
+
+def _person(session, name: str, gender: str | None = None) -> Person:
+    person = Person(name=name, is_auto_named=False, gender=gender)
+    session.add(person)
+    session.flush()
+    return person
+
+
+def _image(session, path: str) -> Image:
+    image = Image(file_path=path, file_hash=path, file_mtime=1.0)
+    session.add(image)
+    session.flush()
+    return image
+
+
+def _face(session, image: Image, person: Person) -> Face:
+    face = Face(
+        image_id=image.id,
+        person_id=person.id,
+        bbox_x=0,
+        bbox_y=0,
+        bbox_w=10,
+        bbox_h=10,
+        confidence=1.0,
+        detector_backend="manual",
+    )
+    session.add(face)
+    session.flush()
+    return face
+
+
+def test_spouse_is_canonical_and_not_duplicated(db):
+    with session_scope() as session:
+        anna = _person(session, "Anna")
+        bela = _person(session, "Bela")
+        svc = FamilyService(session)
+        svc.add_spouse(anna.id, bela.id)
+        svc.add_spouse(bela.id, anna.id)
+
+        rows = session.query(Relationship).filter(
+            Relationship.relationship_type == REL_SPOUSE
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].person_a_id == min(anna.id, bela.id)
+        assert rows[0].person_b_id == max(anna.id, bela.id)
+
+
+def test_parent_child_validation_and_sibling_derivation(db):
+    with session_scope() as session:
+        parent = _person(session, "Parent")
+        child_a = _person(session, "Child A")
+        child_b = _person(session, "Child B")
+        svc = FamilyService(session)
+
+        svc.add_parent_child(parent.id, child_a.id)
+        svc.add_parent_child(parent.id, child_b.id)
+
+        assert svc.is_parent_child(parent.id, child_a.id)
+        assert svc.are_siblings(child_a.id, child_b.id)
+        assert not svc.are_siblings(child_a.id, child_a.id)
+        with pytest.raises(ValueError):
+            svc.add_parent_child(child_a.id, parent.id)
+
+        assert session.query(Relationship).filter(
+            Relationship.relationship_type == REL_PARENT_CHILD
+        ).count() == 2
+
+
+def test_search_images_for_two_people_modes(db):
+    with session_scope() as session:
+        anna = _person(session, "Anna")
+        bela = _person(session, "Bela")
+        cecil = _person(session, "Cecil")
+        together = _image(session, "/tmp/together.jpg")
+        group = _image(session, "/tmp/group.jpg")
+        only_anna = _image(session, "/tmp/anna.jpg")
+
+        _face(session, together, anna)
+        _face(session, together, bela)
+        _face(session, group, anna)
+        _face(session, group, bela)
+        _face(session, group, cecil)
+        _face(session, only_anna, anna)
+
+        svc = FamilyService(session)
+        both, both_total = svc.search_images_for_people(anna.id, bela.id, mode="both")
+        exact, exact_total = svc.search_images_for_people(anna.id, bela.id, mode="exact")
+
+        assert both_total == 2
+        assert {r.filename for r in both} == {"together.jpg", "group.jpg"}
+        assert exact_total == 1
+        assert [r.filename for r in exact] == ["together.jpg"]
+
+
+def test_relationship_filter_blocks_unmatched_pairs(db):
+    with session_scope() as session:
+        anna = _person(session, "Anna")
+        bela = _person(session, "Bela")
+        image = _image(session, "/tmp/together.jpg")
+        _face(session, image, anna)
+        _face(session, image, bela)
+
+        svc = FamilyService(session)
+        rows, total = svc.search_images_for_people(
+            anna.id,
+            bela.id,
+            relationship_filter="spouse",
+        )
+        assert rows == []
+        assert total == 0
+
+        svc.add_spouse(anna.id, bela.id)
+        rows, total = svc.search_images_for_people(
+            anna.id,
+            bela.id,
+            relationship_filter="spouse",
+        )
+        assert total == 1
+        assert rows[0].filename == "together.jpg"

@@ -50,7 +50,9 @@ from app.ui.dialogs.update_dialog import UpdateDialog
 from app.ui.i18n import t
 from app.ui.panels.cluster_panel import ClusterPanel
 from app.ui.panels.collage_panel import CollagePanel
+from app.ui.panels.family_search_panel import FamilySearchPanel
 from app.ui.panels.image_browser_panel import ImageBrowserPanel
+from app.ui.panels.locations_panel import LocationsPanel
 from app.ui.panels.log_panel import LogPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
@@ -231,7 +233,16 @@ class MainWindow(QMainWindow):
         self._image_browser.person_data_changed.connect(self._refresh_persons)
         self._tabs.addTab(self._image_browser, t("tab_image_browser"))
 
-        # --- Tab 2: Kollázs nézet ---
+        # --- Tab 2: Családi kereső ---
+        self._family_search = FamilySearchPanel()
+        self._family_search.image_open_requested.connect(self._open_image_from_family_search)
+        self._tabs.addTab(self._family_search, t("tab_family_search"))
+
+        # --- Tab 3: Helyek ---
+        self._locations_panel = LocationsPanel()
+        self._tabs.addTab(self._locations_panel, t("tab_locations"))
+
+        # --- Tab 4: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, t("tab_collage"))
 
@@ -336,11 +347,17 @@ class MainWindow(QMainWindow):
         self._person_info_btn.setToolTip(t("person_info_tip"))
         self._tabs.setTabText(0, t("tab_face_recognition"))
         self._tabs.setTabText(1, t("tab_image_browser"))
-        self._tabs.setTabText(2, t("tab_collage"))
+        self._tabs.setTabText(2, t("tab_family_search"))
+        self._tabs.setTabText(3, t("tab_locations"))
+        self._tabs.setTabText(4, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_image_browser"):
             self._image_browser.retranslate()
+        if hasattr(self, "_family_search"):
+            self._family_search.retranslate()
+        if hasattr(self, "_locations_panel"):
+            self._locations_panel.retranslate()
 
     # ------------------------------------------------------------------
     # Logging
@@ -758,6 +775,7 @@ class MainWindow(QMainWindow):
             self._preview_panel.clear()
             self._refresh_persons()
             self._image_browser.refresh()
+            self._locations_panel.refresh()
             QMessageBox.information(self, t("settings_title"), t("db_switched"))
             log.info("Database switched to: %s", new_db)
 
@@ -787,6 +805,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setValue(100)
         self._refresh_persons()
         self._image_browser.refresh()
+        self._locations_panel.refresh()
         if not success:
             QMessageBox.warning(self, t("warning"), summary)
             return
@@ -1230,6 +1249,8 @@ class MainWindow(QMainWindow):
             dlg = PersonInfoDialog(person, parent=self)
             if dlg.exec() != PersonInfoDialog.Accepted:
                 return
+            person.gender = dlg.gender()
+            person.family_code = dlg.family_code() or None
             person.last_name = dlg.last_name() or None
             person.first_name = dlg.first_name() or None
             person.second_name = dlg.second_name() or None
@@ -1317,7 +1338,7 @@ class MainWindow(QMainWindow):
 
         # Switch to collage tab and refresh
         self._collage_panel.refresh_collage_list()
-        self._tabs.setCurrentIndex(2)
+        self._tabs.setCurrentIndex(4)
 
         msg = t("collages_imported", n=imported)
         if errors:
@@ -1473,7 +1494,14 @@ class MainWindow(QMainWindow):
                 for f in p.faces:
                     _ = f.image  # noqa: F841
             self._sidebar.populate(persons)
+        if hasattr(self, "_family_search"):
+            self._family_search.refresh()
         log.debug("Sidebar refreshed: %d person(s)", len(persons))
+
+    @Slot(int)
+    def _open_image_from_family_search(self, image_id: int) -> None:
+        self._tabs.setCurrentIndex(1)
+        self._image_browser.open_image_by_id(image_id)
 
     # ------------------------------------------------------------------
     # Image library startup check

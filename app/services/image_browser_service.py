@@ -51,6 +51,8 @@ class ImageSummary:
     assigned_face_count: int
     unknown_face_count: int
     thumbnail_cache_key: str
+    place_id: Optional[int] = None
+    place_name: Optional[str] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -114,7 +116,15 @@ class ImageBrowserService:
             )
         return result
 
-    def list_images(self, folder_path: str) -> List[ImageSummary]:
+    def list_images(
+        self,
+        folder_path: str,
+        place_id: Optional[int] = None,
+        person_id: Optional[int] = None,
+        second_person_id: Optional[int] = None,
+        person_search_mode: str = "both",
+        relationship_filter: str = "any",
+    ) -> List[ImageSummary]:
         """Return ImageSummary list for every image whose parent is *folder_path*.
 
         Two SQL queries: one for images filtered by folder, one for face counts.
@@ -123,12 +133,39 @@ class ImageBrowserService:
         # A LIKE filter on the prefix speeds up SQLite on large tables; the
         # in-Python check provides exactness.
         safe_prefix = folder_path.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        raw = (
-            self._session.query(Image)
-            .filter(Image.file_path.like(f"{safe_prefix}%", escape="\\"))
-            .order_by(Image.file_path)
-            .all()
+        q = self._session.query(Image).filter(
+            Image.file_path.like(f"{safe_prefix}%", escape="\\")
         )
+        if place_id is not None:
+            q = q.filter(Image.place_id == place_id)
+        if person_id is not None and second_person_id is not None:
+            from app.services.family_service import FamilyService
+            if person_id == second_person_id:
+                return []
+            family_results, _ = FamilyService(self._session).search_images_for_people(
+                person_id,
+                second_person_id,
+                mode="exact" if person_search_mode == "exact" else "both",
+                relationship_filter=relationship_filter,  # type: ignore[arg-type]
+                limit=100000,
+                offset=0,
+                folder_path=folder_path,
+                place_id=place_id,
+            )
+            allowed_ids = {r.image_id for r in family_results}
+            if not allowed_ids:
+                return []
+            q = q.filter(Image.id.in_(allowed_ids))
+        elif person_id is not None:
+            person_images = (
+                self._session.query(Face.image_id)
+                .filter(Face.is_excluded == False)  # noqa: E712
+                .filter(Face.person_id == person_id)
+                .distinct()
+                .subquery()
+            )
+            q = q.join(person_images, person_images.c.image_id == Image.id)
+        raw = q.order_by(Image.file_path).all()
         images = [img for img in raw if str(Path(img.file_path).parent) == folder_path]
 
         if not images:
@@ -152,6 +189,8 @@ class ImageBrowserService:
                 assigned_face_count=assigned_f,
                 unknown_face_count=total_f - assigned_f,
                 thumbnail_cache_key=f"thumb_{img.id}",
+                place_id=img.place_id,
+                place_name=img.place.name if img.place else None,
             ))
         log.debug(
             "Images loaded for folder %s: %d images", folder_path, len(result)

@@ -80,6 +80,8 @@ def _migrate_add_columns(engine: Engine) -> None:
     """Add columns that didn't exist in older schema versions (idempotent)."""
     new_columns = {
         "persons": [
+            ("gender",       "VARCHAR(16)"),
+            ("family_code",  "VARCHAR(64)"),
             ("last_name",    "VARCHAR(255)"),
             ("first_name",   "VARCHAR(255)"),
             ("second_name",  "VARCHAR(255)"),
@@ -89,11 +91,15 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("birth_date",   "VARCHAR(64)"),
             ("death_place",  "VARCHAR(512)"),
             ("death_date",   "VARCHAR(64)"),
+            ("notes",        "TEXT"),
             ("is_protected", "BOOLEAN NOT NULL DEFAULT 0"),
         ],
         "images": [
             ("photo_date", "VARCHAR(128)"),
             ("relative_path", "VARCHAR(1024)"),
+            ("place_id", "INTEGER REFERENCES places(id) ON DELETE SET NULL"),
+            ("exif_latitude", "FLOAT"),
+            ("exif_longitude", "FLOAT"),
         ],
         "faces": [
             ("assignment_source", "VARCHAR(32)"),
@@ -117,6 +123,119 @@ def _migrate_add_columns(engine: Engine) -> None:
                     )
                     log.info("Migration: added column %s.%s", table, col_name)
         conn.commit()
+    _migrate_add_indexes(engine)
+    _migrate_collage_locations_to_places(engine)
+
+
+def _migrate_add_indexes(engine: Engine) -> None:
+    """Create indexes used by person/image and family queries."""
+    statements = [
+        "CREATE INDEX IF NOT EXISTS ix_persons_gender ON persons(gender)",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_family_code "
+            "ON persons(family_code) WHERE family_code IS NOT NULL"
+        ),
+        "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
+        "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_relationship_type_a "
+            "ON relationships(relationship_type, person_a_id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_relationship_type_b "
+            "ON relationships(relationship_type, person_b_id)"
+        ),
+    ]
+    with engine.begin() as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        for stmt in statements:
+            if "relationships" in stmt and "relationships" not in tables:
+                continue
+            conn.execute(text(stmt))
+
+
+def _migrate_collage_locations_to_places(engine: Engine) -> None:
+    """Promote legacy collage node location text to reusable Place records."""
+    with engine.begin() as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        if not {"places", "images", "collage_nodes"}.issubset(tables):
+            return
+
+        rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT TRIM(location) AS name
+                FROM collage_nodes
+                WHERE image_id IS NOT NULL
+                  AND location IS NOT NULL
+                  AND TRIM(location) != ''
+                """
+            )
+        ).fetchall()
+
+        created = 0
+        for row in rows:
+            name = row[0]
+            existing = conn.execute(
+                text("SELECT id FROM places WHERE lower(name) = lower(:name) LIMIT 1"),
+                {"name": name},
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO places
+                            (name, is_anonymous, source, created_at, updated_at)
+                        VALUES
+                            (:name, 0, 'legacy_collage', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """
+                    ),
+                    {"name": name},
+                )
+                created += 1
+
+        updated = conn.execute(
+            text(
+                """
+                UPDATE images
+                SET place_id = (
+                    SELECT p.id
+                    FROM collage_nodes cn
+                    JOIN places p ON lower(p.name) = lower(TRIM(cn.location))
+                    WHERE cn.image_id = images.id
+                      AND cn.location IS NOT NULL
+                      AND TRIM(cn.location) != ''
+                    ORDER BY cn.id
+                    LIMIT 1
+                )
+                WHERE place_id IS NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM collage_nodes cn
+                    WHERE cn.image_id = images.id
+                      AND cn.location IS NOT NULL
+                      AND TRIM(cn.location) != ''
+                  )
+                """
+            )
+        ).rowcount
+
+    if created or updated:
+        log.info(
+            "Migration: promoted collage locations to places (created=%d, linked=%d)",
+            created,
+            updated,
+        )
 
 
 UNKNOWN_PERSON_NAME = "Ismeretlen"

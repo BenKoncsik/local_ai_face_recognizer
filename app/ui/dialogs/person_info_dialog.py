@@ -8,17 +8,21 @@ from typing import List, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCompleter,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from app.db.database import session_scope
 from app.db.models import Person
+from app.services.family_service import FamilyService
 from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
@@ -29,6 +33,7 @@ class PersonInfoDialog(QDialog):
 
     def __init__(self, person: Person, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._person_id = person.id
         self.setWindowTitle(t("person_info_title", name=person.name))
         self.setMinimumWidth(400)
 
@@ -42,6 +47,24 @@ class PersonInfoDialog(QDialog):
         form.setLabelAlignment(form.labelAlignment())
         form.setRowWrapPolicy(QFormLayout.DontWrapRows)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        self._gender = QComboBox()
+        self._gender.addItem(t("gender_unknown"), None)
+        self._gender.addItem(t("gender_male"), "male")
+        self._gender.addItem(t("gender_female"), "female")
+        idx = self._gender.findData(person.gender)
+        self._gender.setCurrentIndex(idx if idx >= 0 else 0)
+        form.addRow(t("gender"), self._gender)
+
+        self._family_code = QLineEdit(person.family_code or "")
+        self._family_code.setPlaceholderText(t("example_family_code"))
+        self._family_code.setToolTip(t("family_code_help"))
+        form.addRow(t("family_code"), self._family_code)
+
+        family_help = QLabel(t("family_code_help"))
+        family_help.setWordWrap(True)
+        family_help.setStyleSheet("color: #888; font-size: 11px;")
+        form.addRow("", family_help)
 
         self._last_name = QLineEdit(person.last_name or "")
         self._last_name.setPlaceholderText(t("example_last_name"))
@@ -101,6 +124,19 @@ class PersonInfoDialog(QDialog):
 
         self._setup_completers()
 
+    def accept(self) -> None:
+        try:
+            with session_scope() as session:
+                canonical = FamilyService(session).ensure_unique_family_code(
+                    self.family_code(),
+                    current_person_id=self._person_id,
+                )
+        except ValueError as exc:
+            QMessageBox.warning(self, t("family_code_invalid_title"), str(exc))
+            return
+        self._family_code.setText(canonical or "")
+        super().accept()
+
     # ------------------------------------------------------------------
     # Autocomplete
     # ------------------------------------------------------------------
@@ -146,6 +182,13 @@ class PersonInfoDialog(QDialog):
 
     def last_name(self) -> str:
         return self._last_name.text().strip()
+
+    def gender(self) -> Optional[str]:
+        value = self._gender.currentData()
+        return str(value) if value else None
+
+    def family_code(self) -> str:
+        return self._family_code.text().strip()
 
     def first_name(self) -> str:
         return self._first_name.text().strip()

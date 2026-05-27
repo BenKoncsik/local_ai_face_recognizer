@@ -16,9 +16,11 @@ from typing import List, Optional
 import numpy as np
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -68,6 +70,15 @@ class Image(Base):
     # e.g. "1930-as évek", "1954", "1954.03.12", "kb. 1930"
     photo_date: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
+    place_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("places.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Raw EXIF GPS coordinates observed during import/re-analysis.  The linked
+    # Place is the user-facing location, but these retain the original evidence.
+    exif_latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    exif_longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # True once detection + embedding have been attempted for this file
     detection_done: Mapped[bool] = mapped_column(Boolean, default=False)
     embedding_done: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -80,9 +91,63 @@ class Image(Base):
     faces: Mapped[List["Face"]] = relationship(
         "Face", back_populates="image", cascade="all, delete-orphan"
     )
+    place: Mapped[Optional["Place"]] = relationship("Place", back_populates="images")
 
     def __repr__(self) -> str:
         return f"<Image id={self.id} path={self.file_path!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Place / Location
+# ---------------------------------------------------------------------------
+
+class Place(Base):
+    """A reusable place/location that can be linked to many images."""
+
+    __tablename__ = "places"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # EXIF-derived records start as anonymous, then become normal named places
+    # once the user names them or merges them into another place.
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    images: Mapped[List["Image"]] = relationship("Image", back_populates="place")
+    aliases: Mapped[List["PlaceAlias"]] = relationship(
+        "PlaceAlias", back_populates="place", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Place id={self.id} name={self.name!r}>"
+
+
+class PlaceAlias(Base):
+    """Preserved source data from places merged into another place."""
+
+    __tablename__ = "place_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    place_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("places.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_place_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    place: Mapped["Place"] = relationship("Place", back_populates="aliases")
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +168,17 @@ class Person(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_auto_named: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Binary gender used for family-tree labels and relationship display.
+    # Values: "male" | "female" | NULL when not yet set.
+    gender: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+
     # Representative thumbnail path (one crop selected to stand for the person)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Structured personal data
+    family_code: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     second_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -131,9 +203,71 @@ class Person(Base):
     )
 
     faces: Mapped[List["Face"]] = relationship("Face", back_populates="person")
+    relationships_a: Mapped[List["Relationship"]] = relationship(
+        "Relationship",
+        foreign_keys="Relationship.person_a_id",
+        back_populates="person_a",
+        cascade="all, delete-orphan",
+    )
+    relationships_b: Mapped[List["Relationship"]] = relationship(
+        "Relationship",
+        foreign_keys="Relationship.person_b_id",
+        back_populates="person_b",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Person id={self.id} name={self.name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Relationship
+# ---------------------------------------------------------------------------
+
+class Relationship(Base):
+    """A normalized family relationship between two people.
+
+    Stored relationship types:
+    * ParentChild: person_a is parent, person_b is child.
+    * Spouse: person_a/person_b are stored in ascending id order to avoid
+      directional duplicates.
+
+    Sibling is intentionally not stored; it is derived from shared parents.
+    """
+
+    __tablename__ = "relationships"
+    __table_args__ = (
+        UniqueConstraint("relationship_type", "person_a_id", "person_b_id"),
+        CheckConstraint("person_a_id != person_b_id", name="ck_relationship_not_self"),
+        Index("ix_relationship_type_a", "relationship_type", "person_a_id"),
+        Index("ix_relationship_type_b", "relationship_type", "person_b_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    relationship_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    person_a_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    person_b_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    person_a: Mapped["Person"] = relationship(
+        "Person", foreign_keys=[person_a_id], back_populates="relationships_a"
+    )
+    person_b: Mapped["Person"] = relationship(
+        "Person", foreign_keys=[person_b_id], back_populates="relationships_b"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Relationship id={self.id} type={self.relationship_type!r} "
+            f"a={self.person_a_id} b={self.person_b_id}>"
+        )
 
 
 # ---------------------------------------------------------------------------
