@@ -502,6 +502,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_empty_name_title":   {"en": "Empty Name",      "hu": "Üres név"},
     "ibp_empty_name_msg":     {"en": "Person name cannot be empty.",
                                "hu": "A személynév nem lehet üres."},
+    "ibp_ctx_assign_person":  {"en": "Assign to person…", "hu": "Személyhez adás…"},
     "ibp_ctx_edit_bbox":      {"en": "Edit bbox",        "hu": "Bbox módosítása"},
     "ibp_ctx_delete":         {"en": "Delete",           "hu": "Törlés"},
     "ibp_ctx_unknown_face":   {"en": "Unknown face",     "hu": "Ismeretlen arc"},

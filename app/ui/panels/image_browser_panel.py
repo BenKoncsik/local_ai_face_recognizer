@@ -941,6 +941,7 @@ class ImageBrowserPanel(QWidget):
 
         self._person_search = PersonSearchSelect()
         self._person_search.person_selected.connect(self._on_person_search_selected)
+        self._person_search.person_double_clicked.connect(self._on_assign_existing)
         info_layout.addWidget(self._person_search)
 
         self._assign_btn = QPushButton()
@@ -1625,11 +1626,22 @@ class ImageBrowserPanel(QWidget):
 
     def _on_image_right_clicked(self, lx: int, ly: int) -> None:
         orig_x, orig_y = self._label_to_image(lx, ly)
-        if orig_x < 0 or orig_y < 0:
-            return
-        face_id = self._hit_test(orig_x, orig_y)
+        face_id: Optional[int] = None
+        if orig_x >= 0 and orig_y >= 0:
+            face_id = self._hit_test(orig_x, orig_y)
+
+        log.debug(
+            "Right-click: label=(%d,%d) image=(%d,%d) image_id=%s faces_loaded=%d hit_face=%s",
+            lx, ly, orig_x, orig_y,
+            self._current_image_id,
+            len(self._face_data),
+            face_id,
+        )
 
         menu = QMenu(self)
+        assign_action: Optional[object] = None
+        edit_action: Optional[object] = None
+        delete_action: Optional[object] = None
 
         if face_id is not None:
             if self._selected_face_id != face_id:
@@ -1645,22 +1657,30 @@ class ImageBrowserPanel(QWidget):
             title = menu.addAction(f"[ {title_text} ]")
             title.setEnabled(False)
             menu.addSeparator()
+            assign_action = menu.addAction(t("ibp_ctx_assign_person"))
+            menu.addSeparator()
             edit_action = menu.addAction(t("ibp_ctx_edit_bbox"))
             menu.addSeparator()
             delete_action = menu.addAction(t("ibp_ctx_delete"))
             menu.addSeparator()
-        else:
-            edit_action = None
-            delete_action = None
 
         manual_mark_action = menu.addAction(t("ibp_ctx_manual_mark"))
 
-        chosen = menu.exec(self._image_label.mapToGlobal(QPoint(lx, ly)))
-        if chosen == edit_action and face_id is not None:
+        global_pos = self._image_label.mapToGlobal(QPoint(lx, ly))
+        chosen = menu.exec(global_pos)
+        log.debug(
+            "Context menu result: chosen=%s face_id=%s",
+            chosen.text() if chosen else None,
+            face_id,
+        )
+
+        if chosen is assign_action and face_id is not None:
+            self._show_inline_editor(face_id)
+        elif chosen is edit_action and face_id is not None:
             self._start_face_edit(face_id)
-        elif chosen == delete_action and face_id is not None:
+        elif chosen is delete_action and face_id is not None:
             self._delete_face(face_id)
-        elif chosen == manual_mark_action:
+        elif chosen is manual_mark_action:
             self._draw_mode_btn.setChecked(True)
 
     # ──────────────────────────────────────────────────────────────────
@@ -1973,6 +1993,7 @@ class ImageBrowserPanel(QWidget):
     def _show_inline_editor(self, face_id: int) -> None:
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         if entry is None:
+            log.debug("_show_inline_editor: face_id=%d not found in face_data", face_id)
             return
         _, bx, by, bw, bh, person_name, person_id = entry
 
@@ -1986,8 +2007,25 @@ class ImageBrowserPanel(QWidget):
 
         lx_top, ly_top = self._image_to_label(bx, by)
         _, ly_bot = self._image_to_label(bx, by + bh)
-        if lx_top < 0:
+
+        # _image_to_label returns (-1, -1) only when _full_pixmap is None.
+        # For off-screen faces (pan/zoom) the values can be negative — clamp
+        # rather than bailing out, so the editor still appears after a right-click.
+        if self._full_pixmap is None:
+            log.debug("_show_inline_editor: no pixmap, aborting")
             return
+        lx_top = max(0, lx_top)
+        ly_top = max(0, ly_top)
+        if ly_bot < 0:
+            ly_bot = ly_top + int(bh * min(
+                self._image_label.contentsRect().width() / self._full_pixmap.width(),
+                self._image_label.contentsRect().height() / self._full_pixmap.height(),
+            ) * self._zoom)
+
+        log.debug(
+            "_show_inline_editor: face_id=%d person=%r label_top=(%d,%d) label_bot_y=%d",
+            face_id, person_name, lx_top, ly_top, ly_bot,
+        )
 
         editor_w = self._inline_editor.width()
         editor_h = self._inline_editor.sizeHint().height()

@@ -47,9 +47,14 @@ class PersonSearchSelect(QWidget):
     person_selected(int)
         Emitted when the user commits a selection (single-click or Enter).
         Carries the selected *person_id*.
+    person_double_clicked(int)
+        Emitted when the user double-clicks a person in the list.
+        Carries the selected *person_id*.  Qt fires itemClicked first, so
+        the selection is already committed before this signal is emitted.
     """
 
     person_selected: Signal = Signal(int)
+    person_double_clicked: Signal = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -77,6 +82,7 @@ class PersonSearchSelect(QWidget):
         self._list.setMinimumWidth(0)
         self._list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._list.itemClicked.connect(self._on_item_clicked)
+        self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._list.installEventFilter(self)
         layout.addWidget(self._list)
 
@@ -227,3 +233,9 @@ class PersonSearchSelect(QWidget):
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         self._commit_current()
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        # itemClicked already ran (_commit_current), so current_person_id() is set.
+        person_id = self.current_person_id()
+        if person_id is not None:
+            self.person_double_clicked.emit(person_id)
