@@ -10,7 +10,7 @@ from typing import Callable, Optional, Tuple
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QImageReader, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -39,6 +39,8 @@ _POPUP_MAX = 380  # max width/height of hover popup
 @dataclass
 class _FaceData:
     """Plain-value snapshot of a face — safe to use after session closes."""
+    face_id: Optional[int]
+    person_id: Optional[int]
     crop_path: Optional[str]
     image_path: Optional[str]
     bbox: Optional[Tuple[int, int, int, int]]  # x, y, w, h
@@ -64,7 +66,13 @@ def _build_face_data(person: Person) -> _FaceData:
         rep_face = next((f for f in person.faces if f.crop_path), None)
 
     if rep_face is None:
-        return _FaceData(crop_path=None, image_path=None, bbox=None)
+        return _FaceData(
+            face_id=None,
+            person_id=person.id,
+            crop_path=None,
+            image_path=None,
+            bbox=None,
+        )
 
     crop = thumb if (thumb and rep_face.crop_path == thumb) else rep_face.crop_path
     image_path = rep_face.image.file_path if rep_face.image else None
@@ -74,7 +82,48 @@ def _build_face_data(person: Person) -> _FaceData:
         rep_face.bbox_w, rep_face.bbox_h
     )
 
-    return _FaceData(crop_path=crop, image_path=image_path, bbox=bbox)
+    return _FaceData(
+        face_id=rep_face.id,
+        person_id=person.id,
+        crop_path=crop,
+        image_path=image_path,
+        bbox=bbox,
+    )
+
+
+def _load_crop_pixmap(
+    crop_path: Optional[str],
+    size: int,
+    face_id: Optional[int],
+    person_id: Optional[int],
+) -> Optional[QPixmap]:
+    if not crop_path or not Path(crop_path).exists():
+        return None
+    QPixmapCache.remove(crop_path)
+    reader = QImageReader(crop_path)
+    image = reader.read()
+    if image.isNull():
+        log.warning(
+            "Sidebar crop load failed: FaceId=%s PersonId=%s preview_source=%s error=%s",
+            face_id,
+            person_id,
+            crop_path,
+            reader.errorString(),
+        )
+        return None
+    pixmap = QPixmap.fromImage(image).scaled(
+        size,
+        size,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+    log.debug(
+        "Render sidebar preview: FaceId=%s PersonId=%s preview_source=%s",
+        face_id,
+        person_id,
+        crop_path,
+    )
+    return pixmap
 
 
 def _render_original_with_box(
@@ -177,6 +226,9 @@ class _PersonThumb(QLabel):
         self._person_id = person.id
         self._person_name = person.name
         self._face_data = _build_face_data(person)
+        self.setObjectName(f"person-thumb-{person.id}")
+        self.setProperty("person_id", person.id)
+        self.setProperty("face_id", self._face_data.face_id or 0)
         self._load_pixmap()
         self.setFixedSize(_FACE_THUMB, _FACE_THUMB)
         self.setAlignment(Qt.AlignCenter)
@@ -188,12 +240,13 @@ class _PersonThumb(QLabel):
 
     def _load_pixmap(self) -> None:
         crop = self._face_data.crop_path
-        if crop and Path(crop).exists():
-            pixmap = QPixmap(crop).scaled(
-                _FACE_THUMB, _FACE_THUMB,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
+        pixmap = _load_crop_pixmap(
+            crop,
+            _FACE_THUMB,
+            self._face_data.face_id,
+            self._face_data.person_id,
+        )
+        if pixmap is not None:
             self.setPixmap(pixmap)
         else:
             self.setText("?")

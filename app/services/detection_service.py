@@ -29,6 +29,7 @@ from app.db.models import Face, Image
 from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
 from app.services.image_library_service import resolve_image_path
+from app.services.face_crop_service import face_debug_state
 from app.utils.image_utils import (
     apply_bilateral,
     apply_clahe,
@@ -226,11 +227,36 @@ class DetectionService:
 
         self._dhash_registry[dhash] = (str(path), len(detections))
 
-        # --- Remove stale AUTO-detected faces; keep manual ones ---
+        # --- Remove stale AUTO-detected faces; keep manual ones AND named ones ---
+        # Collect kept named faces BEFORE deletion so we can dedup new detections.
+        kept_named: List[Detection] = [
+            Detection(x=f.bbox_x, y=f.bbox_y, w=f.bbox_w, h=f.bbox_h, confidence=1.0)
+            for f in self._session.query(Face).filter(
+                Face.image_id == image.id,
+                Face.person_id.isnot(None),
+                Face.detector_backend != "manual",
+            ).all()
+        ]
+
+        # Only delete unnamed auto-detected faces; preserve named training examples.
         self._session.query(Face).filter(
             Face.image_id == image.id,
             Face.detector_backend != "manual",
+            Face.person_id.is_(None),
         ).delete(synchronize_session="fetch")
+
+        # Skip any new detection that substantially overlaps an already-named face
+        # (prevents duplicate face records for the same person).
+        if kept_named:
+            iou_thresh = self._config.detection.iou_merge_threshold
+            detections = [
+                det for det in detections
+                if all(_iou(det, nd) < iou_thresh for nd in kept_named)
+            ]
+            diag_log.debug(
+                "Named-face dedup: %d kept named face(s); %d new detection(s) after dedup",
+                len(kept_named), len(detections),
+            )
 
         for det in detections:
             face = Face(
@@ -257,8 +283,8 @@ class DetectionService:
             if crop_path is not None:
                 face.crop_path = str(crop_path)
             log.debug(
-                "Detected face id=%d image_id=%d bbox=(%d,%d,%d,%d) crop=%s",
-                face.id, image.id, det.x, det.y, det.w, det.h, crop_path,
+                "Detected face entity: %s",
+                face_debug_state(face, str(crop_path) if crop_path else None),
             )
 
         log.debug("Image %s: %d face(s) detected", path.name, len(detections))

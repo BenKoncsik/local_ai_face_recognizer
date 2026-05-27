@@ -39,6 +39,7 @@ from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
 from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 from app.ui.dialogs.rename_dialog import RenameDialog
+from app.ui.dialogs.scan_modes_dialog import ScanModesDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.dialogs.suggestion_dialog import SuggestionDialog
 from app.ui.dialogs.update_dialog import UpdateDialog
@@ -133,10 +134,10 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        self._scan_btn = QPushButton()
-        self._scan_btn.setEnabled(False)
-        self._scan_btn.clicked.connect(self._on_scan)
-        tb.addWidget(self._scan_btn)
+        self._scan_modes_btn = QPushButton()
+        self._scan_modes_btn.setEnabled(False)
+        self._scan_modes_btn.clicked.connect(self._on_open_scan_modes)
+        tb.addWidget(self._scan_modes_btn)
 
         self._stop_btn = QPushButton()
         self._stop_btn.setEnabled(False)
@@ -148,21 +149,6 @@ class MainWindow(QMainWindow):
         self._export_btn = QPushButton()
         self._export_btn.clicked.connect(self._on_open_export)
         tb.addWidget(self._export_btn)
-
-        tb.addSeparator()
-
-        self._force_rescan_btn = QPushButton()
-        self._force_rescan_btn.clicked.connect(self._on_force_rescan)
-        self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
-        tb.addWidget(self._force_rescan_btn)
-
-        self._redetect_btn = QPushButton()
-        self._redetect_btn.clicked.connect(self._on_redetect_fast)
-        tb.addWidget(self._redetect_btn)
-
-        self._redetect_accurate_btn = QPushButton()
-        self._redetect_accurate_btn.clicked.connect(self._on_redetect_accurate)
-        tb.addWidget(self._redetect_accurate_btn)
 
         tb.addSeparator()
 
@@ -210,6 +196,7 @@ class MainWindow(QMainWindow):
 
         self._cluster_panel = ClusterPanel()
         self._cluster_panel.face_selected.connect(self._on_face_selected)
+        self._cluster_panel.face_right_clicked.connect(self._on_cluster_face_right_clicked)
         centre_layout.addWidget(self._cluster_panel)
 
         actions = self._build_action_row()
@@ -329,10 +316,9 @@ class MainWindow(QMainWindow):
         self._folder_btn.setText(t("select_folder"))
         if not hasattr(self, "_root_folder"):
             self._folder_label.setText(f"  {t('no_folder')}")
-        self._scan_btn.setText(t("scan_index"))
+        self._scan_modes_btn.setText(t("scanModes.openButton"))
         self._stop_btn.setText(t("stop"))
         self._export_btn.setText(t("tb_export"))
-        self._force_rescan_btn.setText(t("force_rescan"))
         self._no_face_btn.setText(t("view_no_face"))
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
@@ -344,11 +330,6 @@ class MainWindow(QMainWindow):
         self._reassign_btn.setText(t("reassign_face"))
         self._person_info_btn.setText(t("person_info"))
         self._person_info_btn.setToolTip(t("person_info_tip"))
-        self._force_rescan_btn.setToolTip(t("force_rescan_tip"))
-        self._redetect_btn.setText(t("redetect_faces"))
-        self._redetect_btn.setToolTip(t("redetect_faces_tip"))
-        self._redetect_accurate_btn.setText(t("redetect_faces_accurate"))
-        self._redetect_accurate_btn.setToolTip(t("redetect_faces_accurate_tip"))
         self._tabs.setTabText(0, t("tab_face_recognition"))
         self._tabs.setTabText(1, t("tab_image_browser"))
         self._tabs.setTabText(2, t("tab_collage"))
@@ -381,7 +362,7 @@ class MainWindow(QMainWindow):
             self._root_folder = folder
             _save_dir("paths/last_folder", folder)
             self._set_folder_label(folder)
-            self._scan_btn.setEnabled(True)
+            self._scan_modes_btn.setEnabled(True)
             log.info("Root folder selected: %s", folder)
 
     def _set_folder_label(self, path: str) -> None:
@@ -399,7 +380,7 @@ class MainWindow(QMainWindow):
         if last and Path(last).is_dir():
             self._root_folder = last
             self._set_folder_label(last)
-            self._scan_btn.setEnabled(True)
+            self._scan_modes_btn.setEnabled(True)
             log.info("Restored last folder: %s", last)
 
     @Slot()
@@ -499,16 +480,24 @@ class MainWindow(QMainWindow):
         self._start_pipeline(high_accuracy=True)
 
     def _reset_detection_state(self) -> None:
-        """Delete auto-detected faces and reset detection flags on all images."""
+        """Delete unnamed auto-detected faces and reset detection flags on all images.
+
+        Named faces (person_id IS NOT NULL) are intentionally preserved so that
+        person profiles remain intact and recognition can still run after re-detection.
+        """
         with session_scope() as session:
             from app.db.models import Face, Image
             deleted = (
                 session.query(Face)
                 .filter(Face.detector_backend != "manual")
+                .filter(Face.person_id.is_(None))  # keep named faces as training examples
                 .delete(synchronize_session="fetch")
             )
             session.query(Image).update({"detection_done": False, "embedding_done": False})
-        log.debug("Reset detection: %d auto face(s) deleted.", deleted)
+        log.debug(
+            "Reset detection: %d unnamed auto face(s) deleted (named faces preserved).",
+            deleted,
+        )
         self._current_person_id = None
         self._current_face_id = None
         self._cluster_panel.clear()
@@ -533,6 +522,17 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._on_pipeline_finished)
         self._worker.error.connect(self._on_pipeline_error)
         self._worker.start()
+
+    @Slot()
+    def _on_open_scan_modes(self) -> None:
+        dlg = ScanModesDialog(
+            on_incremental=self._on_scan,
+            on_full_rescan=self._on_force_rescan,
+            on_face_rescan_fast=self._on_redetect_fast,
+            on_face_rescan_accurate=self._on_redetect_accurate,
+            parent=self,
+        )
+        dlg.exec()
 
     @Slot()
     def _on_scan(self) -> None:
@@ -654,6 +654,13 @@ class MainWindow(QMainWindow):
             faces = svc.get_faces_for_person(person_id)
             if person is None:
                 return
+            from app.services.face_crop_service import ensure_unique_face_crops
+            ensure_unique_face_crops(
+                session,
+                faces,
+                self._config.crops_dir_resolved,
+                self._config.scan.thumbnail_size,
+            )
             is_protected = person.is_protected
             for f in faces:
                 _ = f.image  # noqa: F841
@@ -686,6 +693,17 @@ class MainWindow(QMainWindow):
                     for f in face.image.faces:
                         _ = f.person
                 self._preview_panel.show_face(face)
+
+    @Slot(int, int, int)
+    def _on_cluster_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
+        """Show the preview context menu when a cluster thumbnail is right-clicked."""
+        self._current_face_id = face_id
+        self._remove_face_btn.setEnabled(True)
+        self._reassign_btn.setEnabled(True)
+        # Ensure the preview panel has the image loaded so "Edit bbox" works.
+        self._show_face_in_preview(face_id)
+        person_name = self._cluster_panel.get_face_person_name(face_id)
+        self._preview_panel.show_face_context_menu(face_id, gx, gy, person_name=person_name)
 
     @Slot(int)
     def _on_preview_face_selected(self, face_id: int) -> None:
@@ -804,10 +822,13 @@ class MainWindow(QMainWindow):
         new_crop_path: Optional[str] = None
 
         with session_scope() as session:
-            from pathlib import Path as _Path
-
             from app.detectors.base import Detection
-            from app.utils.image_utils import load_image_bgr, save_face_crop
+            from app.services.face_crop_service import (
+                crop_path_is_shared,
+                face_debug_state,
+                save_crop_for_face,
+            )
+            from app.utils.image_utils import load_image_bgr
 
             face = session.get(Face, face_id)
             if face is None or face.image is None:
@@ -823,33 +844,37 @@ class MainWindow(QMainWindow):
             face.bbox_y = detection.y
             face.bbox_w = detection.w
             face.bbox_h = detection.h
+            if face.image:
+                _ = face.image.file_path
+            if face.person:
+                _ = face.person.name
 
             crops_dir = self._config.crops_dir_resolved
             crops_dir.mkdir(parents=True, exist_ok=True)
 
-            # Overwrite the face's existing crop file in-place when available.
-            # This avoids filename collisions caused by mixing face.id-based and
-            # detection-index-based naming schemes from different code paths.
             old_crop_path = face.crop_path
-            dest_override = _Path(old_crop_path) if old_crop_path else None
-
-            crop_path = save_face_crop(
-                img_bgr=img_bgr,
-                detection=detection,
+            shared_before = crop_path_is_shared(session, face)
+            if shared_before:
+                log.warning(
+                    "Shared crop path before bbox update: %s",
+                    face_debug_state(face, old_crop_path),
+                )
+            crop_path = save_crop_for_face(
+                face,
                 crops_dir=crops_dir,
-                image_id=face.image_id,
                 thumbnail_size=self._config.scan.thumbnail_size,
-                face_index=face.id,
-                dest_path=dest_override,
+                img_bgr=img_bgr,
             )
             if crop_path is not None:
-                face.crop_path = str(crop_path)
                 new_crop_path = str(crop_path)
 
         # Invalidate Qt's pixmap cache so the updated thumbnail is shown immediately.
-        if new_crop_path:
+        if old_crop_path or new_crop_path:
             from PySide6.QtGui import QPixmapCache
-            QPixmapCache.remove(new_crop_path)
+            if old_crop_path:
+                QPixmapCache.remove(old_crop_path)
+            if new_crop_path:
+                QPixmapCache.remove(new_crop_path)
 
         log.info(
             "Face %d bbox updated from preview: bbox=(%d,%d,%d,%d) crop=%s",
@@ -1183,7 +1208,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_scanning_state(self, scanning: bool) -> None:
-        self._scan_btn.setEnabled(not scanning)
+        self._scan_modes_btn.setEnabled(not scanning and hasattr(self, "_root_folder"))
         self._stop_btn.setEnabled(scanning)
         self._progress_bar.setVisible(scanning)
         if scanning:
@@ -1261,6 +1286,19 @@ class MainWindow(QMainWindow):
         with session_scope() as session:
             persons: List[Person] = (
                 session.query(Person).order_by(Person.name).all()
+            )
+            from app.services.face_crop_service import ensure_unique_face_crops
+            all_faces = [
+                f
+                for p in persons
+                for f in p.faces
+                if not f.is_excluded
+            ]
+            ensure_unique_face_crops(
+                session,
+                all_faces,
+                self._config.crops_dir_resolved,
+                self._config.scan.thumbnail_size,
             )
             for p in persons:
                 for f in p.faces:

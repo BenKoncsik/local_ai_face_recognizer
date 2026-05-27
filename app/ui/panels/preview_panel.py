@@ -449,6 +449,21 @@ class PreviewPanel(QWidget):
             for f in face.image.faces
             if not f.is_excluded
         ]
+        for f in face.image.faces:
+            if not f.is_excluded:
+                log.debug(
+                    "Preview face entity: FaceId=%s PersonId=%s crop_path=%r "
+                    "image_path=%r bbox=(%s,%s,%s,%s) preview_source=%r",
+                    f.id,
+                    f.person_id,
+                    f.crop_path,
+                    img_path,
+                    f.bbox_x,
+                    f.bbox_y,
+                    f.bbox_w,
+                    f.bbox_h,
+                    img_path,
+                )
         self._selected_face_id = face.id
         self._editing_face_id = None
         self._draw_btn.setChecked(False)
@@ -510,6 +525,12 @@ class PreviewPanel(QWidget):
     def _render(self) -> None:
         if self._orig_img_bgr is None:
             return
+        log.debug(
+            "Render image preview: selected_FaceId=%s faces=%s preview_source=%r",
+            self._selected_face_id,
+            [fd[0] for fd in self._face_data],
+            self._current_image_path,
+        )
         annotated = _draw_faces(self._orig_img_bgr, self._face_data, self._selected_face_id)
         self._full_pixmap = _bgr_to_qpixmap(annotated)
         self._update_scaled_pixmap()
@@ -535,15 +556,29 @@ class PreviewPanel(QWidget):
 
     def _on_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
         """Show context menu for the right-clicked face."""
-        # Select the face immediately so it's highlighted when the menu appears
+        self.show_face_context_menu(face_id, gx, gy)
+
+    def show_face_context_menu(
+        self,
+        face_id: int,
+        gx: int,
+        gy: int,
+        person_name: Optional[str] = None,
+    ) -> None:
+        """Show the face context menu at global position (gx, gy).
+
+        If *person_name* is None it is looked up from the currently loaded face data.
+        Can be called externally (e.g. from the cluster thumbnail grid).
+        """
         if self._selected_face_id != face_id:
             self._selected_face_id = face_id
             self._render()
             self._update_action_buttons()
             self.face_selected.emit(face_id)
 
-        entry = next((f for f in self._face_data if f[0] == face_id), None)
-        person_name = entry[5] if entry else None
+        if person_name is None:
+            entry = next((f for f in self._face_data if f[0] == face_id), None)
+            person_name = entry[5] if entry else None
 
         menu = QMenu(self)
 

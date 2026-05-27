@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImageReader, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -28,6 +28,41 @@ _THUMB_COLS = 5
 _ZOOM_SIZE = 280
 
 
+def _load_crop_pixmap(
+    crop_path: Optional[str],
+    size: int,
+    face_id: Optional[int] = None,
+) -> Optional[QPixmap]:
+    """Load a crop without reusing Qt's filename pixmap cache."""
+    if not crop_path or not Path(crop_path).exists():
+        return None
+    QPixmapCache.remove(crop_path)
+    reader = QImageReader(crop_path)
+    image = reader.read()
+    if image.isNull():
+        log.warning(
+            "Crop preview load failed: FaceId=%s preview_source=%s error=%s",
+            face_id,
+            crop_path,
+            reader.errorString(),
+        )
+        return None
+    pixmap = QPixmap.fromImage(image).scaled(
+        size,
+        size,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+    log.debug(
+        "Render crop preview: FaceId=%s preview_source=%s size=%dx%d",
+        face_id,
+        crop_path,
+        pixmap.width(),
+        pixmap.height(),
+    )
+    return pixmap
+
+
 class _ZoomPopup(QLabel):
     """Floating popup that shows a larger version of a face crop."""
 
@@ -42,12 +77,8 @@ class _ZoomPopup(QLabel):
         self.setFixedSize(_ZOOM_SIZE + 8, _ZOOM_SIZE + 8)
 
     def show_for(self, crop_path: Optional[str], global_pos) -> None:
-        if crop_path and Path(crop_path).exists():
-            pixmap = QPixmap(crop_path).scaled(
-                _ZOOM_SIZE, _ZOOM_SIZE,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
+        pixmap = _load_crop_pixmap(crop_path, _ZOOM_SIZE)
+        if pixmap is not None:
             self.setPixmap(pixmap)
         else:
             self.setText("?")
@@ -80,14 +111,20 @@ class FaceThumbnail(QLabel):
 
     Signals:
         clicked: ``(face_id: int)``
+        right_clicked: ``(face_id: int, global_x: int, global_y: int)``
     """
 
     clicked = Signal(int)
+    right_clicked = Signal(int, int, int)
 
     def __init__(self, face: Face, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.face_id = face.id
         self._crop_path = face.crop_path
+        self._person_name: Optional[str] = face.person.name if face.person else None
+        self.setObjectName(f"face-thumb-{face.id}")
+        self.setProperty("face_id", face.id)
+        self.setProperty("crop_path", face.crop_path or "")
         self._load_pixmap(face.crop_path)
         self.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
         self.setAlignment(Qt.AlignCenter)
@@ -109,12 +146,8 @@ class FaceThumbnail(QLabel):
         self.setMouseTracking(True)
 
     def _load_pixmap(self, crop_path: Optional[str]) -> None:
-        if crop_path and Path(crop_path).exists():
-            pixmap = QPixmap(crop_path).scaled(
-                _THUMB_SIZE, _THUMB_SIZE,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
+        pixmap = _load_crop_pixmap(crop_path, _THUMB_SIZE, self.face_id)
+        if pixmap is not None:
             self.setPixmap(pixmap)
         else:
             self.setText("?")
@@ -138,18 +171,25 @@ class FaceThumbnail(QLabel):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.face_id)
 
+    def contextMenuEvent(self, event) -> None:
+        gp = self.mapToGlobal(event.pos())
+        self.right_clicked.emit(self.face_id, gp.x(), gp.y())
+
 
 class ClusterPanel(QWidget):
     """Scrollable grid of face thumbnails for the selected person.
 
     Signals:
         face_selected: ``(face_id: int)``
+        face_right_clicked: ``(face_id: int, global_x: int, global_y: int)``
     """
 
     face_selected = Signal(int)
+    face_right_clicked = Signal(int, int, int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._face_names: dict[int, Optional[str]] = {}
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -175,12 +215,30 @@ class ClusterPanel(QWidget):
     def show_person(self, person_name: str, faces: list[Face]) -> None:
         """Populate the grid with *faces* belonging to *person_name*."""
         self._clear_grid()
+        self._face_names.clear()
         self._header.setText(t("face_count_header", name=person_name, n=len(faces)))
 
         for i, face in enumerate(faces):
             row, col = divmod(i, _THUMB_COLS)
+            log.debug(
+                "Cluster grid item: FaceId=%s PersonId=%s crop_path=%r "
+                "image_path=%r bbox=(%s,%s,%s,%s) preview_source=%r row=%d col=%d",
+                face.id,
+                face.person_id,
+                face.crop_path,
+                face.image.file_path if face.image else None,
+                face.bbox_x,
+                face.bbox_y,
+                face.bbox_w,
+                face.bbox_h,
+                face.crop_path,
+                row,
+                col,
+            )
             thumb = FaceThumbnail(face)
             thumb.clicked.connect(self.face_selected.emit)
+            thumb.right_clicked.connect(self.face_right_clicked.emit)
+            self._face_names[face.id] = thumb._person_name
             self._grid.addWidget(thumb, row, col)
 
         # Fill remaining cells in last row
@@ -192,8 +250,13 @@ class ClusterPanel(QWidget):
                     spacer.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
                     self._grid.addWidget(spacer, len(faces) // _THUMB_COLS, col)
 
+    def get_face_person_name(self, face_id: int) -> Optional[str]:
+        """Return the person name for *face_id* as loaded in the current grid."""
+        return self._face_names.get(face_id)
+
     def clear(self) -> None:
         self._clear_grid()
+        self._face_names.clear()
         self._header.setText(t("select_person_sidebar"))
 
     # ------------------------------------------------------------------

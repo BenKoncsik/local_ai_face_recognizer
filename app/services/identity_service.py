@@ -18,6 +18,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, FaceCorrection, Person
+from app.services.face_crop_service import face_debug_state
 
 log = logging.getLogger(__name__)
 
@@ -157,11 +158,15 @@ class IdentityService:
         face = self._require_face(face_id)
         old_pid = face.person_id
         self._require_person(target_person_id)
+        if face.image is not None:
+            _ = face.image.file_path
+        log.debug("Assignment before: %s", face_debug_state(face, face.crop_path))
 
         face.person_id = target_person_id
         face.assignment_source = "manual"
         face.assignment_confidence = None
         face.assigned_at = _utcnow_naive()
+        log.debug("Assignment after: %s", face_debug_state(face, face.crop_path))
         self._session.commit()
         log.info(
             "Reassigned face %d: person %s → %d", face_id, old_pid, target_person_id

@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image
+from app.services.face_crop_service import face_debug_state
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class ImageBrowserService:
             return []
         for f in img.faces:
             _ = f.person
+            log.debug("Image-browser face entity: %s", face_debug_state(f, f.crop_path))
         return [
             (
                 f.id,

@@ -618,6 +618,101 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "img_lib_no_root_for_migrate": {"en": "Please set the library root before migrating.",
                                     "hu": "A migráció előtt állítsa be a könyvtár gyökerét."},
 
+    # ── Scan modes dialog ─────────────────────────────────────────────────
+    "scanModes.title":
+        {"en": "Scan Modes",
+         "hu": "Beolvasási módok"},
+    "scanModes.openButton":
+        {"en": "Scan Modes …",
+         "hu": "Beolvasási módok …"},
+    "scanModes.close":
+        {"en": "Close",
+         "hu": "Bezárás"},
+
+    # incremental (scan & index)
+    "scanModes.incremental.title":
+        {"en": "Scan & Index",
+         "hu": "Beolvasás és indexelés"},
+    "scanModes.incremental.description":
+        {"en": "Scans the selected folder for new images that are not yet in the database. "
+               "Runs face detection, embedding and recognition only on these new files. "
+               "Existing faces and person assignments are left completely untouched. "
+               "Fast and safe — ideal for daily incremental updates after adding new photos.",
+         "hu": "Csak az adatbázisban még nem szereplő új képeket dolgozza fel. "
+               "Arcdetektálást, embeddinget és felismerést csak az új fájlokon futtat. "
+               "A meglévő arcok és személyesítések érintetlenek maradnak. "
+               "Gyors és biztonságos — mindennapi használatra, ha új fotókat adtál hozzá."},
+    "scanModes.incremental.startButton":
+        {"en": "Start Scan",
+         "hu": "Beolvasás indítása"},
+
+    # full rescan
+    "scanModes.fullRescan.title":
+        {"en": "Force Full Rescan",
+         "hu": "Teljes újrabeolvasás"},
+    "scanModes.fullRescan.description":
+        {"en": "Deletes ALL automatically detected faces — including those already assigned to "
+               "a person — and re-runs fast face detection on every image from scratch. "
+               "Only manually drawn faces are preserved. "
+               "Use this when the detector has changed significantly or the entire face "
+               "database needs to be rebuilt. "
+               "⚠ Warning: all person assignments based on auto-detected faces will be lost.",
+         "hu": "Törli az ÖSSZES automatikusan felismert arcot — beleértve a személyekhez már "
+               "hozzárendelteket is —, majd újra futtatja a gyors arcdetektálást minden képen. "
+               "Csak a kézzel rajzolt arcok maradnak meg. "
+               "Akkor érdemes használni, ha a detektor alapvetően megváltozott, vagy "
+               "az egész arcadatbázist újra kell építeni. "
+               "⚠ Figyelem: az automatikusan felismert arcokhoz tartozó személyesítések elvesznek."},
+    "scanModes.fullRescan.startButton":
+        {"en": "Start Full Rescan",
+         "hu": "Teljes újrabeolvasás indítása"},
+    "scanModes.fullRescan.warning":
+        {"en": "Destructive — named face assignments will be lost",
+         "hu": "Romboló — az elnevezett arc-hozzárendelések elvesznek"},
+
+    # face rescan (fast)
+    "scanModes.faceRescan.title":
+        {"en": "Re-detect Faces (Fast)",
+         "hu": "Arcok újrakeresése (gyors)"},
+    "scanModes.faceRescan.description":
+        {"en": "Removes unnamed, unassigned auto-detected faces and resets all images for "
+               "re-detection. Faces that are already assigned to a named person are kept as "
+               "training examples. Re-runs fast face detection on all images. "
+               "Use this to find faces the detector previously missed while keeping your "
+               "manual person assignments intact.",
+         "hu": "Törli a névtelen, hozzá nem rendelt automatikus arcokat, és minden képet "
+               "újra feldolgozásra jelöl. A már személyhez rendelt arcok megmaradnak "
+               "tanítási példaként. Gyors módban újra futtatja az arcdetektálást minden képen. "
+               "Akkor hasznos, ha a detektor korábban hiányos volt, de a kézi "
+               "személyesítéseket meg akarod tartani."},
+    "scanModes.faceRescan.startButton":
+        {"en": "Start Re-detection (Fast)",
+         "hu": "Újrakeresés indítása (gyors)"},
+
+    # face rescan (accurate)
+    "scanModes.preciseRescan.title":
+        {"en": "Re-detect Faces (Accurate)",
+         "hu": "Arcok újrakeresése (pontos)"},
+    "scanModes.preciseRescan.description":
+        {"en": "Same as fast re-detection but uses high-accuracy mode: runs multiple "
+               "preprocessing variants per image (CLAHE contrast, gamma brightening, "
+               "histogram equalisation, bilateral filtering) with a lower confidence "
+               "threshold, then merges duplicate bounding boxes. "
+               "Finds significantly more faces, especially in dark or low-contrast photos. "
+               "⚠ Considerably slower and more resource-intensive than fast mode.",
+         "hu": "Ugyanaz mint a gyors újrakeresés, de pontos módban: képenként több "
+               "képfeldolgozási variációt futtat (CLAHE kontraszt, gamma-fényesítés, "
+               "hisztogram-kiegyenlítés, bilaterális szűrés), alacsonyabb konfidencia-küszöbbel, "
+               "majd összevonja az átfedő bounding box-okat. "
+               "Lényegesen több arcot talál, különösen sötét vagy gyenge kontrasztú fotókon. "
+               "⚠ Jelentősen lassabb és erőforrásigényesebb a gyors módnál."},
+    "scanModes.preciseRescan.startButton":
+        {"en": "Start Re-detection (Accurate)",
+         "hu": "Újrakeresés indítása (pontos)"},
+    "scanModes.preciseRescan.warning":
+        {"en": "Slow — may take several minutes on large libraries",
+         "hu": "Lassú — nagy képkönyvtárnál több percig tarthat"},
+
     # ── Name suggestions ──────────────────────────────────────────────────
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},
     "suggestions_title": {"en": "Name Suggestions — Unknown → Known",

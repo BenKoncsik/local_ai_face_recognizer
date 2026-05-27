@@ -1161,6 +1161,16 @@ class ImageBrowserPanel(QWidget):
         if source_id is None:
             return
         with session_scope() as session:
+            if self._config is not None:
+                img = session.get(Image, source_id)
+                if img is not None:
+                    from app.services.face_crop_service import ensure_unique_face_crops
+                    ensure_unique_face_crops(
+                        session,
+                        [f for f in img.faces if not f.is_excluded],
+                        self._config.crops_dir_resolved,
+                        self._config.scan.thumbnail_size,
+                    )
             svc = ImageBrowserService(session)
             self._face_data = svc.get_image_faces(source_id)
 
@@ -1501,6 +1511,10 @@ class ImageBrowserPanel(QWidget):
                     if not photo_date:
                         photo_date = orig.photo_date or ""
 
+        # Re-read through the service so duplicate/missing crop paths are
+        # repaired before any preview state is rendered.
+        self._fetch_face_data()
+
         self._photo_date_edit.blockSignals(True)
         self._photo_date_edit.setText(photo_date)
         self._photo_date_edit.blockSignals(False)
@@ -1744,12 +1758,60 @@ class ImageBrowserPanel(QWidget):
     def _update_face_bbox(
         self, face_id: int, x: int, y: int, w: int, h: int
     ) -> None:
+        old_crop_path: Optional[str] = None
+        new_crop_path: Optional[str] = None
         with session_scope() as session:
+            from app.detectors.base import Detection
+            from app.services.face_crop_service import (
+                crop_path_is_shared,
+                face_debug_state,
+                save_crop_for_face,
+            )
+            from app.utils.image_utils import load_image_bgr
+
             face = session.get(Face, face_id)
-            if face is None:
+            if face is None or face.image is None:
                 return
-            face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h = x, y, w, h
-        log.info("Face %d bbox updated to (%d,%d,%d,%d)", face_id, x, y, w, h)
+            img_bgr = load_image_bgr(face.image.file_path)
+            if img_bgr is None:
+                return
+            detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(
+                img_bgr.shape[1], img_bgr.shape[0]
+            )
+            face.bbox_x = detection.x
+            face.bbox_y = detection.y
+            face.bbox_w = detection.w
+            face.bbox_h = detection.h
+            if face.person:
+                _ = face.person.name
+            old_crop_path = face.crop_path
+            if crop_path_is_shared(session, face):
+                log.warning(
+                    "Shared crop path before image-browser bbox update: %s",
+                    face_debug_state(face, old_crop_path),
+                )
+            if self._config is not None:
+                crops_dir = self._config.crops_dir_resolved
+                crops_dir.mkdir(parents=True, exist_ok=True)
+                crop_path = save_crop_for_face(
+                    face,
+                    crops_dir=crops_dir,
+                    thumbnail_size=self._config.scan.thumbnail_size,
+                    img_bgr=img_bgr,
+                )
+                if crop_path is not None:
+                    new_crop_path = str(crop_path)
+
+        if old_crop_path or new_crop_path:
+            from PySide6.QtGui import QPixmapCache
+            if old_crop_path:
+                QPixmapCache.remove(old_crop_path)
+            if new_crop_path:
+                QPixmapCache.remove(new_crop_path)
+        log.info(
+            "Face %d bbox updated to (%d,%d,%d,%d) crop=%s",
+            face_id, x, y, w, h, new_crop_path,
+        )
 
     # ──────────────────────────────────────────────────────────────────
     # Coordinate mapping
@@ -1811,6 +1873,15 @@ class ImageBrowserPanel(QWidget):
     def _redraw_faces(self) -> None:
         if self._orig_img_bgr is None:
             return
+        log.debug(
+            "Render image-browser preview: image_id=%s selected_FaceId=%s faces=%s "
+            "preview_source=%r deoldified_color=%s",
+            self._current_image_id,
+            self._selected_face_id,
+            [fd[0] for fd in self._face_data],
+            self._deol_pair_color_path if self._deol_viewing_color else self._current_path,
+            self._deol_viewing_color,
+        )
         annotated = _draw_faces(
             self._orig_img_bgr, self._face_data, self._selected_face_id
         )
