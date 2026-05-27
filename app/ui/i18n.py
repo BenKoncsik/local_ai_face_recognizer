@@ -428,6 +428,44 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "delete_selection":  {"en": "Delete Selection", "hu": "Kijelölés törlése"},
     "unknown_face":      {"en": "Unknown face", "hu": "Ismeretlen arc"},
 
+    # ── Overlapping unknown face cleanup ─────────────────────────────────
+    "overlap_dialog_title": {"en": "Overlapping ? Face Boxes",
+                             "hu": "Átfedő ? arckeretek"},
+    "overlap_summary":   {"en": "{images} image(s) examined, {matches} suspicious ? box(es) found.",
+                          "hu": "{images} kép vizsgálva, {matches} gyanús ? keret találat."},
+    "overlap_col_image": {"en": "Image", "hu": "Kép"},
+    "overlap_col_person": {"en": "Known person", "hu": "Ismert személy"},
+    "overlap_col_unknown_id": {"en": "? face ID", "hu": "? arc ID"},
+    "overlap_col_known_id": {"en": "Known face ID", "hu": "Ismert arc ID"},
+    "overlap_col_iou":   {"en": "IoU", "hu": "IoU"},
+    "overlap_col_delete": {"en": "Delete?", "hu": "Törölhető"},
+    "overlap_delete_checkbox_tip": {"en": "Delete this question-mark face record",
+                                    "hu": "Ennek a kérdőjeles face rekordnak a törlése"},
+    "overlap_select_all": {"en": "Select All", "hu": "Mind kijelölése"},
+    "overlap_select_none": {"en": "Clear Selection", "hu": "Mind törlése a kijelölésből"},
+    "overlap_open_image": {"en": "Open Image", "hu": "Kép megnyitása"},
+    "overlap_delete_selected": {"en": "Delete Selected", "hu": "Kijelöltek törlése"},
+    "overlap_no_selection_title": {"en": "No Selection", "hu": "Nincs kijelölés"},
+    "overlap_no_selection_msg": {"en": "No question-mark face box is selected for deletion.",
+                                 "hu": "Nincs törlésre kijelölt kérdőjeles arckeret."},
+    "overlap_search_error": {"en": "Could not search overlapping ? boxes:\n{error}",
+                             "hu": "Nem sikerült az átfedő ? keretek keresése:\n{error}"},
+    "overlap_no_matches_title": {"en": "No Overlaps Found", "hu": "Nincs átfedő találat"},
+    "overlap_no_matches_msg": {"en": "{images} image(s) examined. No overlapping question-mark boxes were found.",
+                               "hu": "{images} kép vizsgálva. Nem található átfedő kérdőjeles keret."},
+    "overlap_status_found": {"en": "Overlap search: {images} image(s), {matches} candidate(s)",
+                             "hu": "Átfedés keresés: {images} kép, {matches} találat"},
+    "overlap_confirm_title": {"en": "Delete Overlapping ? Boxes",
+                              "hu": "Átfedő ? keretek törlése"},
+    "overlap_confirm_msg": {"en": "Delete {n} selected overlapping question-mark face record(s)?",
+                            "hu": "Biztosan törlöd a kijelölt {n} kérdőjeles átfedő keretet?"},
+    "overlap_delete_error": {"en": "Could not delete selected ? boxes:\n{error}",
+                             "hu": "Nem sikerült a kijelölt ? keretek törlése:\n{error}"},
+    "overlap_deleted_status": {"en": "Deleted {n} overlapping question-mark face record(s)",
+                               "hu": "{n} átfedő kérdőjeles face rekord törölve"},
+    "overlap_delete_skipped_msg": {"en": "{n} selected face record(s) were skipped because they no longer exist or are no longer unknown.",
+                                   "hu": "{n} kijelölt face rekord kihagyva, mert már nem létezik vagy már nem kérdőjeles."},
+
     # ── Toolbar — short labels (no emoji) ────────────────────────────────
     "tb_export":              {"en": "Export",       "hu": "Export"},
 
@@ -664,11 +702,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
 
     # ── Scan modes dialog ─────────────────────────────────────────────────
     "scanModes.title":
-        {"en": "Scan Modes",
-         "hu": "Beolvasási módok"},
+        {"en": "Scan & Maintenance",
+         "hu": "Beolvasás és karbantartás"},
     "scanModes.openButton":
-        {"en": "Scan Modes …",
-         "hu": "Beolvasási módok …"},
+        {"en": "Scan & Maintenance …",
+         "hu": "Beolvasás és karbantartás …"},
     "scanModes.close":
         {"en": "Close",
          "hu": "Bezárás"},
@@ -756,6 +794,27 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.preciseRescan.warning":
         {"en": "Slow — may take several minutes on large libraries",
          "hu": "Lassú — nagy képkönyvtárnál több percig tarthat"},
+
+    # overlapping question-mark cleanup
+    "scanModes.overlapCleanup.title":
+        {"en": "Find Overlapping ? Boxes",
+         "hu": "Átfedő ? keretek keresése"},
+    "scanModes.overlapCleanup.description":
+        {"en": "Searches the current database for unassigned question-mark face boxes "
+               "that significantly overlap already named faces. It only lists suspicious "
+               "candidates first; nothing is deleted until you review the list, keep the "
+               "checkboxes you want, and confirm deletion.",
+         "hu": "Megkeresi az adatbázisban azokat a kérdőjeles, személyhez nem rendelt "
+               "arckereteket, amelyek jelentősen átfednek egy már elnevezett arccal. "
+               "Először csak listázza a gyanús találatokat; semmit nem töröl addig, "
+               "amíg át nem nézed a listát, ki nem választod a törlendőket, és meg "
+               "nem erősíted a törlést."},
+    "scanModes.overlapCleanup.startButton":
+        {"en": "Find Overlapping ? Boxes",
+         "hu": "Átfedő ? keretek keresése"},
+    "scanModes.overlapCleanup.warning":
+        {"en": "Review step included — known named faces are never deleted",
+         "hu": "Átnézési lépéssel — az ismert, elnevezett arcokat soha nem törli"},
 
     # ── Name suggestions ──────────────────────────────────────────────────
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},

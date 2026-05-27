@@ -29,14 +29,18 @@ from PySide6.QtWidgets import (
 
 from app.config import AppConfig, save_db_path
 from app.db.database import ensure_unknown_person, init_db, session_scope
-from app.db.models import Face, Person
+from app.db.models import Face, Image, Person
 from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
+from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
 from app.services.identity_service import IdentityService
 from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
+from app.ui.dialogs.overlapping_unknown_faces_dialog import (
+    OverlappingUnknownFacesDialog,
+)
 from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 from app.ui.dialogs.rename_dialog import RenameDialog
 from app.ui.dialogs.scan_modes_dialog import ScanModesDialog
@@ -135,7 +139,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         self._scan_modes_btn = QPushButton()
-        self._scan_modes_btn.setEnabled(False)
+        self._scan_modes_btn.setEnabled(True)
         self._scan_modes_btn.clicked.connect(self._on_open_scan_modes)
         tb.addWidget(self._scan_modes_btn)
 
@@ -541,6 +545,7 @@ class MainWindow(QMainWindow):
             on_full_rescan=self._on_force_rescan,
             on_face_rescan_fast=self._on_redetect_fast,
             on_face_rescan_accurate=self._on_redetect_accurate,
+            on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
             parent=self,
         )
         dlg.exec()
@@ -578,6 +583,159 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
+
+    @Slot()
+    def _on_find_overlapping_unknown_faces(self) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        threshold = self._config.detection.duplicate_unknown_iou_threshold
+        try:
+            with session_scope() as session:
+                finder = DuplicateUnknownFaceFinder(session, iou_threshold=threshold)
+                matches = finder.find()
+                images_examined = finder.images_examined
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Overlapping unknown face search failed")
+            QMessageBox.critical(self, t("error"), t("overlap_search_error", error=exc))
+            return
+
+        log.info(
+            "Átfedő kérdőjeles keretek keresése: %d kép vizsgálva, %d találat.",
+            images_examined,
+            len(matches),
+        )
+        self._status_label.setText(
+            t("overlap_status_found", images=images_examined, matches=len(matches))
+        )
+
+        if not matches:
+            QMessageBox.information(
+                self,
+                t("overlap_no_matches_title"),
+                t("overlap_no_matches_msg", images=images_examined),
+            )
+            return
+
+        dlg = OverlappingUnknownFacesDialog(
+            matches=matches,
+            images_examined=images_examined,
+            parent=self,
+        )
+        dlg.open_face_requested.connect(self._open_overlap_match_face)
+        dlg.exec()
+        if not dlg.delete_requested():
+            return
+
+        selected_ids = dlg.selected_unknown_face_ids()
+        if not selected_ids:
+            QMessageBox.information(
+                self,
+                t("overlap_no_selection_title"),
+                t("overlap_no_selection_msg"),
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("overlap_confirm_title"),
+            t("overlap_confirm_msg", n=len(selected_ids)),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        preview_image_id = self._preview_panel.current_image_id
+        try:
+            with session_scope() as session:
+                finder = DuplicateUnknownFaceFinder(session, iou_threshold=threshold)
+                result = finder.delete_unknown_faces(selected_ids)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Overlapping unknown face cleanup failed")
+            QMessageBox.critical(self, t("error"), t("overlap_delete_error", error=exc))
+            return
+
+        log.info(
+            "Átfedő kérdőjeles keretek törlése: kijelölt=%d, törölt=%d, kihagyott=%d.",
+            result.requested,
+            result.deleted,
+            len(result.missing_or_changed),
+        )
+        self._status_label.setText(t("overlap_deleted_status", n=result.deleted))
+        if result.missing_or_changed:
+            QMessageBox.warning(
+                self,
+                t("warning"),
+                t(
+                    "overlap_delete_skipped_msg",
+                    n=len(result.missing_or_changed),
+                ),
+            )
+
+        self._refresh_after_overlapping_unknown_delete(
+            deleted_image_ids=set(result.image_ids),
+            previous_preview_image_id=preview_image_id,
+            deleted_face_ids=set(selected_ids),
+        )
+
+    @Slot(int)
+    def _open_overlap_match_face(self, known_face_id: int) -> None:
+        self._tabs.setCurrentIndex(0)
+        with session_scope() as session:
+            face = session.get(Face, known_face_id)
+            if face is None:
+                return
+            person_id = face.person_id
+
+        if person_id is not None:
+            self._on_person_selected(person_id)
+        self._current_face_id = known_face_id
+        self._show_face_in_preview(known_face_id)
+        self._remove_face_btn.setEnabled(True)
+        self._reassign_btn.setEnabled(True)
+
+    def _refresh_after_overlapping_unknown_delete(
+        self,
+        deleted_image_ids: set[int],
+        previous_preview_image_id: Optional[int],
+        deleted_face_ids: set[int],
+    ) -> None:
+        face_to_restore = (
+            self._current_face_id
+            if self._current_face_id not in deleted_face_ids
+            else None
+        )
+        self._current_face_id = face_to_restore
+
+        self._refresh_persons()
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+            self._current_face_id = face_to_restore
+        self._image_browser._reload_current_face_data()
+
+        if (
+            previous_preview_image_id is None
+            or previous_preview_image_id not in deleted_image_ids
+        ):
+            if face_to_restore is not None:
+                self._show_face_in_preview(face_to_restore)
+            return
+
+        replacement_face_id: Optional[int] = None
+        with session_scope() as session:
+            image = session.get(Image, previous_preview_image_id)
+            if image is not None:
+                named = [f for f in image.faces if f.person_id is not None and not f.is_excluded]
+                visible = [f for f in image.faces if not f.is_excluded]
+                replacement = (named or visible or [None])[0]
+                replacement_face_id = replacement.id if replacement is not None else None
+
+        if replacement_face_id is not None:
+            self._current_face_id = replacement_face_id
+            self._show_face_in_preview(replacement_face_id)
+        else:
+            self._preview_panel.clear()
 
     @Slot()
     def _on_settings(self) -> None:
@@ -1219,7 +1377,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_scanning_state(self, scanning: bool) -> None:
-        self._scan_modes_btn.setEnabled(not scanning and hasattr(self, "_root_folder"))
+        self._scan_modes_btn.setEnabled(not scanning)
         self._stop_btn.setEnabled(scanning)
         self._progress_bar.setVisible(scanning)
         if scanning:

@@ -539,6 +539,10 @@ class PreviewPanel(QWidget):
         self._delete_btn.setEnabled(False)
         self._current_image_path = None
 
+    @property
+    def current_image_id(self) -> Optional[int]:
+        return self._current_image_id
+
     # ------------------------------------------------------------------
 
     def resizeEvent(self, event) -> None:

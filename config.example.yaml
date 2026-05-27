@@ -36,6 +36,11 @@ detection:
   #
   # cpu_model_path: models/res10_300x300_ssd_iter_140000.caffemodel
 
+  # IoU threshold for "Find overlapping ? boxes" cleanup candidates.
+  # A question-mark box is listed when it overlaps a real named face by at
+  # least this much. Typical range: 0.30 - 0.40.
+  duplicate_unknown_iou_threshold: 0.35
+
 embedding:
   # NOTE: Embeddings run on CPU — Coral is NOT used for this step.
   # See app/embeddings/tflite_embedder.py for details.

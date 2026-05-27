@@ -50,6 +50,10 @@ class DetectionConfig:
     # preprocessing variants in high-accuracy mode.
     iou_merge_threshold: float = 0.35
 
+    # IoU threshold for the manual cleanup action that finds unassigned
+    # question-mark boxes overlapping already named faces.
+    duplicate_unknown_iou_threshold: float = 0.35
+
 
 @dataclass
 class EmbeddingConfig:
@@ -264,6 +268,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
             iou_merge_threshold=det.get(
                 "iou_merge_threshold", cfg.detection.iou_merge_threshold
+            ),
+            duplicate_unknown_iou_threshold=det.get(
+                "duplicate_unknown_iou_threshold",
+                cfg.detection.duplicate_unknown_iou_threshold,
             ),
         )
 

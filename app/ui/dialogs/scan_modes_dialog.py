@@ -1,8 +1,8 @@
-"""Scan-modes chooser dialog.
+"""Scan and maintenance chooser dialog.
 
-Opens from the toolbar 'Scan Modes …' button and presents all four
-scanning operations as cards with a title, description, and launch button.
-The dialog is scrollable so it works on small screens too.
+Opens from the toolbar and presents scan/re-detection operations plus related
+database cleanup actions. The dialog is scrollable so it works on small
+screens too.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from app.ui.i18n import t
 
 
 class ScanModesDialog(QDialog):
-    """Modal dialog that lets the user choose and start a scanning mode."""
+    """Modal dialog that lets the user choose scan and cleanup actions."""
 
     def __init__(
         self,
@@ -34,6 +34,7 @@ class ScanModesDialog(QDialog):
         on_full_rescan: Callable[[], None],
         on_face_rescan_fast: Callable[[], None],
         on_face_rescan_accurate: Callable[[], None],
+        on_find_overlapping_unknown_faces: Callable[[], None],
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -41,6 +42,7 @@ class ScanModesDialog(QDialog):
         self._on_full_rescan = on_full_rescan
         self._on_face_rescan_fast = on_face_rescan_fast
         self._on_face_rescan_accurate = on_face_rescan_accurate
+        self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -88,6 +90,14 @@ class ScanModesDialog(QDialog):
             button_label=t("scanModes.preciseRescan.startButton"),
             warning=t("scanModes.preciseRescan.warning"),
             callback=self._launch_face_rescan_accurate,
+            danger=False,
+        ))
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.overlapCleanup.title"),
+            description=t("scanModes.overlapCleanup.description"),
+            button_label=t("scanModes.overlapCleanup.startButton"),
+            warning=t("scanModes.overlapCleanup.warning"),
+            callback=self._launch_overlapping_unknown_cleanup,
             danger=False,
         ))
         cards_layout.addWidget(self._make_card(
@@ -189,3 +199,7 @@ class ScanModesDialog(QDialog):
     def _launch_face_rescan_accurate(self) -> None:
         self.accept()
         self._on_face_rescan_accurate()
+
+    def _launch_overlapping_unknown_cleanup(self) -> None:
+        self.accept()
+        self._on_find_overlapping_unknown_faces()
