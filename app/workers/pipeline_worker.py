@@ -105,7 +105,19 @@ class PipelineWorker(QThread):
 
         # --- Stage 3: Embedding ---
         self.log_message.emit("Stage 3/5: Generating face embeddings …")
-        embedded = self._run_embedding()
+        try:
+            embedded = self._run_embedding()
+        except ImportError as exc:
+            log.error("TFLite backend missing: %s", exc)
+            user_msg = (
+                "Hiányzik a TFLite futtatókörnyezet. "
+                "Telepítsd/javítsd a Windows AI runtime függőségeket:\n"
+                "  pip install ai-edge-litert\n"
+                f"Részletek: {exc}"
+            )
+            self.error.emit(user_msg)
+            self.finished.emit(False, "Missing TFLite runtime — embedding skipped")
+            return
         if self._abort:
             self.finished.emit(False, "Aborted after embedding")
             return

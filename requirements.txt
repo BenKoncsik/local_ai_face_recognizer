@@ -23,23 +23,18 @@ SQLAlchemy>=2.0
 scikit-learn>=1.3
 
 # ── Face embeddings (CPU, TFLite) ─────────────────────────────────────────────
-# tflite-runtime is a lightweight package (~2 MB) that provides the TFLite
-# interpreter without pulling in all of TensorFlow.
+# ai-edge-litert is the current TFLite runtime (~5 MB, replaces tflite-runtime).
+# Wheels available for Python 3.9+ on:
+#   Linux x86-64, Linux ARM64, macOS ARM64/x86-64, Windows x86-64
 #
-# On Raspberry Pi / Linux ARM:
-#   pip install tflite-runtime
+# If ai-edge-litert is unavailable for your platform/Python version, install
+# one of these fallbacks manually:
+#   pip install tflite-runtime    # lightweight, limited platform coverage
+#   pip install tensorflow        # heavy (~500 MB), works everywhere
 #
-# On Linux x86-64:
-#   pip install tflite-runtime
-#
-# On macOS (Apple Silicon / Intel) or Windows:
-#   tflite-runtime wheels may not be available for all Python versions.
-#   Fallback: install tensorflow instead (heavier but works everywhere):
-#     pip install tensorflow
-#
-# We list both here; pip will install whichever resolves first.
-# Comment out if you prefer the full tensorflow package.
-tflite-runtime>=2.14; platform_machine != "AMD64" or sys_platform != "win32"
+# The embedder auto-detects whichever backend is installed (see
+# app/embeddings/tflite_embedder.py).
+ai-edge-litert>=1.0
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=7.4

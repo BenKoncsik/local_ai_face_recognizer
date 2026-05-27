@@ -114,28 +114,45 @@ class TFLiteEmbedder(FaceEmbedder):
 
     def _load_tflite(self, model_path: Path) -> None:
         """Load the TFLite model via ai-edge-litert, tflite-runtime, or tensorflow."""
-        try:
-            # New name since 2024: ai-edge-litert (replaces tflite-runtime)
-            from ai_edge_litert.interpreter import Interpreter  # type: ignore[import]
+        import platform
+        import sys
 
-            log.info("Embedding: using ai_edge_litert")
-        except ImportError:
+        Interpreter = None
+        attempted: list[str] = []
+
+        try:
+            # Primary backend: ai-edge-litert (replaces tflite-runtime since 2024)
+            from ai_edge_litert.interpreter import Interpreter  # type: ignore[import]
+            log.info("Embedding: using ai_edge_litert backend")
+        except ImportError as e1:
+            attempted.append(f"ai_edge_litert: {e1}")
+
+        if Interpreter is None:
             try:
                 import tflite_runtime.interpreter as tflite  # type: ignore[import]
-
                 Interpreter = tflite.Interpreter
-                log.info("Embedding: using tflite_runtime")
-            except ImportError:
-                try:
-                    import tensorflow as tf  # type: ignore[import]
+                log.info("Embedding: using tflite_runtime backend")
+            except ImportError as e2:
+                attempted.append(f"tflite_runtime: {e2}")
 
-                    Interpreter = tf.lite.Interpreter
-                    log.info("Embedding: using tensorflow.lite")
-                except ImportError as exc:
-                    raise ImportError(
-                        "No TFLite backend found. Install ai-edge-litert: "
-                        "pip install ai-edge-litert"
-                    ) from exc
+        if Interpreter is None:
+            try:
+                import tensorflow as tf  # type: ignore[import]
+                Interpreter = tf.lite.Interpreter
+                log.info("Embedding: using tensorflow.lite backend")
+            except ImportError as e3:
+                attempted.append(f"tensorflow: {e3}")
+
+        if Interpreter is None:
+            raise ImportError(
+                "No TFLite backend found.\n"
+                f"  Python:   {sys.version}\n"
+                f"  Platform: {sys.platform} / {platform.machine()}\n"
+                f"  Attempted: {'; '.join(attempted)}\n"
+                "  Fix: pip install ai-edge-litert\n"
+                "  (Supports Python 3.9-3.12+ on Linux x64/ARM64, macOS, Windows x64)\n"
+                "  Alternative: pip install tensorflow"
+            )
 
         self._interpreter = Interpreter(model_path=str(model_path))
         self._interpreter.allocate_tensors()

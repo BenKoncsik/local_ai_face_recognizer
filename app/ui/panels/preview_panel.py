@@ -71,6 +71,8 @@ def _draw_faces(
     from PIL import Image as PILImage
     from PIL import ImageDraw
 
+    from app.ui.helpers.label_placement import FaceLabel, place_labels
+
     img = img_bgr.copy()
 
     for face_id, x, y, w, h, _ in faces:
@@ -86,6 +88,8 @@ def _draw_faces(
     image_h, image_w = img.shape[:2]
     font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
+    # --- Phase 1: measure all labels ---
+    face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
     for face_id, x, y, w, h, person_name in faces:
         selected = face_id == selected_id
         color_rgb = (50, 220, 50) if selected else (180, 180, 180)
@@ -110,18 +114,37 @@ def _draw_faces(
 
         label_w = min(tw + 2 * pad_x, image_w)
         label_h = th + 2 * pad_y
-        label_x = min(max(x, 0), max(0, image_w - label_w))
-        label_y = y - label_h - 6
-        if label_y < 0:
-            label_y = y + h + 6
-        label_y = min(max(label_y, 0), max(0, image_h - label_h))
+        face_meta.append((name, font, pad_x, pad_y, label_w, label_h, color_rgb))
+
+    # --- Phase 2: compute collision-free positions ---
+    face_labels = [
+        FaceLabel(
+            face_id=faces[i][0],
+            x=faces[i][1], y=faces[i][2],
+            w=faces[i][3], h=faces[i][4],
+            selected=faces[i][0] == selected_id,
+            label_w=face_meta[i][4],
+            label_h=face_meta[i][5],
+        )
+        for i in range(len(faces))
+    ]
+    layouts = place_labels(image_w, image_h, face_labels)
+
+    # --- Phase 3: render ---
+    for i, layout in enumerate(layouts):
+        name, font, pad_x, pad_y, label_w, label_h, color_rgb = face_meta[i]
+
+        if layout.leader_start and layout.leader_end:
+            draw.line([layout.leader_start, layout.leader_end],
+                      fill=(120, 120, 120), width=2)
 
         draw.rectangle(
-            [label_x, label_y, label_x + label_w, label_y + label_h],
+            [layout.label_x, layout.label_y,
+             layout.label_x + label_w, layout.label_y + label_h],
             fill=(20, 20, 20),
         )
         draw.text(
-            (label_x + pad_x, label_y + pad_y),
+            (layout.label_x + pad_x, layout.label_y + pad_y),
             name,
             font=font,
             fill=color_rgb,

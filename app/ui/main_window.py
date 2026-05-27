@@ -406,13 +406,24 @@ class MainWindow(QMainWindow):
             return
 
         with session_scope() as session:
-            from app.db.models import Face, Image
+            from app.db.models import Face, Image, Person
             deleted = (
                 session.query(Face)
                 .filter(Face.detector_backend != "manual")
                 .delete(synchronize_session="fetch")
             )
             session.query(Image).update({"detection_done": False, "embedding_done": False})
+            # Remove auto-named persons that lost all their faces in this wipe.
+            orphans = (
+                session.query(Person)
+                .filter(Person.is_auto_named == True)  # noqa: E712
+                .filter(~Person.faces.any())
+                .all()
+            )
+            for p in orphans:
+                session.delete(p)
+            if orphans:
+                log.info("Force rescan: removed %d orphaned auto-named person(s).", len(orphans))
 
         self._current_person_id = None
         self._current_face_id = None

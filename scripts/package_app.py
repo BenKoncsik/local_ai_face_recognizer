@@ -39,6 +39,19 @@ def build() -> None:
 
     hidden_imports = sorted(set(collect_submodules("app")))
 
+    # TFLite backends use dynamic imports that PyInstaller cannot auto-detect.
+    # Add all three backends so the frozen app can find whichever is installed.
+    for _tflite_mod in [
+        "ai_edge_litert",
+        "ai_edge_litert.interpreter",
+        "tflite_runtime",
+        "tflite_runtime.interpreter",
+        "tensorflow",
+        "tensorflow.lite",
+    ]:
+        if _tflite_mod not in hidden_imports:
+            hidden_imports.append(_tflite_mod)
+
     args = [
         "--noconfirm",
         "--clean",

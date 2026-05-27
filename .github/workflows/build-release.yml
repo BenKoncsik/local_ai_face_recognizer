@@ -445,6 +445,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install . pyinstaller
+          # Verify TFLite backend installed (ai-edge-litert is in base deps, this is a safety check)
+          python -c "from ai_edge_litert.interpreter import Interpreter; print('ai-edge-litert OK')" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "ai-edge-litert not available for this Python version. Trying explicit install..."
+            python -m pip install "ai-edge-litert>=1.0" --quiet
+            python -c "from ai_edge_litert.interpreter import Interpreter; print('ai-edge-litert OK (explicit)')" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "ai-edge-litert still not available. Build will use SFace/HOG fallback for embeddings."
+            }
+          }
 
       - name: Download embedding models
         shell: powershell

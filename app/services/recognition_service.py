@@ -69,42 +69,40 @@ class RecognitionService:
             Automatic assignments made during this run.
         """
         profiles = self.build_profiles()
+        assignments: List[RecognitionAssignment] = []
+
         if not profiles:
             log.info("Recognition skipped: no known people with trusted examples")
-            return []
+        else:
+            candidates = self._load_candidate_faces()
+            if not candidates:
+                log.info("Recognition skipped: no unresolved embedded faces")
+            else:
+                rejected_face_targets = self._load_rejected_face_targets(candidates)
+                rejected_person_pairs = self._load_rejected_person_pairs()
 
-        candidates = self._load_candidate_faces()
-        if not candidates:
-            log.info("Recognition skipped: no unresolved embedded faces")
-            return []
+                now = _utcnow_naive()
+                for face in candidates:
+                    match = self._match_face(
+                        face=face,
+                        profiles=profiles,
+                        rejected_face_targets=rejected_face_targets,
+                        rejected_person_pairs=rejected_person_pairs,
+                    )
+                    if match is None:
+                        continue
 
-        rejected_face_targets = self._load_rejected_face_targets(candidates)
-        rejected_person_pairs = self._load_rejected_person_pairs()
-
-        assignments: List[RecognitionAssignment] = []
-        now = _utcnow_naive()
-        for face in candidates:
-            match = self._match_face(
-                face=face,
-                profiles=profiles,
-                rejected_face_targets=rejected_face_targets,
-                rejected_person_pairs=rejected_person_pairs,
-            )
-            if match is None:
-                continue
-
-            face.person_id = match.target_person_id
-            face.assignment_source = "recognition"
-            face.assignment_confidence = match.score
-            face.assigned_at = now
-            assignments.append(match)
+                    face.person_id = match.target_person_id
+                    face.assignment_source = "recognition"
+                    face.assignment_confidence = match.score
+                    face.assigned_at = now
+                    assignments.append(match)
 
         self._delete_orphan_auto_persons()
         self._session.commit()
         log.info(
-            "Recognition assigned %d / %d unresolved face(s)",
+            "Recognition assigned %d unresolved face(s)",
             len(assignments),
-            len(candidates),
         )
         return assignments
 

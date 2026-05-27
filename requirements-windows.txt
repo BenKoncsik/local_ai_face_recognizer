@@ -1,0 +1,10 @@
+# Windows-specific runtime dependencies
+# Install after requirements.txt:
+#   pip install -r requirements.txt -r requirements-windows.txt
+#
+# These packages are either Windows-only or have Windows-specific wheel variants.
+
+# TFLite runtime (primary embedding backend on Windows x64)
+# Requires Python 3.9-3.12. Fallback: pip install tensorflow
+-r requirements.txt
+ai-edge-litert>=1.0
