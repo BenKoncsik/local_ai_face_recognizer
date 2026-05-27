@@ -70,15 +70,21 @@ class SuggestionService:
     """Builds person profiles and proposes Unknown → Known matches.
 
     Args:
-        session: SQLAlchemy session.
-        config:  Suggestion configuration block (defaults used if omitted).
+        session:             SQLAlchemy session.
+        config:              Suggestion configuration block (defaults used if omitted).
+        exclude_low_quality: When True, low-quality faces are excluded from
+                             profile building.  NULL quality = treated as ok.
     """
 
     def __init__(
-        self, session: Session, config: Optional[SuggestionConfig] = None
+        self,
+        session: Session,
+        config: Optional[SuggestionConfig] = None,
+        exclude_low_quality: bool = False,
     ) -> None:
         self._session = session
         self._config = config or SuggestionConfig()
+        self._exclude_low_quality = exclude_low_quality
 
     # ------------------------------------------------------------------
     # Centroid
@@ -244,7 +250,9 @@ class SuggestionService:
             usable = [
                 f
                 for f in person.faces
-                if not f.is_excluded and f.get_embedding() is not None
+                if not f.is_excluded
+                and f.get_embedding() is not None
+                and not (self._exclude_low_quality and f.is_low_quality)
             ]
             if not usable:
                 continue

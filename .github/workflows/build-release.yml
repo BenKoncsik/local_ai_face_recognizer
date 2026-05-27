@@ -8,6 +8,8 @@ on:
 permissions:
   contents: write
   actions: read
+  issues: read
+  repository-projects: write
 
 env:
   PYTHON_VERSION: "3.11"
@@ -1015,6 +1017,17 @@ jobs:
             --target "$GITHUB_SHA" \
             --name "$RELEASE_NAME" \
             --notes "$notes"
+
+      - name: Move referenced issues to Ready
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          PROJECT_OWNER: ${{ github.repository_owner }}
+          PROJECT_TITLE: Local AI Face Recognizer
+          PROJECT_STATUS_FIELD: Status
+          PROJECT_READY_OPTION: Ready
+        shell: bash
+        run: python3 .github/scripts/move_project_issues_ready.py
 
   post-to-buffer:
     if: ${{ needs.release.result == 'success' && github.event_name == 'push' && github.run_attempt == 1 }}

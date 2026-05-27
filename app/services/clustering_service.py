@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Dict, List, Tuple
 
 import numpy as np
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.clustering.clusterer import cluster_embeddings
@@ -42,9 +43,15 @@ class ClusteringService:
         config:  Clustering configuration block.
     """
 
-    def __init__(self, session: Session, config: ClusteringConfig) -> None:
+    def __init__(
+        self,
+        session: Session,
+        config: ClusteringConfig,
+        exclude_low_quality: bool = False,
+    ) -> None:
         self._session = session
         self._config = config
+        self._exclude_low_quality = exclude_low_quality
 
     # ------------------------------------------------------------------
     # Public API
@@ -95,12 +102,16 @@ class ClusteringService:
 
     def _load_embeddings(self) -> Tuple[List[int], List[np.ndarray]]:
         """Load all embedded, non-excluded faces from DB."""
-        faces: List[Face] = (
+        query = (
             self._session.query(Face)
             .filter(Face._embedding.isnot(None))
             .filter(Face.is_excluded == False)  # noqa: E712
-            .all()
         )
+        if self._exclude_low_quality:
+            query = query.filter(
+                or_(Face.is_low_quality.is_(None), Face.is_low_quality == False)  # noqa: E712
+            )
+        faces: List[Face] = query.all()
 
         face_ids = []
         embeddings = []

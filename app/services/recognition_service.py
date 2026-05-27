@@ -57,10 +57,14 @@ class RecognitionService:
     """Recognizes unresolved faces from labeled person profiles."""
 
     def __init__(
-        self, session: Session, config: Optional[RecognitionConfig] = None
+        self,
+        session: Session,
+        config: Optional[RecognitionConfig] = None,
+        exclude_low_quality: bool = False,
     ) -> None:
         self._session = session
         self._config = config or RecognitionConfig()
+        self._exclude_low_quality = exclude_low_quality
 
     def recognize_pending(self) -> List[RecognitionAssignment]:
         """Assign unresolved faces to known people when confidence is high.
@@ -200,7 +204,7 @@ class RecognitionService:
 
     def _load_candidate_faces(self) -> List[Face]:
         """Return embedded faces that are safe for automatic recognition."""
-        return (
+        query = (
             self._session.query(Face)
             .outerjoin(Person, Face.person_id == Person.id)
             .filter(Face._embedding.isnot(None))
@@ -212,8 +216,12 @@ class RecognitionService:
                     Person.is_protected == True,  # noqa: E712
                 )
             )
-            .all()
         )
+        if self._exclude_low_quality:
+            query = query.filter(
+                or_(Face.is_low_quality.is_(None), Face.is_low_quality == False)  # noqa: E712
+            )
+        return query.all()
 
     def _is_training_face(self, face: Face) -> bool:
         if face.is_excluded or face.get_embedding() is None:
@@ -222,7 +230,13 @@ class RecognitionService:
             return False
 
         if face.assignment_source in _TRUSTED_MANUAL_SOURCES:
+            # Manually assigned faces bypass quality filtering — the user
+            # explicitly chose this face as a training example.
             return True
+
+        # Quality filter applies to auto-recognised faces only.
+        if self._exclude_low_quality and face.is_low_quality:
+            return False
 
         if face.assignment_source != "recognition":
             return False

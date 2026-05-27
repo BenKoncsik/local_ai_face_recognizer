@@ -537,6 +537,49 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     # ── Settings tabs ────────────────────────────────────────────────────
     "settings_tab_general":     {"en": "General",          "hu": "Általános"},
     "settings_tab_pairing":     {"en": "Image Pairing",    "hu": "Képpárosítás"},
+    "settings_tab_quality":     {"en": "Face Quality",     "hu": "Arc minőség"},
+
+    # ── Face quality filter settings ──────────────────────────────────────
+    "fq_group":             {"en": "Face Quality Filter",
+                             "hu": "Arc minőségszűrő"},
+    "fq_exclude_toggle":    {"en": "Exclude low-quality faces from model building",
+                             "hu": "Gyenge minőségű arcok kizárása modellépítésből"},
+    "fq_exclude_tip":       {"en": "When enabled, back-facing, blurry, too-small or low-confidence "
+                                   "face detections are skipped during embedding, recognition, "
+                                   "clustering and name suggestions. "
+                                   "The bounding box is still shown and manual name assignment "
+                                   "always works regardless of this setting.",
+                             "hu": "Ha be van kapcsolva, a háttal álló, homályos, túl kicsi vagy "
+                                   "alacsony konfidenciájú arcdetektálások ki lesznek hagyva az "
+                                   "embedding, felismerés, klaszterezés és névajánlatok során. "
+                                   "A bounding box továbbra is látható marad, és a kézi "
+                                   "névhozzárendelés mindig működik függetlenül ettől a beállítástól."},
+    "fq_thresholds_group":  {"en": "Quality Thresholds",
+                             "hu": "Minőségi küszöbértékek"},
+    "fq_min_confidence":    {"en": "Min. detection confidence:",
+                             "hu": "Min. detektálási konfidencia:"},
+    "fq_min_area":          {"en": "Min. face area (px²):",
+                             "hu": "Min. arcterület (px²):"},
+    "fq_min_sharpness":     {"en": "Min. sharpness (Laplacian variance):",
+                             "hu": "Min. élességi érték (Laplacian variancia):"},
+    "fq_reanalyze_btn":     {"en": "Re-evaluate All Faces …",
+                             "hu": "Összes arc újraértékelése …"},
+    "fq_reanalyze_confirm": {"en": "Re-evaluate quality for all {n} face(s) in the database?\n"
+                                   "This may take a few minutes.",
+                             "hu": "Újraértékeli a minőséget az adatbázis mind a(z) {n} arcán?\n"
+                                   "Ez néhány percig tarthat."},
+    "fq_reanalyze_done":    {"en": "Quality re-evaluation complete: {n} face(s) processed.",
+                             "hu": "Minőségi újraértékelés kész: {n} arc feldolgozva."},
+    "fq_low_quality_tip":   {"en": "Low-quality face — excluded from model building\n"
+                                   "(back-facing / blurry / too small / low confidence)\n"
+                                   "Right-click to override manually.",
+                             "hu": "Gyenge minőségű arc — kizárva a modellépítésből\n"
+                                   "(háttal álló / homályos / túl kicsi / alacsony konfidencia)\n"
+                                   "Jobb klikk a kézi felülbíráláshoz."},
+    "fq_ctx_force_include":  {"en": "Force include in model building",
+                              "hu": "Kényszerített belefoglalás a modellépítésbe"},
+    "fq_ctx_force_exclude":  {"en": "Exclude from model building",
+                              "hu": "Kizárás a modellépítésből"},
 
     # ── Deoldified pairing ────────────────────────────────────────────────
     "deoldified_group":         {"en": "Deoldified / Colorized Pairing",

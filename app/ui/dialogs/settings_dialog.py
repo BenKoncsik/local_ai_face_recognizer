@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSettings, QThread, Signal
+from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -67,6 +67,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
+        tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
         outer.addWidget(tabs, stretch=1)
 
         # ── Buttons — always visible outside the tabs ─────────────────────
@@ -224,6 +225,54 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return widget
 
+    def _build_tab_face_quality(self) -> QWidget:
+        """Build the Face Quality tab."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setSpacing(14)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        # ── Main enable toggle ────────────────────────────────────────────
+        fq_group = QGroupBox(t("fq_group"))
+        fq_layout = QVBoxLayout(fq_group)
+
+        self._fq_exclude_check = QCheckBox(t("fq_exclude_toggle"))
+        self._fq_exclude_check.setChecked(
+            _qsettings().value("face_quality/exclude_low_quality", True, type=bool)
+        )
+        self._fq_exclude_check.setToolTip(t("fq_exclude_tip"))
+        fq_layout.addWidget(self._fq_exclude_check)
+
+        layout.addWidget(fq_group)
+
+        # ── Re-evaluate button ────────────────────────────────────────────
+        reeval_group = QGroupBox(t("fq_thresholds_group"))
+        reeval_layout = QVBoxLayout(reeval_group)
+
+        note = QLabel(
+            t("fq_exclude_tip")
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #aaa; font-size: 11px;")
+        reeval_layout.addWidget(note)
+
+        reeval_btn_row = QHBoxLayout()
+        self._fq_reanalyze_btn = QPushButton(t("fq_reanalyze_btn"))
+        self._fq_reanalyze_btn.clicked.connect(self._on_reanalyze_quality)
+        reeval_btn_row.addWidget(self._fq_reanalyze_btn)
+        reeval_btn_row.addStretch()
+        reeval_layout.addLayout(reeval_btn_row)
+
+        layout.addWidget(reeval_group)
+        layout.addStretch()
+        scroll.setWidget(inner)
+        return scroll
+
     # ------------------------------------------------------------------
     # TPU
     # ------------------------------------------------------------------
@@ -356,7 +405,7 @@ class SettingsDialog(QDialog):
                 n = session.query(Image).filter(
                     Image.relative_path.is_(None)
                 ).count()
-                total = session.query(Image).count()
+                session.query(Image).count()  # noqa: B018 (side-effect: validates DB)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, t("error"), str(exc))
             return
@@ -446,10 +495,50 @@ class SettingsDialog(QDialog):
         dlg = UpdateDialog(release, parent=self)
         dlg.exec()
 
+    def _on_reanalyze_quality(self) -> None:
+        """Re-evaluate quality for all faces in the DB."""
+        try:
+            from app.db.database import session_scope
+            from app.db.models import Face as _Face
+            with session_scope() as session:
+                n = session.query(_Face).count()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("fq_group"),
+            t("fq_reanalyze_confirm", n=n),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._fq_reanalyze_btn.setEnabled(False)
+        try:
+            from app.db.database import session_scope
+            from app.services.face_quality_service import FaceQualityBatchService
+            with session_scope() as session:
+                svc = FaceQualityBatchService(session)
+                processed = svc.evaluate_all()
+            QMessageBox.information(
+                self,
+                t("fq_group"),
+                t("fq_reanalyze_done", n=processed),
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, t("error"), str(exc))
+        finally:
+            self._fq_reanalyze_btn.setEnabled(True)
+
     def _on_accept(self) -> None:
         _qsettings().setValue("updates/notify", self._notify_check.isChecked())
         _qsettings().setValue(
             "deoldified/auto_pair", self._deoldified_check.isChecked()
+        )
+        _qsettings().setValue(
+            "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
         )
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():

@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import AppConfig
@@ -42,18 +43,27 @@ class EmbeddingService:
         self._config = config
         self._progress_cb = progress_cb or (lambda *_: None)
 
-    def process_pending(self) -> int:
+    def process_pending(self, exclude_low_quality: bool = False) -> int:
         """Generate embeddings for all faces that don't have one yet.
+
+        Args:
+            exclude_low_quality: When True, faces flagged as low quality are
+                skipped.  NULL quality (not yet evaluated) is treated as
+                usable for backward compatibility.
 
         Returns:
             Number of faces embedded.
         """
-        pending: List[Face] = (
+        query = (
             self._session.query(Face)
             .filter(Face._embedding.is_(None))
             .filter(Face.is_excluded == False)  # noqa: E712
-            .all()
         )
+        if exclude_low_quality:
+            query = query.filter(
+                or_(Face.is_low_quality.is_(None), Face.is_low_quality == False)  # noqa: E712
+            )
+        pending: List[Face] = query.all()
 
         total = len(pending)
         log.info("Embedding %d face(s) without vectors", total)

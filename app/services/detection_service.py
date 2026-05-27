@@ -17,10 +17,8 @@ service — they are preserved across re-detection runs.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Callable, List, Optional
 
-import cv2
 import numpy as np
 from sqlalchemy.orm import Session
 
@@ -28,8 +26,9 @@ from app.config import AppConfig
 from app.db.models import Face, Image
 from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
-from app.services.image_library_service import resolve_image_path
 from app.services.face_crop_service import face_debug_state
+from app.services.face_quality_service import FaceQualityEvaluator
+from app.services.image_library_service import resolve_image_path
 from app.utils.image_utils import (
     apply_bilateral,
     apply_clahe,
@@ -106,6 +105,7 @@ class DetectionService:
         self._crops_dir.mkdir(parents=True, exist_ok=True)
         self._progress_cb = progress_cb or (lambda *_: None)
         self._high_accuracy = high_accuracy
+        self._quality_evaluator = FaceQualityEvaluator()
         # In-memory dhash registry for duplicate-image diagnostics
         self._dhash_registry: dict[int, tuple[str, int]] = {}  # dhash → (path, face_count)
 
@@ -282,6 +282,8 @@ class DetectionService:
             )
             if crop_path is not None:
                 face.crop_path = str(crop_path)
+            # Evaluate quality now that bbox and crop are set.
+            self._quality_evaluator.evaluate_and_update(face)
             log.debug(
                 "Detected face entity: %s",
                 face_debug_state(face, str(crop_path) if crop_path else None),

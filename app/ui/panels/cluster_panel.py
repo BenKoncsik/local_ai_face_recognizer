@@ -6,20 +6,22 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QImageReader, QPixmap, QPixmapCache
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QImageReader, QPainter, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
     QLabel,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from app.db.models import Face
 from app.ui.i18n import t
+
+# Warning badge drawn over thumbnails of low-quality faces
+_BADGE_COLOR = "#f57c00"   # orange
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +123,7 @@ class FaceThumbnail(QLabel):
         super().__init__(parent)
         self.face_id = face.id
         self._crop_path = face.crop_path
+        self._is_low_quality: bool = bool(face.is_low_quality)
         self._person_name: Optional[str] = face.person.name if face.person else None
         self.setObjectName(f"face-thumb-{face.id}")
         self.setProperty("face_id", face.id)
@@ -129,6 +132,9 @@ class FaceThumbnail(QLabel):
         self.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
         self.setAlignment(Qt.AlignCenter)
         person_name = face.person.name if face.person else "—"
+        quality_suffix = (
+            f"\n⚠ {t('fq_low_quality_tip')}" if self._is_low_quality else ""
+        )
         self.setToolTip(
             t(
                 "face_tooltip",
@@ -137,10 +143,11 @@ class FaceThumbnail(QLabel):
                 confidence=face.confidence,
                 backend=face.detector_backend,
                 file=Path(face.image.file_path).name if face.image else "?",
-            )
+            ) + quality_suffix
         )
+        border_color = "#f57c00" if self._is_low_quality else "#555"
         self.setStyleSheet(
-            "QLabel { border: 1px solid #555; border-radius: 4px; }"
+            f"QLabel {{ border: 1px solid {border_color}; border-radius: 4px; }}"
             "QLabel:hover { border: 2px solid #88aaff; }"
         )
         self.setMouseTracking(True)
@@ -148,7 +155,32 @@ class FaceThumbnail(QLabel):
     def _load_pixmap(self, crop_path: Optional[str]) -> None:
         pixmap = _load_crop_pixmap(crop_path, _THUMB_SIZE, self.face_id)
         if pixmap is not None:
-            self.setPixmap(pixmap)
+            if self._is_low_quality:
+                # Draw a small orange ⚠ badge in the top-right corner.
+                badged = QPixmap(pixmap.size())
+                badged.fill(Qt.transparent)
+                painter = QPainter(badged)
+                painter.drawPixmap(0, 0, pixmap)
+                painter.setPen(Qt.NoPen)
+                # badge background circle
+                from PySide6.QtGui import QBrush, QColor, QFont
+                badge_size = 18
+                margin = 2
+                bx = badged.width() - badge_size - margin
+                by = margin
+                painter.setBrush(QBrush(QColor(_BADGE_COLOR)))
+                painter.drawEllipse(bx, by, badge_size, badge_size)
+                # "!" glyph
+                font = QFont()
+                font.setPixelSize(12)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(bx, by, badge_size, badge_size, Qt.AlignCenter, "!")
+                painter.end()
+                self.setPixmap(badged)
+            else:
+                self.setPixmap(pixmap)
         else:
             self.setText("?")
             self.setStyleSheet(

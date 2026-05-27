@@ -184,6 +184,15 @@ class Face(Base):
     assignment_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
+    # Face quality evaluation — populated by FaceQualityService after detection.
+    # NULL means "not yet evaluated" and is treated as usable (backward compat).
+    quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Comma-separated reason codes, e.g. "low_confidence,too_small,blurry"
+    quality_reasons: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    # True = poor quality; pipeline stages skip this face when filtering is on.
+    # Manually assigned faces can still be used for training regardless.
+    is_low_quality: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     image: Mapped["Image"] = relationship("Image", back_populates="faces")

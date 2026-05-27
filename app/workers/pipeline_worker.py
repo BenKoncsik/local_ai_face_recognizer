@@ -19,7 +19,7 @@ import logging
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QSettings, QThread, Signal
 
 from app.config import AppConfig
 from app.db.database import init_db, session_scope
@@ -82,6 +82,12 @@ class PipelineWorker(QThread):
     # ------------------------------------------------------------------
 
     def _run_pipeline(self) -> None:
+        # Read user preference for face quality filtering.
+        _qs = QSettings("FaceLocal", "FaceLocal")
+        exclude_low_quality: bool = _qs.value(
+            "face_quality/exclude_low_quality", True, type=bool
+        )
+
         # Each stage gets its own session to avoid long-held transactions.
         init_db(self._config.db_path_resolved)
 
@@ -106,7 +112,7 @@ class PipelineWorker(QThread):
         # --- Stage 3: Embedding ---
         self.log_message.emit("Stage 3/5: Generating face embeddings …")
         try:
-            embedded = self._run_embedding()
+            embedded = self._run_embedding(exclude_low_quality)
         except ImportError as exc:
             log.error("TFLite backend missing: %s", exc)
             user_msg = (
@@ -126,13 +132,13 @@ class PipelineWorker(QThread):
         self.log_message.emit(
             "Stage 4/5: Recognizing faces from learned people …"
         )
-        n_assigned = self._run_recognition()
+        n_assigned = self._run_recognition(exclude_low_quality)
 
         # --- Stage 5: Name suggestions ---
         self.log_message.emit(
             "Stage 5/5: Matching unknown faces against named people …"
         )
-        n_suggestions = self._run_suggestions()
+        n_suggestions = self._run_suggestions(exclude_low_quality)
         self.suggestions_ready.emit(n_suggestions)
 
         summary = (
@@ -203,7 +209,7 @@ class PipelineWorker(QThread):
             )
             return svc.process(image_ids)
 
-    def _run_embedding(self) -> int:
+    def _run_embedding(self, exclude_low_quality: bool = False) -> int:
         embedder = TFLiteEmbedder(
             model_path=self._config.embedding.model_path,
             embedding_dim=self._config.embedding.embedding_dim,
@@ -224,26 +230,28 @@ class PipelineWorker(QThread):
                 config=self._config,
                 progress_cb=cb,
             )
-            return svc.process_pending()
+            return svc.process_pending(exclude_low_quality=exclude_low_quality)
 
-    def _run_recognition(self) -> int:
+    def _run_recognition(self, exclude_low_quality: bool = False) -> int:
         with session_scope() as session:
             svc = RecognitionService(
                 session=session,
                 config=self._config.recognition,
+                exclude_low_quality=exclude_low_quality,
             )
             assignments = svc.recognize_pending()
             n = len(assignments)
             self.progress.emit(1, 1, "Recognition", f"{n} face(s)")
             return n
 
-    def _run_suggestions(self) -> int:
+    def _run_suggestions(self, exclude_low_quality: bool = False) -> int:
         """Compute name suggestions; never aborts the pipeline on failure."""
         try:
             with session_scope() as session:
                 svc = SuggestionService(
                     session=session,
                     config=self._config.suggestions,
+                    exclude_low_quality=exclude_low_quality,
                 )
                 n = svc.count_suggestions()
                 self.progress.emit(1, 1, "Suggestions", f"{n} match(es)")

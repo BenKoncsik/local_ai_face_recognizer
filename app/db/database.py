@@ -99,6 +99,9 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("assignment_source", "VARCHAR(32)"),
             ("assignment_confidence", "FLOAT"),
             ("assigned_at", "DATETIME"),
+            ("quality_score", "FLOAT"),
+            ("quality_reasons", "VARCHAR(256)"),
+            ("is_low_quality", "BOOLEAN"),
         ],
     }
     with engine.connect() as conn:
