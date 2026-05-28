@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from sqlalchemy import func
+from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Face, Image, Person, Relationship
+from app.db.models import Face, Image, Person, Place, Relationship
 
 REL_PARENT_CHILD = "ParentChild"
 REL_SPOUSE = "Spouse"
@@ -45,6 +45,21 @@ class FamilyImageResult:
     height: Optional[int]
     person_count: int
     face_count: int
+
+
+@dataclass(frozen=True)
+class FamilyImageSearchCriteria:
+    """Detailed filters for the family image search panel."""
+
+    name_terms: tuple[str, ...] = ()
+    allow_other_people: bool = True
+    person_text: str = ""
+    gender: Optional[str] = None
+    family_code: str = ""
+    image_text: str = ""
+    photo_date: str = ""
+    place_text: str = ""
+    relationship_filter: RelationshipFilter = "any"
 
 
 def normalize_family_code(value: Optional[str]) -> Optional[str]:
@@ -432,9 +447,197 @@ class FamilyService:
         ]
         return results, total
 
+    def search_images_by_criteria(
+        self,
+        criteria: FamilyImageSearchCriteria,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FamilyImageResult], int]:
+        """Find images matching comma-separated person names plus detailed filters."""
+        terms = tuple(term.strip() for term in criteria.name_terms if term.strip())
+        term_person_ids: list[list[int]] = []
+        for term in terms:
+            ids = self._person_ids_matching_name(term)
+            if not ids:
+                return [], 0
+            term_person_ids.append(ids)
+
+        totals = self._image_person_totals_subquery()
+        q = (
+            self._session.query(
+                Image.id,
+                Image.file_path,
+                Image.width,
+                Image.height,
+                totals.c.person_count,
+                totals.c.face_count,
+            )
+            .outerjoin(totals, totals.c.image_id == Image.id)
+        )
+
+        for idx, person_ids in enumerate(term_person_ids):
+            matched = (
+                self._session.query(Face.image_id.label(f"image_id_{idx}"))
+                .filter(Face.is_excluded == False)  # noqa: E712
+                .filter(Face.person_id.in_(person_ids))
+                .group_by(Face.image_id)
+                .subquery()
+            )
+            q = q.join(matched, matched.c[f"image_id_{idx}"] == Image.id)
+
+        allowed_person_ids = {pid for ids in term_person_ids for pid in ids}
+        if terms and not criteria.allow_other_people:
+            extra_people = (
+                self._session.query(Face.image_id)
+                .filter(Face.is_excluded == False)  # noqa: E712
+                .filter(Face.person_id.isnot(None))
+                .filter(~Face.person_id.in_(allowed_person_ids))
+                .subquery()
+            )
+            q = q.outerjoin(extra_people, extra_people.c.image_id == Image.id)
+            q = q.filter(extra_people.c.image_id.is_(None))
+
+        if criteria.relationship_filter != "any" and len(term_person_ids) == 2:
+            pair_image_ids = self._relationship_filtered_image_ids(
+                term_person_ids[0],
+                term_person_ids[1],
+                criteria.relationship_filter,
+            )
+            if not pair_image_ids:
+                return [], 0
+            q = q.filter(Image.id.in_(pair_image_ids))
+
+        if criteria.person_text.strip():
+            q = q.filter(Image.id.in_(self._image_ids_matching_person_text(criteria.person_text)))
+        if criteria.gender:
+            q = q.filter(Image.id.in_(self._image_ids_matching_person_fields(Person.gender == criteria.gender)))
+        if criteria.family_code.strip():
+            pattern = self._like_pattern(criteria.family_code)
+            q = q.filter(Image.id.in_(self._image_ids_matching_person_fields(Person.family_code.ilike(pattern))))
+        if criteria.image_text.strip():
+            pattern = self._like_pattern(criteria.image_text)
+            q = q.filter(
+                or_(
+                    Image.file_path.ilike(pattern),
+                    Image.relative_path.ilike(pattern),
+                    Image.photo_date.ilike(pattern),
+                    Image.place.has(Place.name.ilike(pattern)),
+                )
+            )
+        if criteria.photo_date.strip():
+            q = q.filter(Image.photo_date.ilike(self._like_pattern(criteria.photo_date)))
+        if criteria.place_text.strip():
+            q = q.filter(Image.place.has(Place.name.ilike(self._like_pattern(criteria.place_text))))
+
+        total = q.count()
+        rows = q.order_by(Image.file_path).limit(limit).offset(offset).all()
+        return [self._row_to_result(row) for row in rows], total
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _person_ids_matching_name(self, term: str) -> list[int]:
+        pattern = self._like_pattern(term)
+        return [
+            row[0]
+            for row in self._session.query(Person.id)
+            .filter(
+                or_(
+                    Person.name.ilike(pattern),
+                    Person.last_name.ilike(pattern),
+                    Person.first_name.ilike(pattern),
+                    Person.second_name.ilike(pattern),
+                    Person.nickname.ilike(pattern),
+                    Person.married_name.ilike(pattern),
+                    Person.family_code.ilike(pattern),
+                )
+            )
+            .all()
+        ]
+
+    def _image_person_totals_subquery(self):
+        return (
+            self._session.query(
+                Face.image_id.label("image_id"),
+                func.count(Face.id).label("face_count"),
+                func.count(func.distinct(Face.person_id)).label("person_count"),
+            )
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(Face.person_id.isnot(None))
+            .group_by(Face.image_id)
+            .subquery()
+        )
+
+    def _image_ids_matching_person_text(self, text: str):
+        pattern = self._like_pattern(text)
+        return self._image_ids_matching_person_fields(
+            or_(
+                Person.name.ilike(pattern),
+                Person.last_name.ilike(pattern),
+                Person.first_name.ilike(pattern),
+                Person.second_name.ilike(pattern),
+                Person.nickname.ilike(pattern),
+                Person.married_name.ilike(pattern),
+                Person.birth_place.ilike(pattern),
+                Person.birth_date.ilike(pattern),
+                Person.death_place.ilike(pattern),
+                Person.death_date.ilike(pattern),
+                Person.notes.ilike(pattern),
+                Person.family_code.ilike(pattern),
+            )
+        )
+
+    def _image_ids_matching_person_fields(self, *conditions):
+        return (
+            self._session.query(Face.image_id)
+            .join(Person, Face.person_id == Person.id)
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(*conditions)
+            .distinct()
+        )
+
+    def _relationship_filtered_image_ids(
+        self,
+        left_ids: list[int],
+        right_ids: list[int],
+        relationship_filter: RelationshipFilter,
+    ) -> set[int]:
+        image_ids: set[int] = set()
+        for left_id in left_ids:
+            for right_id in right_ids:
+                if left_id == right_id:
+                    continue
+                if not self.relationship_matches(left_id, right_id, relationship_filter):
+                    continue
+                rows = (
+                    self._session.query(Face.image_id)
+                    .filter(Face.is_excluded == False)  # noqa: E712
+                    .filter(Face.person_id.in_([left_id, right_id]))
+                    .group_by(Face.image_id)
+                    .having(func.count(func.distinct(Face.person_id)) == 2)
+                    .all()
+                )
+                image_ids.update(row[0] for row in rows)
+        return image_ids
+
+    @staticmethod
+    def _like_pattern(value: str) -> str:
+        escaped = value.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
+    @staticmethod
+    def _row_to_result(row) -> FamilyImageResult:
+        return FamilyImageResult(
+            image_id=row.id,
+            file_path=row.file_path,
+            filename=Path(row.file_path).name,
+            width=row.width,
+            height=row.height,
+            person_count=int(row.person_count or 0),
+            face_count=int(row.face_count or 0),
+        )
 
     def _get_or_create_relationship(
         self,

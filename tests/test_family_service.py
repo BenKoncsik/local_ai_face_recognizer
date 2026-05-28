@@ -4,7 +4,12 @@ import pytest
 
 from app.db.database import init_db, session_scope
 from app.db.models import Face, Image, Person, Relationship
-from app.services.family_service import FamilyService, REL_PARENT_CHILD, REL_SPOUSE
+from app.services.family_service import (
+    FamilyImageSearchCriteria,
+    FamilyService,
+    REL_PARENT_CHILD,
+    REL_SPOUSE,
+)
 
 
 @pytest.fixture()
@@ -130,3 +135,64 @@ def test_relationship_filter_blocks_unmatched_pairs(db):
         )
         assert total == 1
         assert rows[0].filename == "together.jpg"
+
+
+def test_search_images_by_comma_name_terms_and_allow_others(db):
+    with session_scope() as session:
+        benedek = _person(session, "Koncsik Benedek")
+        matyi = _person(session, "Matyi")
+        domi = _person(session, "Domi")
+        together = _image(session, "/tmp/benedek-matyi.jpg")
+        group = _image(session, "/tmp/benedek-matyi-domi.jpg")
+
+        _face(session, together, benedek)
+        _face(session, together, matyi)
+        _face(session, group, benedek)
+        _face(session, group, matyi)
+        _face(session, group, domi)
+
+        svc = FamilyService(session)
+        rows, total = svc.search_images_by_criteria(
+            FamilyImageSearchCriteria(
+                name_terms=("Benedek", "Matyi"),
+                allow_other_people=True,
+            )
+        )
+        assert total == 2
+        assert {row.filename for row in rows} == {
+            "benedek-matyi.jpg",
+            "benedek-matyi-domi.jpg",
+        }
+
+        rows, total = svc.search_images_by_criteria(
+            FamilyImageSearchCriteria(
+                name_terms=("Benedek", "Matyi"),
+                allow_other_people=False,
+            )
+        )
+        assert total == 1
+        assert [row.filename for row in rows] == ["benedek-matyi.jpg"]
+
+
+def test_search_images_by_criteria_detail_filters(db):
+    with session_scope() as session:
+        anna = _person(session, "Anna", gender="female")
+        anna.nickname = "Panni"
+        anna.family_code = "C85"
+        image = _image(session, "/tmp/family-pic.jpg")
+        image.photo_date = "1954"
+        _face(session, image, anna)
+
+        rows, total = FamilyService(session).search_images_by_criteria(
+            FamilyImageSearchCriteria(
+                name_terms=("Anna",),
+                person_text="Panni",
+                gender="female",
+                family_code="C8",
+                image_text="family",
+                photo_date="1954",
+            )
+        )
+
+        assert total == 1
+        assert rows[0].filename == "family-pic.jpg"
