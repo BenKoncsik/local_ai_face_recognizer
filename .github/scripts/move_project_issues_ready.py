@@ -12,7 +12,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-
 GRAPHQL_URL = "https://api.github.com/graphql"
 ZERO_SHA_RE = re.compile(r"^0+$")
 ISSUE_RE = re.compile(r"(?<![\w/])#(\d+)\b")
@@ -125,20 +124,19 @@ def resolve_owner_type(owner: str) -> str:
     data = graphql(
         """
         query($owner: String!) {
-          organization(login: $owner) {
-            login
-          }
-          user(login: $owner) {
+          repositoryOwner(login: $owner) {
+            __typename
             login
           }
         }
         """,
         {"owner": owner},
     )
-    if data.get("organization"):
-        return "Organization"
-    if data.get("user"):
-        return "User"
+    repository_owner = data.get("repositoryOwner")
+    if repository_owner:
+        owner_type = repository_owner.get("__typename")
+        if owner_type in {"Organization", "User"}:
+            return owner_type
     raise GitHubError(f"Owner '{owner}' was not found.")
 
 
