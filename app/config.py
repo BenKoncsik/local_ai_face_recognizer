@@ -120,6 +120,26 @@ class RecognitionConfig:
     # Minimum confidence for an automatic assignment to be reused as training.
     profile_auto_min_confidence: float = 0.85
 
+    # --- Adaptive threshold (Pass 1) ---
+    # When True, low-quality / small / profile faces get a lower threshold so
+    # they are not unfairly penalised by the fixed base threshold.
+    adaptive_threshold_enabled: bool = True
+    # Absolute floor for the adaptive threshold — never goes below this value.
+    adaptive_min_threshold: float = 0.55
+
+    # --- Same-image context-assisted recognition (Pass 2) ---
+    # When True, faces that survive pass 1 unresolved are retried with a lower
+    # threshold when the same image already has at least one manually confirmed
+    # person.  Matching is restricted to those confirmed persons only.
+    same_image_assist_enabled: bool = True
+    # Threshold used in the assisted second pass.
+    same_image_assist_threshold: float = 0.62
+    # Minimum number of distinct confirmed persons on the image to activate assist.
+    same_image_assist_min_confirmed: int = 1
+    # Margin requirement for the assisted pass (looser than main margin since
+    # the candidate set is already restricted by image context).
+    same_image_assist_margin: float = 0.05
+
 
 @dataclass
 class SuggestionConfig:
@@ -308,6 +328,30 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             profile_auto_min_confidence=rec.get(
                 "profile_auto_min_confidence",
                 cfg.recognition.profile_auto_min_confidence,
+            ),
+            adaptive_threshold_enabled=rec.get(
+                "adaptive_threshold_enabled",
+                cfg.recognition.adaptive_threshold_enabled,
+            ),
+            adaptive_min_threshold=rec.get(
+                "adaptive_min_threshold",
+                cfg.recognition.adaptive_min_threshold,
+            ),
+            same_image_assist_enabled=rec.get(
+                "same_image_assist_enabled",
+                cfg.recognition.same_image_assist_enabled,
+            ),
+            same_image_assist_threshold=rec.get(
+                "same_image_assist_threshold",
+                cfg.recognition.same_image_assist_threshold,
+            ),
+            same_image_assist_min_confirmed=rec.get(
+                "same_image_assist_min_confirmed",
+                cfg.recognition.same_image_assist_min_confirmed,
+            ),
+            same_image_assist_margin=rec.get(
+                "same_image_assist_margin",
+                cfg.recognition.same_image_assist_margin,
             ),
         )
 

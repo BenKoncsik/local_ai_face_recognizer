@@ -6,6 +6,20 @@ unresolved faces to known people when the embedding match is strong enough.
 This replaces the old pipeline's DBSCAN-first identity assignment path for the
 main workflow. Existing named people are preserved: faces already assigned to a
 real, non-protected person are never moved by this service.
+
+Recognition runs in two passes:
+
+Pass 1 — Adaptive threshold
+    Each candidate face gets a quality-aware threshold derived from its
+    detection confidence, bounding-box area, and aspect ratio (a proxy for
+    frontal vs. profile).  Small / blurry / profile faces receive a lower
+    threshold so they are not unfairly excluded.
+
+Pass 2 — Same-image context assist
+    Faces that survive pass 1 unresolved are retried with a lower threshold
+    when the same image already contains at least one manually confirmed
+    person.  Matching is restricted to those confirmed persons only, which
+    constrains the search and lowers the false-positive risk.
 """
 
 from __future__ import annotations
@@ -84,23 +98,40 @@ class RecognitionService:
             else:
                 rejected_face_targets = self._load_rejected_face_targets(candidates)
                 rejected_person_pairs = self._load_rejected_person_pairs()
-
                 now = _utcnow_naive()
+
+                # --- Pass 1: quality-adaptive threshold per face ---
+                unresolved: List[Face] = []
                 for face in candidates:
+                    threshold = self._compute_adaptive_threshold(face)
                     match = self._match_face(
                         face=face,
                         profiles=profiles,
                         rejected_face_targets=rejected_face_targets,
                         rejected_person_pairs=rejected_person_pairs,
+                        threshold=threshold,
+                        margin=self._config.min_margin,
                     )
-                    if match is None:
-                        continue
+                    if match is not None:
+                        self._apply_match(face, match, now)
+                        assignments.append(match)
+                    else:
+                        unresolved.append(face)
 
-                    face.person_id = match.target_person_id
-                    face.assignment_source = "recognition"
-                    face.assignment_confidence = match.score
-                    face.assigned_at = now
-                    assignments.append(match)
+                # --- Pass 2: same-image context-assisted recognition ---
+                if self._config.same_image_assist_enabled and unresolved:
+                    n_extra = self._run_assisted_pass(
+                        unresolved=unresolved,
+                        profiles=profiles,
+                        rejected_face_targets=rejected_face_targets,
+                        rejected_person_pairs=rejected_person_pairs,
+                        now=now,
+                        assignments=assignments,
+                    )
+                    if n_extra:
+                        log.info(
+                            "Same-image assist: %d additional face(s) assigned", n_extra
+                        )
 
         self._delete_orphan_auto_persons()
         self._session.commit()
@@ -109,6 +140,10 @@ class RecognitionService:
             len(assignments),
         )
         return assignments
+
+    # ------------------------------------------------------------------
+    # Profile building
+    # ------------------------------------------------------------------
 
     def build_profiles(self) -> Dict[int, PersonRecognitionProfile]:
         """Build recognition profiles for all known non-protected people."""
@@ -146,6 +181,164 @@ class RecognitionService:
         log.debug("Built %d recognition profile(s)", len(profiles))
         return profiles
 
+    # ------------------------------------------------------------------
+    # Pass 1: adaptive threshold
+    # ------------------------------------------------------------------
+
+    def _compute_adaptive_threshold(self, face: Face) -> float:
+        """Compute a face-specific recognition threshold.
+
+        Smaller / blurrier / more profile-angled faces receive a lower
+        threshold so they are not unfairly excluded from recognition.
+        The threshold is always clamped to [adaptive_min_threshold, base].
+        """
+        base = self._config.auto_assign_threshold
+        if not self._config.adaptive_threshold_enabled:
+            return base
+
+        minimum = self._config.adaptive_min_threshold
+        if minimum >= base:
+            return base
+
+        # Quality score [0, 1]: 0 = terrible, 1 = perfect
+        quality = float(face.quality_score) if face.quality_score is not None else 0.70
+
+        # Face area: larger → embedding model has more pixels to work with
+        area = face.bbox_w * face.bbox_h
+        size_factor = min(1.0, area / (80 * 80))
+
+        # Aspect ratio: a narrow face is more likely to be a profile view
+        if face.bbox_h > 0 and face.bbox_w > 0:
+            ratio = face.bbox_w / face.bbox_h
+            frontality = min(1.0, ratio / 0.75)
+        else:
+            frontality = 1.0
+
+        combined = quality * 0.5 + size_factor * 0.3 + frontality * 0.2
+        combined = max(0.0, min(1.0, combined))
+
+        threshold = minimum + (base - minimum) * combined
+        log.debug(
+            "Face id=%d: adaptive threshold=%.3f "
+            "(quality=%.2f size_factor=%.2f frontality=%.2f)",
+            face.id, threshold, quality, size_factor, frontality,
+        )
+        return threshold
+
+    # ------------------------------------------------------------------
+    # Pass 2: same-image context assist
+    # ------------------------------------------------------------------
+
+    def _run_assisted_pass(
+        self,
+        *,
+        unresolved: List[Face],
+        profiles: Dict[int, PersonRecognitionProfile],
+        rejected_face_targets: Dict[int, Set[int]],
+        rejected_person_pairs: Set[frozenset],
+        now: datetime,
+        assignments: List[RecognitionAssignment],
+    ) -> int:
+        """Retry unresolved faces on images that have confirmed labeled faces.
+
+        Matching is restricted to the confirmed persons on each image, which
+        lowers the chance of false positives while allowing a lower threshold.
+
+        Returns:
+            Number of additional faces assigned.
+        """
+        image_ids = {f.image_id for f in unresolved if f.image_id is not None}
+        if not image_ids:
+            return 0
+
+        image_confirmed = self._load_image_confirmed_persons(image_ids)
+        if not image_confirmed:
+            return 0
+
+        threshold = self._config.same_image_assist_threshold
+        margin = self._config.same_image_assist_margin
+        n_assigned = 0
+
+        for face in unresolved:
+            confirmed_persons = image_confirmed.get(face.image_id, set())
+            if len(confirmed_persons) < self._config.same_image_assist_min_confirmed:
+                continue
+
+            restricted = {
+                pid: p for pid, p in profiles.items() if pid in confirmed_persons
+            }
+            if not restricted:
+                continue
+
+            match = self._match_face(
+                face=face,
+                profiles=restricted,
+                rejected_face_targets=rejected_face_targets,
+                rejected_person_pairs=rejected_person_pairs,
+                threshold=threshold,
+                margin=margin,
+            )
+            if match is None:
+                continue
+
+            log.debug(
+                "Face id=%d: assisted pass → %r (score=%.3f, image_id=%d)",
+                face.id, match.target_name, match.score, face.image_id,
+            )
+            self._apply_match(face, match, now)
+            assignments.append(match)
+            n_assigned += 1
+
+        return n_assigned
+
+    def _load_image_confirmed_persons(
+        self, image_ids: Set[int]
+    ) -> Dict[int, Set[int]]:
+        """Return {image_id: set(person_id)} for manually confirmed faces.
+
+        Only non-auto, non-protected persons assigned via trusted manual
+        sources (including legacy NULL-source assignments) are included.
+        """
+        if not image_ids:
+            return {}
+
+        confirmed: List[Face] = (
+            self._session.query(Face)
+            .join(Person, Face.person_id == Person.id)
+            .filter(Face.image_id.in_(image_ids))
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(Face.person_id.isnot(None))
+            .filter(Person.is_auto_named == False)  # noqa: E712
+            .filter(Person.is_protected == False)  # noqa: E712
+            .filter(
+                or_(
+                    Face.assignment_source.is_(None),
+                    Face.assignment_source.in_(
+                        ["manual", "manual_merge", "suggestion_approved"]
+                    ),
+                )
+            )
+            .all()
+        )
+
+        result: Dict[int, Set[int]] = {}
+        for face in confirmed:
+            if face.person_id is not None:
+                result.setdefault(face.image_id, set()).add(face.person_id)
+        return result
+
+    # ------------------------------------------------------------------
+    # Core matching
+    # ------------------------------------------------------------------
+
+    def _apply_match(
+        self, face: Face, match: RecognitionAssignment, now: datetime
+    ) -> None:
+        face.person_id = match.target_person_id
+        face.assignment_source = "recognition"
+        face.assignment_confidence = match.score
+        face.assigned_at = now
+
     def _match_face(
         self,
         *,
@@ -153,9 +346,12 @@ class RecognitionService:
         profiles: Dict[int, PersonRecognitionProfile],
         rejected_face_targets: Dict[int, Set[int]],
         rejected_person_pairs: Set[frozenset],
+        threshold: float,
+        margin: float,
     ) -> Optional[RecognitionAssignment]:
         embedding = self._normalise(face.get_embedding())
         if embedding is None:
+            log.debug("Face id=%d: no embedding — skipped", face.id)
             return None
 
         scored: List[tuple[float, PersonRecognitionProfile]] = []
@@ -172,24 +368,45 @@ class RecognitionService:
             scored.append((score, profile))
 
         if not scored:
+            log.debug("Face id=%d: no eligible profiles after corrections", face.id)
             return None
 
         scored.sort(key=lambda item: item[0], reverse=True)
         best_score, best_profile = scored[0]
         second_score = scored[1][0] if len(scored) > 1 else 0.0
-        margin = best_score - second_score
+        actual_margin = best_score - second_score
 
-        if best_score < self._config.auto_assign_threshold:
-            return None
-        if margin < self._config.min_margin:
+        if best_score < threshold:
+            log.debug(
+                "Face id=%d: rejected — score=%.3f < threshold=%.3f "
+                "(best=%r, quality=%.2f, bbox=%dx%d)",
+                face.id, best_score, threshold, best_profile.name,
+                face.quality_score if face.quality_score is not None else -1.0,
+                face.bbox_w, face.bbox_h,
+            )
             return None
 
+        if actual_margin < margin:
+            log.debug(
+                "Face id=%d: rejected — margin=%.3f < %.3f "
+                "(best=%r score=%.3f vs second=%r score=%.3f)",
+                face.id, actual_margin, margin,
+                best_profile.name, best_score,
+                scored[1][1].name if len(scored) > 1 else "none",
+                second_score,
+            )
+            return None
+
+        log.debug(
+            "Face id=%d: assigned → %r (score=%.3f, margin=%.3f, threshold=%.3f)",
+            face.id, best_profile.name, best_score, actual_margin, threshold,
+        )
         return RecognitionAssignment(
             face_id=face.id,
             target_person_id=best_profile.person_id,
             target_name=best_profile.name,
             score=best_score,
-            margin=margin,
+            margin=actual_margin,
         )
 
     def _score(self, embedding: np.ndarray, profile: PersonRecognitionProfile) -> float:
@@ -201,6 +418,10 @@ class RecognitionService:
             centroid_weight * centroid_similarity
             + (1.0 - centroid_weight) * best_example
         )
+
+    # ------------------------------------------------------------------
+    # Data loading helpers
+    # ------------------------------------------------------------------
 
     def _load_candidate_faces(self) -> List[Face]:
         """Return embedded faces that are safe for automatic recognition."""

@@ -101,6 +101,26 @@ recognition:
   use_recognized_faces_for_training: true
   profile_auto_min_confidence: 0.85
 
+  # --- Pass 1: Adaptive threshold ---
+  # Small / blurry / profile faces receive a lower threshold so they are not
+  # unfairly excluded. The threshold is computed per face from its quality
+  # score, bounding-box area, and aspect ratio.
+  adaptive_threshold_enabled: true
+  # Absolute floor — the threshold never drops below this value.
+  adaptive_min_threshold: 0.55
+
+  # --- Pass 2: Same-image context assist ---
+  # Faces that survive pass 1 unresolved are retried on images where at least
+  # one face has already been manually confirmed. Matching is restricted to
+  # those confirmed persons only, so the candidate pool stays small.
+  same_image_assist_enabled: true
+  # Threshold for the assisted second pass (lower than auto_assign_threshold).
+  same_image_assist_threshold: 0.62
+  # Minimum distinct confirmed persons required on the image to activate assist.
+  same_image_assist_min_confirmed: 1
+  # Margin for the assisted pass (looser — candidate pool is already restricted).
+  same_image_assist_margin: 0.05
+
 suggestions:
   # Unknown-person name suggestions: compares auto-named ("Unknown N")
   # persons against the embedding profiles of manually-named persons.
