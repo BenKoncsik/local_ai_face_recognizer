@@ -507,6 +507,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "overlap_summary":   {"en": "{images} image(s) examined, {matches} suspicious ? box(es) found.",
                           "hu": "{images} kép vizsgálva, {matches} gyanús ? keret találat."},
     "overlap_col_image": {"en": "Image", "hu": "Kép"},
+    "overlap_col_preview": {"en": "Preview", "hu": "Előnézet"},
     "overlap_col_person": {"en": "Known person", "hu": "Ismert személy"},
     "overlap_col_unknown_id": {"en": "? face ID", "hu": "? arc ID"},
     "overlap_col_known_id": {"en": "Known face ID", "hu": "Ismert arc ID"},
@@ -538,6 +539,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                "hu": "{n} átfedő kérdőjeles face rekord törölve"},
     "overlap_delete_skipped_msg": {"en": "{n} selected face record(s) were skipped because they no longer exist or are no longer unknown.",
                                    "hu": "{n} kijelölt face rekord kihagyva, mert már nem létezik vagy már nem kérdőjeles."},
+    "overlap_preview_unavailable": {"en": "No preview", "hu": "Nincs előnézet"},
+    "overlap_preview_known_label": {"en": "known", "hu": "ismert"},
+    "overlap_preview_unknown_label": {"en": "?", "hu": "?"},
 
     # ── Toolbar — short labels (no emoji) ────────────────────────────────
     "tb_export":              {"en": "Export",       "hu": "Export"},
