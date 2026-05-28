@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -91,6 +91,13 @@ class MainWindow(QMainWindow):
         self._db_path: str = str(config.db_path_resolved)
         self._pending_release = None
 
+        # Google Drive project session — None when local mode is active
+        from app.gdrive.project_session import GDriveProjectSession
+        self._gdrive_session: Optional[GDriveProjectSession] = None
+        self._gdrive_open_thread: Optional[QThread] = None
+        self._gdrive_close_thread: Optional[QThread] = None
+        self._gdrive_closing: bool = False  # True while shutdown in progress
+
         self._apply_window_icon()
 
         init_db(config.db_path_resolved)
@@ -104,6 +111,7 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._image_browser.refresh()
         self._check_image_library_on_startup()
+        self._setup_gdrive_chip()
 
         self.resize(1280, 780)
         self._update_ready.connect(self._on_update_found)
@@ -175,6 +183,12 @@ class MainWindow(QMainWindow):
         self._settings_btn.clicked.connect(self._on_settings)
         tb.addWidget(self._settings_btn)
 
+        tb.addSeparator()
+
+        self._gdrive_btn = QPushButton()
+        self._gdrive_btn.clicked.connect(self._on_toggle_drive_project)
+        self._gdrive_btn.setVisible(False)  # shown when prefs.is_ready
+        tb.addWidget(self._gdrive_btn)
 
     def _build_central(self) -> None:
         # Outer tabs: Arcok | Kollázs
@@ -319,6 +333,18 @@ class MainWindow(QMainWindow):
         self._update_notify_btn.clicked.connect(self._on_update_notify_clicked)
         status.addPermanentWidget(self._update_notify_btn)
 
+        # Drive status chip — permanent widget on the right side of the bar.
+        self._gdrive_chip_btn = QPushButton()
+        self._gdrive_chip_btn.setFlat(True)
+        self._gdrive_chip_btn.setVisible(False)
+        self._gdrive_chip_btn.setStyleSheet(
+            "QPushButton { color: #89DCEB; font-size: 11px; padding: 1px 6px; "
+            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
+            "QPushButton:hover { background: #313244; }"
+        )
+        self._gdrive_chip_btn.clicked.connect(self._on_gdrive_chip_clicked)
+        status.addPermanentWidget(self._gdrive_chip_btn)
+
         self._status_label = QLabel()
         status.addWidget(self._status_label)
 
@@ -338,6 +364,7 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._settings_btn.setText(t("settings"))
+        self._update_gdrive_toolbar_btn()
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
         self._delete_person_btn.setText(t("delete_person"))
@@ -460,7 +487,7 @@ class MainWindow(QMainWindow):
         Returns the number of images reset, or ``None`` if the caller should
         abort (e.g. worker already running).
         """
-        if not hasattr(self, "_root_folder"):
+        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return None
         if self._worker and self._worker.isRunning():
@@ -538,15 +565,34 @@ class MainWindow(QMainWindow):
 
     def _start_pipeline(self, high_accuracy: bool = False) -> None:
         """Launch the pipeline worker with the given mode."""
-        if not hasattr(self, "_root_folder"):
+        drive_active = self._gdrive_session is not None
+        if not drive_active and not hasattr(self, "_root_folder"):
             return
         self._set_scanning_state(True)
-        self._worker = PipelineWorker(
-            root_folder=self._root_folder,
-            config=self._config,
-            parent=self,
-            high_accuracy=high_accuracy,
-        )
+
+        # Drive mode: pass client + folder info; local mode: pass root folder.
+        if drive_active and self._gdrive_session is not None:
+            from app.paths import drive_mirror_dir
+            folders = self._gdrive_session.folders
+            root_id = folders.root_id if folders else ""
+            self._worker = PipelineWorker(
+                root_folder="",          # unused in Drive mode
+                config=self._config,
+                parent=self,
+                high_accuracy=high_accuracy,
+                db_path_override=self._db_path,
+                drive_client=self._gdrive_session._client,
+                drive_root_folder_id=root_id,
+                drive_mirror_dir=drive_mirror_dir(root_id),
+            )
+        else:
+            self._worker = PipelineWorker(
+                root_folder=self._root_folder,
+                config=self._config,
+                parent=self,
+                high_accuracy=high_accuracy,
+                db_path_override=self._db_path,
+            )
         self._pending_suggestion_count = 0
         self._worker.progress.connect(self._on_progress)
         self._worker.log_message.connect(self._log_panel.append_plain)
@@ -569,7 +615,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_scan(self) -> None:
-        if not hasattr(self, "_root_folder"):
+        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
 
@@ -754,9 +800,240 @@ class MainWindow(QMainWindow):
         else:
             self._preview_panel.clear()
 
+    # ------------------------------------------------------------------
+    # Google Drive workflow
+    # ------------------------------------------------------------------
+
+    def _setup_gdrive_chip(self) -> None:
+        """Initialise the Drive chip visibility and start the refresh timer."""
+        self._update_gdrive_toolbar_btn()
+        self._update_gdrive_chip()
+
+        # Poll session status every 15 seconds to keep the chip fresh.
+        self._gdrive_status_timer = QTimer(self)
+        self._gdrive_status_timer.setInterval(15_000)
+        self._gdrive_status_timer.timeout.connect(self._update_gdrive_chip)
+        self._gdrive_status_timer.start()
+
+    def _update_gdrive_toolbar_btn(self) -> None:
+        """Show/hide and label the Drive toolbar button based on current state."""
+        from app.gdrive import preferences
+        prefs = preferences.load()
+        is_open = self._gdrive_session is not None
+
+        if is_open:
+            self._gdrive_btn.setText(t("gdrive_close_project_btn"))
+            self._gdrive_btn.setToolTip(t("gdrive_close_project_tip"))
+            self._gdrive_btn.setVisible(True)
+        elif prefs.is_ready:
+            self._gdrive_btn.setText(t("gdrive_open_project_btn"))
+            self._gdrive_btn.setToolTip(t("gdrive_open_project_tip"))
+            self._gdrive_btn.setVisible(True)
+        else:
+            self._gdrive_btn.setVisible(False)
+
+    def _update_gdrive_chip(self) -> None:
+        """Update the status bar Drive chip from the current session state."""
+        from app.gdrive import preferences
+        prefs = preferences.load()
+
+        if self._gdrive_session is None:
+            if not prefs.is_ready:
+                self._gdrive_chip_btn.setVisible(False)
+                return
+            self._gdrive_chip_btn.setText(t("gdrive_chip_idle"))
+            self._gdrive_chip_btn.setToolTip(t("gdrive_open_project_tip"))
+            self._gdrive_chip_btn.setVisible(True)
+            return
+
+        # Session is open — show sync status.
+        status = self._gdrive_session.status
+        if status.current_op:
+            label = t("gdrive_chip_syncing")
+        elif not status.last_sync_succeeded:
+            label = t("gdrive_chip_error")
+        else:
+            folders = self._gdrive_session.folders
+            name = folders.root_name if folders else ""
+            label = t("gdrive_chip_open", name=name) if name else t("gdrive_chip_open", name="Drive")
+        self._gdrive_chip_btn.setText(label)
+        self._gdrive_chip_btn.setToolTip(t("gdrive_close_project_tip"))
+        self._gdrive_chip_btn.setVisible(True)
+
+    @Slot()
+    def _on_gdrive_chip_clicked(self) -> None:
+        """Clicking the chip opens the project if closed, closes if open."""
+        self._on_toggle_drive_project()
+
+    @Slot()
+    def _on_toggle_drive_project(self) -> None:
+        """Open or close the Drive project depending on current state."""
+        if self._gdrive_session is not None:
+            self._on_close_drive_project()
+        else:
+            self._on_open_drive_project()
+
+    @Slot()
+    def _on_open_drive_project(self) -> None:
+        """Start opening the Drive project session in a background thread."""
+        from app.gdrive import preferences
+        from app.gdrive.connectivity import GDriveOfflineError, is_online
+
+        prefs = preferences.load()
+        if not prefs.is_ready:
+            QMessageBox.information(
+                self, t("gdrive_not_configured_title"), t("gdrive_not_configured_msg")
+            )
+            return
+
+        if not is_online():
+            QMessageBox.warning(self, t("gdrive_error_title"), t("gdrive_offline_error"))
+            return
+
+        if self._gdrive_open_thread and self._gdrive_open_thread.isRunning():
+            return  # already opening
+
+        self._gdrive_btn.setEnabled(False)
+        self._gdrive_chip_btn.setText(t("gdrive_chip_opening"))
+        self._gdrive_chip_btn.setVisible(True)
+
+        account_email = prefs.account_email
+        folder_id = prefs.folder_id
+
+        class _OpenThread(QThread):
+            succeeded = Signal(object, str)   # (session, local_db_path)
+            failed = Signal(str)
+
+            def run(self_inner) -> None:  # noqa: N805
+                try:
+                    from app.gdrive.drive_client import build_drive_client
+                    from app.gdrive.project_session import GDriveProjectSession
+                    client = build_drive_client(account_email)
+                    session = GDriveProjectSession(client, folder_id)
+                    local_db = session.open()
+                    self_inner.succeeded.emit(session, str(local_db))
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("Drive project open failed")
+                    self_inner.failed.emit(str(exc))
+
+        thread = _OpenThread(self)
+        thread.succeeded.connect(self._on_drive_open_succeeded)
+        thread.failed.connect(self._on_drive_open_failed)
+        thread.finished.connect(lambda: self._gdrive_btn.setEnabled(True))
+        self._gdrive_open_thread = thread
+        thread.start()
+
+    @Slot(object, str)
+    def _on_drive_open_succeeded(self, session, local_db_path: str) -> None:
+        """Called on the main thread after Drive session opens successfully."""
+        self._gdrive_session = session
+
+        # Switch the database to the Drive-downloaded local copy.
+        init_db(local_db_path)
+        ensure_unknown_person()
+        self._db_path = local_db_path
+        self._current_person_id = None
+        self._current_face_id = None
+        self._cluster_panel.clear()
+        self._preview_panel.clear()
+        self._refresh_persons()
+        self._image_browser.refresh()
+
+        folders = session.folders
+        name = folders.root_name if folders else "Drive"
+        log.info("Drive project opened: %s (local DB: %s)", name, local_db_path)
+        self._status_label.setText(t("gdrive_project_opened", name=name))
+        self._update_gdrive_toolbar_btn()
+        self._update_gdrive_chip()
+
+    @Slot(str)
+    def _on_drive_open_failed(self, error: str) -> None:
+        log.error("Drive project open failed: %s", error)
+        QMessageBox.critical(
+            self, t("gdrive_error_title"), t("gdrive_open_failed", error=error)
+        )
+        self._gdrive_chip_btn.setText(t("gdrive_chip_idle"))
+        self._update_gdrive_toolbar_btn()
+        self._update_gdrive_chip()
+
+    @Slot()
+    def _on_close_drive_project(self) -> None:
+        """Ask for confirmation and then close the Drive session."""
+        if self._gdrive_session is None:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("gdrive_confirm_close_title"),
+            t("gdrive_confirm_close_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._start_drive_close(after_quit=False)
+
+    def _start_drive_close(self, *, after_quit: bool = False) -> None:
+        """Kick off Drive session shutdown in a background thread.
+
+        Args:
+            after_quit: When ``True``, call ``QApplication.quit()`` after the
+                        thread finishes so the app window actually closes.
+        """
+        if self._gdrive_session is None:
+            if after_quit:
+                QApplication.quit()
+            return
+
+        session = self._gdrive_session
+        self._gdrive_session = None  # mark as closing
+        self._gdrive_chip_btn.setText(t("gdrive_chip_closing"))
+        self._gdrive_btn.setEnabled(False)
+
+        class _CloseThread(QThread):
+            done = Signal()
+
+            def run(self_inner) -> None:  # noqa: N805
+                try:
+                    session.close(upload_pending=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Drive session close error: %s", exc)
+                self_inner.done.emit()
+
+        thread = _CloseThread(self)
+        if after_quit:
+            thread.done.connect(QApplication.quit)
+        else:
+            thread.done.connect(self._on_drive_close_done)
+        self._gdrive_close_thread = thread
+        thread.start()
+
+    @Slot()
+    def _on_drive_close_done(self) -> None:
+        """Called after the Drive session has been fully closed."""
+        log.info("Drive session closed.")
+        self._gdrive_closing = False
+        self._update_gdrive_toolbar_btn()
+        self._update_gdrive_chip()
+        self._gdrive_btn.setEnabled(True)
+        self._status_label.setText(t("ready"))
+
+    @Slot()
+    def _on_drive_prefs_changed(self) -> None:
+        """Refresh the Drive toolbar button/chip after settings change."""
+        self._update_gdrive_toolbar_btn()
+        self._update_gdrive_chip()
+
+    # ------------------------------------------------------------------
+    # Settings slot
+    # ------------------------------------------------------------------
+
     @Slot()
     def _on_settings(self) -> None:
         dlg = SettingsDialog(current_db_path=self._db_path, parent=self)
+        # Wire up the Drive prefs-changed signal so the chip/button refresh.
+        if hasattr(dlg, "_gdrive_tab"):
+            dlg._gdrive_tab.prefs_changed.connect(self._on_drive_prefs_changed)
         if dlg.exec() != SettingsDialog.Accepted:
             return
 
@@ -1537,3 +1814,19 @@ class MainWindow(QMainWindow):
                     from app.ui.i18n import t
                     from PySide6.QtWidgets import QMessageBox
                     QMessageBox.warning(self, t("error"), str(exc))
+
+    # ------------------------------------------------------------------
+    # Window close
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+        """Intercept close to shut down an open Drive session gracefully."""
+        if self._gdrive_session is not None and not self._gdrive_closing:
+            # Don't actually close yet — let the Drive thread finish, then quit.
+            event.ignore()
+            self._gdrive_closing = True
+            self._gdrive_chip_btn.setText(t("gdrive_chip_closing"))
+            self._status_label.setText(t("gdrive_closing_wait"))
+            self._start_drive_close(after_quit=True)
+            return
+        event.accept()

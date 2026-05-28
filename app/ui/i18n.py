@@ -966,6 +966,180 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                       "people.\nReview them now?",
                                 "hu": "{n} lehetséges névegyezés található ismeretlen "
                                       "személyekhez.\nÁtnézed őket most?"},
+
+    # ── Google Drive cache (settings read-only display) ────────────────────
+    "gdrive_cache_group":      {"en": "Google Drive Cache",
+                                "hu": "Google Drive cache"},
+    "gdrive_cache_dir_label":  {"en": "Cache directory (read-only):",
+                                "hu": "Cache mappa (csak megtekintés):"},
+    "gdrive_cache_size_label": {"en": "Current size:",
+                                "hu": "Jelenlegi méret:"},
+    "gdrive_cache_size_value": {"en": "{mb:.1f} MB",
+                                "hu": "{mb:.1f} MB"},
+    "gdrive_cache_note":       {"en": "Temporary files downloaded from Google Drive. "
+                                      "Cleaned up on every start and exit. "
+                                      "Max 500 MB; older files are evicted automatically.",
+                                "hu": "A Google Drive-ról letöltött ideiglenes fájlok. "
+                                      "Minden indításkor és kilépéskor törlődnek. "
+                                      "Maximum 500 MB; a régebbi fájlok automatikusan törlődnek."},
+    "gdrive_offline_error":    {"en": "Google Drive mode requires an internet connection.",
+                                "hu": "Google Drive módhoz internetkapcsolat szükséges."},
+
+    # ── Google Drive mode (Settings tab + workflow) ────────────────────────
+    "settings_tab_gdrive":    {"en": "Google Drive", "hu": "Google Drive"},
+
+    "gdrive_account_group":   {"en": "Google account", "hu": "Google fiók"},
+    "gdrive_account_none":    {"en": "(no account signed in)",
+                               "hu": "(nincs bejelentkezett fiók)"},
+    "gdrive_account_signed_in": {"en": "Signed in as: {email}",
+                                 "hu": "Bejelentkezve: {email}"},
+    "gdrive_add_account_btn": {"en": "Add Google account …",
+                               "hu": "Google fiók hozzáadása …"},
+    "gdrive_signout_btn":     {"en": "Sign out", "hu": "Kijelentkezés"},
+    "gdrive_signin_in_progress": {"en": "Opening browser for Google sign-in …",
+                                  "hu": "Böngésző megnyitása a Google bejelentkezéshez …"},
+    "gdrive_signin_ok":       {"en": "Signed in as {email}.",
+                               "hu": "Sikeres bejelentkezés: {email}."},
+    "gdrive_signin_failed":   {"en": "Google sign-in failed: {error}",
+                               "hu": "Google bejelentkezés sikertelen: {error}"},
+    "gdrive_signin_cancelled": {"en": "Sign-in cancelled by user.",
+                                "hu": "A bejelentkezést a felhasználó megszakította."},
+    "gdrive_signout_confirm_title": {"en": "Sign out", "hu": "Kijelentkezés"},
+    "gdrive_signout_confirm_msg":   {
+        "en": "Remove the stored credentials for {email}?\n"
+              "You will need to sign in again to use Google Drive mode.",
+        "hu": "Eltávolítod {email} mentett bejelentkezését?\n"
+              "Az újbóli használathoz ismét be kell jelentkezned.",
+    },
+
+    "gdrive_oauth_not_configured_title": {
+        "en": "Google OAuth not configured",
+        "hu": "Google OAuth nincs beállítva",
+    },
+    "gdrive_oauth_not_configured_msg": {
+        "en": "The Google OAuth client_id has not been set in this build. "
+              "Replace the placeholder in app/gdrive/oauth_config.py before "
+              "using Google Drive mode.",
+        "hu": "A Google OAuth client_id nincs beállítva ebben a build-ben. "
+              "A Google Drive mód használata előtt cseréld le a "
+              "placeholder értékeket az app/gdrive/oauth_config.py-ban.",
+    },
+
+    "gdrive_folder_group":    {"en": "Project folder on Drive",
+                               "hu": "Projektmappa a Drive-on"},
+    "gdrive_folder_none":     {"en": "(no project folder selected)",
+                               "hu": "(nincs projektmappa kiválasztva)"},
+    "gdrive_pick_folder_btn": {"en": "Choose Drive folder …",
+                               "hu": "Drive mappa kiválasztása …"},
+    "gdrive_clear_folder_btn": {"en": "Clear", "hu": "Törlés"},
+    "gdrive_folder_id_hint":  {"en": "Drive folder ID:",
+                               "hu": "Drive mappa azonosító:"},
+    "gdrive_pick_folder_title": {"en": "Choose Google Drive Folder",
+                                 "hu": "Google Drive mappa kiválasztása"},
+    "gdrive_pick_folder_intro": {
+        "en": "Paste a Google Drive folder URL or ID. You can copy a URL "
+              "from the Drive browser address bar.",
+        "hu": "Illessz be egy Google Drive mappa URL-t vagy azonosítót. "
+              "Az URL-t a Drive böngésző címsorából másolhatod ki.",
+    },
+    "gdrive_pick_folder_placeholder": {
+        "en": "https://drive.google.com/drive/folders/…  or  folder ID",
+        "hu": "https://drive.google.com/drive/folders/…  vagy  mappa ID",
+    },
+    "gdrive_folder_invalid":  {"en": "That does not look like a Drive folder.",
+                               "hu": "Ez nem egy Drive mappának tűnik."},
+    "gdrive_folder_unreachable": {
+        "en": "Could not reach folder: {error}",
+        "hu": "A mappa nem érhető el: {error}",
+    },
+    "gdrive_folder_selected": {"en": "Folder selected: {name}",
+                               "hu": "Mappa kiválasztva: {name}"},
+
+    "gdrive_mode_group":      {"en": "Work mode", "hu": "Munkamód"},
+    "gdrive_mode_toggle":     {"en": "Use Google Drive as the active project",
+                               "hu": "A Google Drive legyen az aktív projekt"},
+    "gdrive_mode_tip":        {
+        "en": "When enabled, the app downloads faces.db from the selected "
+              "Drive folder on start-up and uploads it back on exit. "
+              "Images are streamed via the OS cache and never stored locally "
+              "in a persistent way. Requires an active internet connection.",
+        "hu": "Bekapcsolva az alkalmazás induláskor letölti a faces.db-t "
+              "a kiválasztott Drive mappából, kilépéskor pedig visszatölti. "
+              "A képek az OS cache-en keresztül kerülnek feldolgozásra, "
+              "tartós lokális másolat nem készül. Aktív internetkapcsolat "
+              "szükséges.",
+    },
+    "gdrive_db_sync_toggle":  {"en": "Sync database with Drive automatically",
+                               "hu": "Adatbázis automatikus szinkronizálása "
+                                     "a Drive-val"},
+
+    "gdrive_status_group":    {"en": "Status", "hu": "Állapot"},
+    "gdrive_status_offline":  {"en": "Status: offline — sign-in disabled",
+                               "hu": "Állapot: offline — bejelentkezés nem elérhető"},
+    "gdrive_status_online":   {"en": "Status: online",
+                               "hu": "Állapot: online"},
+    "gdrive_status_incomplete": {"en": "Pick an account and a project folder to enable Drive mode.",
+                                 "hu": "Válassz fiókot és projektmappát a Drive mód aktiválásához."},
+    "gdrive_last_sync":       {"en": "Last sync: {when}",
+                               "hu": "Utolsó szinkron: {when}"},
+    "gdrive_last_sync_never": {"en": "Last sync: never",
+                               "hu": "Utolsó szinkron: még nem volt"},
+    "gdrive_sync_now_btn":    {"en": "Sync now", "hu": "Szinkronizálás most"},
+    "gdrive_cache_clear_btn": {"en": "Clear cache now",
+                               "hu": "Cache törlése most"},
+    "gdrive_cache_cleared":   {"en": "Cache cleared ({n} file(s) removed).",
+                               "hu": "Cache törölve ({n} fájl)."},
+
+    "gdrive_error_title":     {"en": "Google Drive Error",
+                               "hu": "Google Drive hiba"},
+    "gdrive_info_title":      {"en": "Google Drive",
+                               "hu": "Google Drive"},
+
+    # ── Main-window Drive toolbar / status chip ───────────────────────────────
+    "gdrive_open_project_btn":   {"en": "Drive Project …",
+                                  "hu": "Drive projekt …"},
+    "gdrive_open_project_tip":   {
+        "en": "Open a Google Drive folder as the active project.\n"
+              "The database is downloaded from Drive; changes sync back on save.",
+        "hu": "Nyiss meg egy Google Drive mappát aktív projektként.\n"
+              "Az adatbázis letöltődik, a változások szinkronizálódnak.",
+    },
+    "gdrive_close_project_btn":  {"en": "Close Drive",
+                                  "hu": "Drive bezárása"},
+    "gdrive_close_project_tip":  {
+        "en": "Upload pending changes and release the project lock.",
+        "hu": "Feltölti a változásokat és feloldja a projektzárat.",
+    },
+    "gdrive_chip_idle":          {"en": "Drive: —",     "hu": "Drive: —"},
+    "gdrive_chip_opening":       {"en": "Drive: connecting …",
+                                  "hu": "Drive: csatlakozás …"},
+    "gdrive_chip_open":          {"en": "Drive: {name}", "hu": "Drive: {name}"},
+    "gdrive_chip_syncing":       {"en": "Drive: syncing …",
+                                  "hu": "Drive: szinkronizálás …"},
+    "gdrive_chip_error":         {"en": "Drive: error",  "hu": "Drive: hiba"},
+    "gdrive_chip_closing":       {"en": "Drive: closing …",
+                                  "hu": "Drive: bezárás …"},
+    "gdrive_open_failed":        {"en": "Could not open Drive project:\n{error}",
+                                  "hu": "Nem sikerült megnyitni a Drive projektet:\n{error}"},
+    "gdrive_project_opened":     {"en": "Google Drive project opened: {name}",
+                                  "hu": "Google Drive projekt megnyitva: {name}"},
+    "gdrive_confirm_close_title": {"en": "Close Drive Project",
+                                   "hu": "Drive projekt bezárása"},
+    "gdrive_confirm_close_msg":  {
+        "en": "Upload pending changes and close the Drive project?\n"
+              "The local database cache will be deleted.",
+        "hu": "Feltölti a változásokat és bezárja a Drive projektet?\n"
+              "A helyi adatbázis gyorsítótár törlődik.",
+    },
+    "gdrive_closing_wait":       {"en": "Closing Google Drive session …",
+                                  "hu": "Google Drive munkamenet bezárása …"},
+    "gdrive_not_configured_title": {"en": "Drive Not Configured",
+                                    "hu": "Drive nincs konfigurálva"},
+    "gdrive_not_configured_msg": {
+        "en": "Open Settings → Google Drive and sign in, then pick a project folder.",
+        "hu": "Nyisd meg a Beállítások → Google Drive fület, jelentkezz be, "
+              "majd válassz project mappát.",
+    },
 }
 
 

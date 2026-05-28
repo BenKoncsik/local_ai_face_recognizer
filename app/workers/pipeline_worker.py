@@ -30,6 +30,7 @@ from app.services.embedding_service import EmbeddingService
 from app.services.recognition_service import RecognitionService
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -57,12 +58,27 @@ class PipelineWorker(QThread):
         config: AppConfig,
         parent=None,
         high_accuracy: bool = False,
+        db_path_override: Optional[str] = None,
+        drive_client=None,          # GDriveClient when Drive mode is active
+        drive_root_folder_id: Optional[str] = None,
+        drive_mirror_dir: Optional[Path] = None,
     ) -> None:
         super().__init__(parent)
         self._root_folder = root_folder
         self._config = config
         self._abort = False
         self._high_accuracy = high_accuracy
+        # Drive mode — all three must be set together or none.
+        self._drive_client = drive_client
+        self._drive_root_folder_id = drive_root_folder_id
+        self._drive_mirror_dir = drive_mirror_dir
+        # Override DB path (needed so Drive mode uses the downloaded DB, not
+        # the default config path which may point at the wrong file).
+        self._db_path_override = db_path_override
+
+    @property
+    def _drive_mode(self) -> bool:
+        return self._drive_client is not None
 
     def abort(self) -> None:
         """Request a graceful stop (checked between pipeline stages)."""
@@ -88,11 +104,16 @@ class PipelineWorker(QThread):
             "face_quality/exclude_low_quality", True, type=bool
         )
 
-        # Each stage gets its own session to avoid long-held transactions.
-        init_db(self._config.db_path_resolved)
+        # Initialise the DB — use the override path when Drive mode is active
+        # so we operate on the downloaded Drive DB rather than the config default.
+        db_path = self._db_path_override or str(self._config.db_path_resolved)
+        init_db(db_path)
 
         # --- Stage 1: Scan ---
-        self.log_message.emit("Stage 1/4: Scanning image folder …")
+        if self._drive_mode:
+            self.log_message.emit("Stage 1/5: Scanning Google Drive project folder …")
+        else:
+            self.log_message.emit("Stage 1/5: Scanning image folder …")
         new_ids = self._run_scan()
         if self._abort:
             self.finished.emit(False, "Aborted after scan")
@@ -158,19 +179,33 @@ class PipelineWorker(QThread):
     def _run_scan(self) -> list:
         def cb(current, total, path):
             detail = Path(path).name
-            self.progress.emit(current, total or 0, "Scanning", detail)
+            label = "Drive Scan" if self._drive_mode else "Scanning"
+            self.progress.emit(current, total or 0, label, detail)
             if current % 50 == 0:
                 self.log_message.emit(f"  Scanned {current}/{total or '?'} files …")
 
-        from app.services.image_library_service import get_image_library_optional
-        with session_scope() as session:
-            svc = ScanService(
-                session=session,
-                config=self._config.scan,
-                progress_cb=cb,
-                image_library_svc=get_image_library_optional(),
-            )
-            return svc.scan(self._root_folder)
+        if self._drive_mode:
+            from app.gdrive.drive_scan_service import DriveScanService
+            with session_scope() as session:
+                svc = DriveScanService(
+                    session=session,
+                    client=self._drive_client,
+                    root_folder_id=self._drive_root_folder_id,
+                    local_mirror_dir=self._drive_mirror_dir,
+                    config=self._config.scan,
+                    progress_cb=cb,
+                )
+                return svc.scan()
+        else:
+            from app.services.image_library_service import get_image_library_optional
+            with session_scope() as session:
+                svc = ScanService(
+                    session=session,
+                    config=self._config.scan,
+                    progress_cb=cb,
+                    image_library_svc=get_image_library_optional(),
+                )
+                return svc.scan(self._root_folder)
 
     def _get_pending_detection_ids(self) -> list:
         from app.db.database import get_session

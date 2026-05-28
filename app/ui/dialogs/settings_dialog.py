@@ -68,6 +68,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
+        tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
         outer.addWidget(tabs, stretch=1)
 
         # ── Buttons — always visible outside the tabs ─────────────────────
@@ -200,6 +201,37 @@ class SettingsDialog(QDialog):
         tpu_layout.addLayout(tpu_btn_row)
         layout.addWidget(tpu_group)
 
+        # ── Google Drive cache ────────────────────────────────────────────
+        gdrive_group = QGroupBox(t("gdrive_cache_group"))
+        gdrive_layout = QVBoxLayout(gdrive_group)
+
+        from app.paths import gdrive_cache_dir
+        _cache_dir = gdrive_cache_dir()
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel(t("gdrive_cache_dir_label")))
+        self._gdrive_cache_dir_label = QLineEdit(str(_cache_dir))
+        self._gdrive_cache_dir_label.setReadOnly(True)
+        self._gdrive_cache_dir_label.setStyleSheet("color: #aaa;")
+        dir_row.addWidget(self._gdrive_cache_dir_label, 1)
+        gdrive_layout.addLayout(dir_row)
+
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel(t("gdrive_cache_size_label")))
+        from app.gdrive.cache import get_cache_manager
+        _mb = get_cache_manager().current_size_bytes() / (1024 * 1024)
+        self._gdrive_cache_size_label = QLabel(t("gdrive_cache_size_value", mb=_mb))
+        self._gdrive_cache_size_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        size_row.addWidget(self._gdrive_cache_size_label)
+        size_row.addStretch()
+        gdrive_layout.addLayout(size_row)
+
+        note_label = QLabel(t("gdrive_cache_note"))
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet("color: #888; font-size: 11px;")
+        gdrive_layout.addWidget(note_label)
+
+        layout.addWidget(gdrive_group)
+
         layout.addStretch()
         scroll.setWidget(inner)
         return scroll
@@ -224,6 +256,12 @@ class SettingsDialog(QDialog):
         layout.addWidget(deol_group)
         layout.addStretch()
         return widget
+
+    def _build_tab_gdrive(self) -> QWidget:
+        """Build the Google Drive tab — implementation lives in its own module."""
+        from app.ui.dialogs.gdrive_settings_tab import GDriveSettingsTab
+        self._gdrive_tab = GDriveSettingsTab(self)
+        return self._gdrive_tab
 
     def _build_tab_face_quality(self) -> QWidget:
         """Build the Face Quality tab."""

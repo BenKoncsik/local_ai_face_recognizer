@@ -36,7 +36,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QDockWidget,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -44,7 +43,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -613,8 +611,6 @@ class ImageBrowserPanel(QWidget):
         self._all_persons: List[Person] = []
         self._all_places: List[Place] = []
         self._place_filter_id: Optional[int] = None
-        self._person_filter_a_id: Optional[int] = None
-        self._person_filter_b_id: Optional[int] = None
 
         # Zoom / pan
         self._zoom: float = 1.0
@@ -679,56 +675,6 @@ class ImageBrowserPanel(QWidget):
         self._place_filter_clear_btn.clicked.connect(self._clear_place_filter)
         filter_row.addWidget(self._place_filter_clear_btn)
         tp_layout.addLayout(filter_row)
-
-        person_filter_box = QWidget()
-        pf_layout = QVBoxLayout(person_filter_box)
-        pf_layout.setContentsMargins(0, 0, 0, 0)
-        pf_layout.setSpacing(4)
-
-        self._person_filter_hdr = QLabel()
-        self._person_filter_hdr.setStyleSheet(
-            "font-weight: bold; font-size: 11px; color: #888;"
-        )
-        pf_layout.addWidget(self._person_filter_hdr)
-
-        self._person_filter_a = PersonSearchSelect()
-        self._person_filter_a.person_selected.connect(self._on_person_filter_changed)
-        pf_layout.addWidget(self._person_filter_a)
-
-        self._person_filter_b = PersonSearchSelect()
-        self._person_filter_b.person_selected.connect(self._on_person_filter_changed)
-        pf_layout.addWidget(self._person_filter_b)
-
-        mode_row = QHBoxLayout()
-        mode_row.setContentsMargins(0, 0, 0, 0)
-        mode_row.setSpacing(6)
-        self._person_filter_both = QRadioButton()
-        self._person_filter_exact = QRadioButton()
-        self._person_filter_both.setChecked(True)
-        self._person_filter_both.toggled.connect(self._reload_visible_folder_for_filters)
-        self._person_filter_exact.toggled.connect(self._reload_visible_folder_for_filters)
-        mode_row.addWidget(self._person_filter_both)
-        mode_row.addWidget(self._person_filter_exact)
-        pf_layout.addLayout(mode_row)
-
-        self._person_relation_filter = QComboBox()
-        self._person_relation_filter.currentIndexChanged.connect(
-            self._reload_visible_folder_for_filters
-        )
-        pf_layout.addWidget(self._person_relation_filter)
-
-        person_btn_row = QHBoxLayout()
-        person_btn_row.setContentsMargins(0, 0, 0, 0)
-        person_btn_row.setSpacing(4)
-        self._person_filter_apply_btn = QPushButton()
-        self._person_filter_apply_btn.clicked.connect(self._apply_person_filter)
-        person_btn_row.addWidget(self._person_filter_apply_btn)
-        self._person_filter_clear_btn = QPushButton()
-        self._person_filter_clear_btn.clicked.connect(self._clear_person_filter)
-        person_btn_row.addWidget(self._person_filter_clear_btn)
-        pf_layout.addLayout(person_btn_row)
-
-        tp_layout.addWidget(person_filter_box)
 
         self._file_tree = _BrowserTree()
         self._file_tree.setHeaderHidden(True)
@@ -1117,14 +1063,6 @@ class ImageBrowserPanel(QWidget):
         self._place_filter_edit.setPlaceholderText(t("ibp_place_filter_placeholder"))
         self._place_filter_btn.setText(t("ibp_place_filter_btn"))
         self._place_filter_clear_btn.setText(t("ibp_place_filter_clear"))
-        self._person_filter_hdr.setText(t("ibp_person_filter_hdr"))
-        self._person_filter_both.setText(t("family_mode_both"))
-        self._person_filter_exact.setText(t("family_mode_exact"))
-        self._person_filter_apply_btn.setText(t("ibp_person_filter_apply"))
-        self._person_filter_clear_btn.setText(t("ibp_person_filter_clear"))
-        self._person_filter_a.retranslate()
-        self._person_filter_b.retranslate()
-        self._populate_person_relation_filter()
         self._toggle_left_btn.setToolTip(t("ib3_toggle_left_tip"))
         self._toggle_right_btn.setToolTip(t("ib3_toggle_right_tip"))
         self._draw_mode_btn.setText(t("ibp_manual_mark"))
@@ -1163,19 +1101,6 @@ class ImageBrowserPanel(QWidget):
         self._deol_lbl.setText(t("ibp_deol_pair_lbl"))
         self._btn_view_bw.setText(t("ibp_view_original_bw"))
         self._btn_view_color.setText(t("ibp_view_colorized"))
-
-    def _populate_person_relation_filter(self) -> None:
-        data = self._person_relation_filter.currentData() or "any"
-        self._person_relation_filter.blockSignals(True)
-        self._person_relation_filter.clear()
-        self._person_relation_filter.addItem(t("family_filter_any"), "any")
-        self._person_relation_filter.addItem(t("family_filter_spouse"), "spouse")
-        self._person_relation_filter.addItem(t("family_filter_parent"), "parent")
-        self._person_relation_filter.addItem(t("family_filter_child"), "child")
-        self._person_relation_filter.addItem(t("family_filter_sibling"), "sibling")
-        idx = self._person_relation_filter.findData(data)
-        self._person_relation_filter.setCurrentIndex(idx if idx >= 0 else 0)
-        self._person_relation_filter.blockSignals(False)
 
     def refresh(self) -> None:
         """Reload folder list from DB; keep the selected folder expanded if still present."""
@@ -1472,12 +1397,6 @@ class ImageBrowserPanel(QWidget):
             summaries = ImageBrowserService(session).list_images(
                 folder_path,
                 place_id=self._place_filter_id,
-                person_id=self._person_filter_a_id,
-                second_person_id=self._person_filter_b_id,
-                person_search_mode=(
-                    "exact" if self._person_filter_exact.isChecked() else "both"
-                ),
-                relationship_filter=self._person_relation_filter.currentData() or "any",
             )
 
         if not summaries:
@@ -2474,38 +2393,6 @@ class ImageBrowserPanel(QWidget):
         self.refresh()
 
     # ──────────────────────────────────────────────────────────────────
-    # Person filters
-    # ──────────────────────────────────────────────────────────────────
-
-    def _on_person_filter_changed(self, *_args) -> None:
-        self._apply_person_filter()
-
-    def _apply_person_filter(self) -> None:
-        self._person_filter_a_id = self._person_filter_a.current_person_id()
-        self._person_filter_b_id = self._person_filter_b.current_person_id()
-        if self._person_filter_a_id is None and self._person_filter_b_id is not None:
-            self._person_filter_a_id, self._person_filter_b_id = (
-                self._person_filter_b_id,
-                None,
-            )
-        self._current_tree_item = None
-        self.refresh()
-
-    def _clear_person_filter(self) -> None:
-        self._person_filter_a_id = None
-        self._person_filter_b_id = None
-        self._person_filter_a.clear_selection()
-        self._person_filter_b.clear_selection()
-        self._current_tree_item = None
-        self.refresh()
-
-    def _reload_visible_folder_for_filters(self, *_args) -> None:
-        if self._person_filter_a_id is None and self._person_filter_b_id is None:
-            return
-        self._current_tree_item = None
-        self.refresh()
-
-    # ──────────────────────────────────────────────────────────────────
     # Inline rename
     # ──────────────────────────────────────────────────────────────────
 
@@ -2586,8 +2473,6 @@ class ImageBrowserPanel(QWidget):
             self._all_persons,
             priority_ids=list(self._recent_assignment_person_ids),
         )
-        self._person_filter_a.set_persons(self._all_persons)
-        self._person_filter_b.set_persons(self._all_persons)
 
     def _recent_person_rank(self, session) -> Dict[int, int]:
         rank: Dict[int, int] = {}

@@ -31,6 +31,15 @@ tflite = [
 coral = [
     "pycoral>=2.0",
 ]
+gdrive = [
+    # Google Drive online work mode (online-only, ephemeral cache).
+    # The cache layer in app/gdrive/cache.py works without these; only the
+    # actual OAuth flow and Drive API client require them.
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
+    "keyring>=24.0",
+]
 dev = [
     "pytest>=7.4",
     "pytest-qt>=4.2",

@@ -66,3 +66,43 @@ def default_log_file() -> Path:
     if is_frozen():
         return user_data_dir() / "logs" / "face_local.log"
     return Path("data/face_local.log")
+
+
+def drive_mirror_dir(folder_id: str) -> Path:
+    """Return the persistent local mirror directory for a Drive project folder.
+
+    Downloaded Drive images are stored here so they survive between sessions
+    (unlike the ephemeral :func:`gdrive_cache_dir`).  Each project gets its
+    own subdirectory keyed by the Drive root folder ID.
+
+    Platform mapping:
+        - macOS:   ``~/Library/Application Support/Face-Local/drive-mirrors/<id>``
+        - Windows: ``%APPDATA%\\Face-Local\\drive-mirrors\\<id>``
+        - Linux:   ``$XDG_DATA_HOME/face-local/drive-mirrors/<id>``
+    """
+    # Use only the first 24 chars of the folder_id to keep paths sane.
+    safe_id = folder_id[:24].replace("/", "_").replace("\\", "_")
+    return user_data_dir() / "drive-mirrors" / safe_id
+
+
+def gdrive_cache_dir() -> Path:
+    """Return the OS-level cache directory for Google Drive temporary files.
+
+    This is intentionally separate from :func:`user_data_dir` — Drive cache
+    files are ephemeral and must never land in the application's persistent
+    data folder.
+
+    Platform mapping:
+        - macOS:   ``~/Library/Caches/Face-Local/gdrive-cache``
+        - Windows: ``%LOCALAPPDATA%\\Temp\\Face-Local\\gdrive-cache``
+        - Linux:   ``$XDG_CACHE_HOME/face-local/gdrive-cache``
+                   (falls back to ``~/.cache/face-local/gdrive-cache``)
+    """
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Caches" / APP_NAME / "gdrive-cache"
+    if os.name == "nt":
+        local_app = os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))
+        return Path(local_app) / "Temp" / APP_NAME / "gdrive-cache"
+    xdg_cache = os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))
+    return Path(xdg_cache) / APP_SLUG / "gdrive-cache"

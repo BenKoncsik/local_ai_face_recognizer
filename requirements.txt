@@ -36,6 +36,14 @@ scikit-learn>=1.3
 # app/embeddings/tflite_embedder.py).
 ai-edge-litert>=1.0
 
+# ── Google Drive online mode (optional) ──────────────────────────────────────
+# Required only when using the Google Drive work mode (Settings → Google Drive).
+# Local-only mode does NOT need these packages.
+google-auth>=2.0
+google-auth-oauthlib>=1.0
+google-api-python-client>=2.0
+keyring>=24.0      # OS keychain (macOS Keychain / Windows Credential Manager / Secret Service)
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=7.4
 pytest-qt>=4.2

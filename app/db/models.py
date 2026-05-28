@@ -93,6 +93,14 @@ class Image(Base):
     )
     place: Mapped[Optional["Place"]] = relationship("Place", back_populates="images")
 
+    # One-to-one optional: set when this image was sourced from a remote provider.
+    remote_image: Mapped[Optional["RemoteImage"]] = relationship(
+        "RemoteImage",
+        back_populates="image",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     def __repr__(self) -> str:
         return f"<Image id={self.id} path={self.file_path!r}>"
 
@@ -523,4 +531,73 @@ class FaceCorrection(Base):
         return (
             f"<FaceCorrection a={self.face_id_a} b={self.face_id_b} "
             f"same={self.same_person}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RemoteImage
+# ---------------------------------------------------------------------------
+
+class RemoteImage(Base):
+    """Records that a local :class:`Image` row was sourced from a remote provider.
+
+    One-to-one with ``Image`` (via a unique FK).  When present it stores
+    enough metadata to detect whether the remote file has changed since we
+    last downloaded it, and to upload crops/annotations back.
+
+    Currently only ``provider = "google_drive"`` is used, but the schema
+    is intentionally provider-agnostic for future extensibility.
+    """
+
+    __tablename__ = "remote_images"
+    __table_args__ = (
+        Index("ix_remote_images_provider_file_id", "provider", "drive_file_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # FK to the local Image record — nullable=False, unique to enforce one-to-one.
+    image_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("images.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    # Storage provider identifier — currently always "google_drive".
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    # Provider-specific remote file ID (Drive file_id for google_drive).
+    drive_file_id: Mapped[str] = mapped_column(String(256), nullable=False)
+
+    # Parent folder on the remote (Drive folder_id for google_drive).
+    drive_folder_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+
+    # Filename as it appears on the remote.
+    remote_name: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    # Drive metadata captured at time of last sync (RFC 3339 string).
+    modified_time: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # MD5 / SHA-256 checksum as reported by the provider.
+    checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # When we last confirmed the file still exists on the remote.
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # True once the provider no longer returns this file (deleted / moved out).
+    deleted_remote: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    image: Mapped["Image"] = relationship("Image", back_populates="remote_image")
+
+    def __repr__(self) -> str:
+        return (
+            f"<RemoteImage id={self.id} image_id={self.image_id} "
+            f"provider={self.provider!r} file_id={self.drive_file_id!r}>"
         )

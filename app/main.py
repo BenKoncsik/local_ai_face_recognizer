@@ -54,6 +54,19 @@ def main() -> None:
     log = logging.getLogger(__name__)
     log.info("Starting Face-Local")
 
+    # --- Load .env (Google OAuth secrets, etc.) ---
+    # Must run BEFORE app.gdrive.oauth_config is imported, so the module
+    # picks up the values from the environment.  .env is in .gitignore.
+    from pathlib import Path as _P
+
+    from app.gdrive.dotenv_loader import load_dotenv
+    from app.paths import project_root
+    # Look in both the current working directory and the project root —
+    # whichever exists wins, with cwd taking priority.
+    for _candidate in (_P.cwd() / ".env", project_root() / ".env"):
+        if load_dotenv(_candidate) > 0:
+            break
+
     # --- Config ---
     from app.config import load_config
 
@@ -68,6 +81,11 @@ def main() -> None:
     # Ensure data directories exist
     config.db_path_resolved.parent.mkdir(parents=True, exist_ok=True)
     config.crops_dir_resolved.mkdir(parents=True, exist_ok=True)
+
+    # Google Drive cache — remove any leftovers from a previous (possibly crashed) run
+    from app.gdrive.cache import get_cache_manager
+    _gdrive_cache = get_cache_manager()
+    _gdrive_cache.startup_cleanup()
 
     # --- Language preferences ---
     from app.ui.i18n import load_prefs
@@ -92,6 +110,9 @@ def main() -> None:
 
     window = MainWindow(config=config)
     window.show()
+
+    # Google Drive cache — clean up on normal exit
+    app.aboutToQuit.connect(_gdrive_cache.shutdown_cleanup)
 
     log.info("GUI ready")
     sys.exit(app.exec())
