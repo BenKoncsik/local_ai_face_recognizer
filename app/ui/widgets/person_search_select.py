@@ -144,6 +144,11 @@ class PersonSearchSelect(QWidget):
         self._list.clearSelection()
         self._list.setCurrentItem(None)
 
+    def reset_filter(self) -> None:
+        """Clear the search text and show the full (unfiltered) person list."""
+        self._search.clear()  # triggers textChanged → _on_text_changed → _refresh_list
+
+
     def retranslate(self) -> None:
         self._search.setPlaceholderText(t("pss_search_placeholder"))
         self._no_results.setText(t("pss_no_results"))

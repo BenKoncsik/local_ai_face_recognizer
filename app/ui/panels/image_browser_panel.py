@@ -403,6 +403,10 @@ class _InlineFaceEditor(QFrame):
             self._person_search.set_current_by_id(person_id)
         self._new_edit.clear()
 
+    def reset_search(self) -> None:
+        """Clear the person search filter after a successful assignment."""
+        self._person_search.reset_filter()
+
     def _on_assign(self, _person_id: int = 0) -> None:
         pid = self._person_search.current_person_id()
         if pid is not None:
@@ -2249,6 +2253,7 @@ class ImageBrowserPanel(QWidget):
         log.info(
             "Inline assign: face_id=%d → person_id=%d", face_id, person_id
         )
+        self._inline_editor.reset_search()
         self._hide_inline_editor()
         with session_scope() as session:
             IdentityService(session).reassign_face(face_id, person_id)
