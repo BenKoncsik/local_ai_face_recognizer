@@ -29,6 +29,10 @@ def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+def truthy_env(name: str) -> bool:
+    return env(name).lower() in {"1", "true", "yes", "on"}
+
+
 def graphql(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     token = env("GITHUB_TOKEN") or env("GH_TOKEN")
     if not token:
@@ -380,5 +384,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except GitHubError as exc:
+        if truthy_env("PROJECT_ISSUE_MOVE_BEST_EFFORT"):
+            warn(f"Could not move referenced issues to Ready; continuing. {exc}")
+            raise SystemExit(0)
         print(f"::error::{exc}")
         raise SystemExit(1)
