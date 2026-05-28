@@ -362,7 +362,23 @@ class GDriveProjectSession:
             raise ProjectFolderInvalid(
                 f"Drive item {name!r} exists in project but is not a folder."
             )
-        return self._client.create_folder(parent_id, name)
+        try:
+            return self._client.create_folder(parent_id, name)
+        except Exception as exc:  # noqa: BLE001
+            # 403 = no write permission on the shared folder.
+            try:
+                from googleapiclient.errors import HttpError as _HttpError
+                if isinstance(exc, _HttpError) and exc.resp.status in (403, 404):
+                    raise ProjectFolderInvalid(
+                        "Nincs szerkesztési jog a Google Drive mappához.\n\n"
+                        "A Face-Local projekt megnyitásához szerkesztői hozzáférés szükséges "
+                        f"(a '{name}' almappa létrehozásához).\n"
+                        "Kérd a mappa tulajdonosától, hogy adjon szerkesztési jogot, "
+                        "vagy válassz olyan mappát, amelyhez teljes hozzáférésed van."
+                    ) from exc
+            except ImportError:
+                pass
+            raise
 
     def _ensure_project_descriptor(self, metadata_folder_id: str) -> None:
         if self._client.find_child(metadata_folder_id, _PROJECT_DESCRIPTOR) is not None:

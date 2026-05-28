@@ -1055,19 +1055,24 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "gdrive_folder_selected": {"en": "Folder selected: {name}",
                                "hu": "Mappa kiválasztva: {name}"},
 
-    "gdrive_mode_group":      {"en": "Work mode", "hu": "Munkamód"},
-    "gdrive_mode_toggle":     {"en": "Use Google Drive as the active project",
-                               "hu": "A Google Drive legyen az aktív projekt"},
+    "gdrive_mode_group":      {"en": "Drive mode — ON / OFF", "hu": "Drive mód — BE / KI"},
+    "gdrive_mode_toggle":     {
+        "en": "ON — Use Google Drive (only Drive images visible and processed)",
+        "hu": "BE — Google Drive használata (csak Drive képek láthatók és feldolgozottak)",
+    },
     "gdrive_mode_tip":        {
-        "en": "When enabled, the app downloads faces.db from the selected "
-              "Drive folder on start-up and uploads it back on exit. "
-              "Images are streamed via the OS cache and never stored locally "
-              "in a persistent way. Requires an active internet connection.",
-        "hu": "Bekapcsolva az alkalmazás induláskor letölti a faces.db-t "
-              "a kiválasztott Drive mappából, kilépéskor pedig visszatölti. "
-              "A képek az OS cache-en keresztül kerülnek feldolgozásra, "
-              "tartós lokális másolat nem készül. Aktív internetkapcsolat "
-              "szükséges.",
+        "en": "ON: The app connects to Google Drive on startup, downloads the "
+              "project database and processes only Drive images. Local folder "
+              "is ignored.\n"
+              "OFF: Only local images from the selected folder are used. "
+              "Drive is not touched.\n"
+              "Requires account + project folder to be configured above.",
+        "hu": "BE: Az alkalmazás induláskor csatlakozik a Google Drive-hoz, "
+              "letölti a projekt adatbázisát, és csak Drive-os képekkel dolgozik. "
+              "A helyi mappa figyelmen kívül marad.\n"
+              "KI: Csak a kiválasztott helyi mappában lévő képek kerülnek "
+              "feldolgozásra. A Drive nincs érintve.\n"
+              "Szükséges: fiók + projektmappa megadása fent.",
     },
     "gdrive_db_sync_toggle":  {"en": "Sync database with Drive automatically",
                                "hu": "Adatbázis automatikus szinkronizálása "
@@ -1139,6 +1144,24 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Open Settings → Google Drive and sign in, then pick a project folder.",
         "hu": "Nyisd meg a Beállítások → Google Drive fület, jelentkezz be, "
               "majd válassz project mappát.",
+    },
+    "ibp_drive_downloading": {
+        "en": "⬇ Downloading from Google Drive …",
+        "hu": "⬇ Letöltés a Google Drive-ról …",
+    },
+    "ibp_drive_download_failed": {
+        "en": "⚠ Drive download failed: {error}",
+        "hu": "⚠ Drive letöltés sikertelen: {error}",
+    },
+    "gdrive_mode_enabled_opening": {
+        "en": "Google Drive mode is ON — connecting to project …",
+        "hu": "Google Drive mód BE van kapcsolva — csatlakozás a projekthez …",
+    },
+    "gdrive_scan_no_session": {
+        "en": "Google Drive mode is ON but the project is not open yet.\n"
+              "Wait for the Drive connection to finish, then scan again.",
+        "hu": "A Google Drive mód be van kapcsolva, de a projekt még nincs megnyitva.\n"
+              "Várj, amíg a Drive kapcsolat felépül, majd próbáld újra a beolvasást.",
     },
 }
 

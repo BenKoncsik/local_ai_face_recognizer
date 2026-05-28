@@ -615,6 +615,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_scan(self) -> None:
+        from app.gdrive import preferences as _gprefs
+        _prefs = _gprefs.load()
+
+        # Drive mode is ON but the session hasn't connected yet.
+        if _prefs.enabled and self._gdrive_session is None:
+            QMessageBox.information(
+                self, t("gdrive_chip_opening"), t("gdrive_scan_no_session")
+            )
+            return
+
         if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
@@ -815,6 +825,13 @@ class MainWindow(QMainWindow):
         self._gdrive_status_timer.timeout.connect(self._update_gdrive_chip)
         self._gdrive_status_timer.start()
 
+        # Auto-open Drive session on startup if mode is enabled and ready.
+        from app.gdrive import preferences as _gprefs
+        _p = _gprefs.load()
+        if _p.enabled and _p.is_ready and self._gdrive_session is None:
+            self._status_label.setText(t("gdrive_mode_enabled_opening"))
+            QTimer.singleShot(400, self._on_open_drive_project)
+
     def _update_gdrive_toolbar_btn(self) -> None:
         """Show/hide and label the Drive toolbar button based on current state."""
         from app.gdrive import preferences
@@ -936,11 +953,22 @@ class MainWindow(QMainWindow):
         self._current_face_id = None
         self._cluster_panel.clear()
         self._preview_panel.clear()
-        self._refresh_persons()
-        self._image_browser.refresh()
 
         folders = session.folders
         name = folders.root_name if folders else "Drive"
+
+        # Tell the image browser to use Drive-mode lazy loading.
+        from app.paths import drive_mirror_dir
+        root_id = folders.root_id if folders else ""
+        self._image_browser.set_drive_mode(
+            client=session._client,
+            mirror_dir=drive_mirror_dir(root_id),
+            project_name=name,
+        )
+
+        self._refresh_persons()
+        self._image_browser.refresh()
+
         log.info("Drive project opened: %s (local DB: %s)", name, local_db_path)
         self._status_label.setText(t("gdrive_project_opened", name=name))
         self._update_gdrive_toolbar_btn()
@@ -1013,6 +1041,20 @@ class MainWindow(QMainWindow):
         """Called after the Drive session has been fully closed."""
         log.info("Drive session closed.")
         self._gdrive_closing = False
+
+        # Switch back to the local database and refresh all views.
+        local_db = str(self._config.db_path_resolved)
+        self._db_path = local_db
+        init_db(local_db)
+        ensure_unknown_person()
+        self._current_person_id = None
+        self._current_face_id = None
+        self._cluster_panel.clear()
+        self._preview_panel.clear()
+        self._image_browser.clear_drive_mode()
+        self._refresh_persons()
+        self._image_browser.refresh()
+
         self._update_gdrive_toolbar_btn()
         self._update_gdrive_chip()
         self._gdrive_btn.setEnabled(True)
@@ -1020,7 +1062,18 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_drive_prefs_changed(self) -> None:
-        """Refresh the Drive toolbar button/chip after settings change."""
+        """Refresh Drive UI and auto-open/close session when mode toggle changes."""
+        from app.gdrive import preferences as _gprefs
+        prefs = _gprefs.load()
+
+        if prefs.enabled and prefs.is_ready and self._gdrive_session is None:
+            # User just turned Drive ON — open the session automatically.
+            self._status_label.setText(t("gdrive_mode_enabled_opening"))
+            self._on_open_drive_project()
+        elif not prefs.enabled and self._gdrive_session is not None:
+            # User just turned Drive OFF — close the session gracefully.
+            self._start_drive_close(after_quit=False)
+
         self._update_gdrive_toolbar_btn()
         self._update_gdrive_chip()
 

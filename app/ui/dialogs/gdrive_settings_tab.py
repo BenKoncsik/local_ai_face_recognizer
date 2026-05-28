@@ -22,6 +22,7 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -193,10 +194,19 @@ class GDriveSettingsTab(QWidget):
         group = QGroupBox(t("gdrive_mode_group"))
         v = QVBoxLayout(group)
 
+        # Prominent ON/OFF toggle with coloured highlight frame
+        toggle_frame = QFrame()
+        toggle_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        toggle_frame.setObjectName("driveToggleFrame")
+        toggle_layout = QVBoxLayout(toggle_frame)
+        toggle_layout.setContentsMargins(8, 6, 8, 6)
+
         self._mode_toggle = QCheckBox(t("gdrive_mode_toggle"))
         self._mode_toggle.setToolTip(t("gdrive_mode_tip"))
+        self._mode_toggle.setStyleSheet("font-weight: bold; font-size: 13px;")
         self._mode_toggle.toggled.connect(self._on_toggle_mode)
-        v.addWidget(self._mode_toggle)
+        toggle_layout.addWidget(self._mode_toggle)
+        v.addWidget(toggle_frame)
 
         self._db_sync_toggle = QCheckBox(t("gdrive_db_sync_toggle"))
         self._db_sync_toggle.toggled.connect(self._on_toggle_db_sync)
@@ -275,6 +285,19 @@ class GDriveSettingsTab(QWidget):
         self._db_sync_toggle.setEnabled(True)
         self._mode_toggle.blockSignals(False)
         self._db_sync_toggle.blockSignals(False)
+
+        # Colour the toggle frame: green when ON, neutral when OFF
+        toggle_frame = self._mode_toggle.parent()
+        if prefs.enabled:
+            toggle_frame.setStyleSheet(
+                "QFrame#driveToggleFrame { border: 2px solid #4caf50; "
+                "border-radius: 4px; background: #1a2e1a; }"
+            )
+        else:
+            toggle_frame.setStyleSheet(
+                "QFrame#driveToggleFrame { border: 2px solid #555; "
+                "border-radius: 4px; }"
+            )
 
         # Status
         online = is_online()

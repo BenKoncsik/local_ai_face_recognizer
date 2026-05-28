@@ -78,9 +78,13 @@ _FaceData = Tuple[int, int, int, int, int, Optional[str], Optional[int]]
 _TREE_THUMB_SIZE = 56   # max side of thumbnail icon in tree
 
 # Data roles stored on QTreeWidgetItem
-_ROLE_TYPE    = Qt.UserRole        # "folder" | "image" | "dummy"
-_ROLE_PAYLOAD = Qt.UserRole + 1    # folder_path (str) | image_id (int)
-_ROLE_CACHE   = Qt.UserRole + 2    # thumbnail_cache_key (str, images only)
+_ROLE_TYPE      = Qt.UserRole        # "folder" | "image" | "dummy"
+_ROLE_PAYLOAD   = Qt.UserRole + 1    # folder_path (str) | image_id (int)
+_ROLE_CACHE     = Qt.UserRole + 2    # thumbnail_cache_key (str, images only)
+_ROLE_FILE_PATH = Qt.UserRole + 3    # file_path (str, images only)
+
+# How many images ahead to prefetch in Drive mode.
+_DRIVE_PREFETCH_AHEAD = 4
 
 _UF_HIDDEN = 0x8000   # macOS BSD hidden flag (chflags hidden)
 
@@ -622,6 +626,15 @@ class ImageBrowserPanel(QWidget):
         self._tree_items: Dict[str, QTreeWidgetItem] = {}  # cache_key → image tree item
         self._current_tree_item: Optional[QTreeWidgetItem] = None
 
+        # Drive mode — set by main window when a Drive project is open
+        self._drive_client = None          # GDriveClient | None
+        self._drive_mirror_dir: Optional[Path] = None
+        self._drive_project_name: str = ""
+        self._prefetch_set: set = set()    # image_ids whose fetch is in-flight
+        # image_id → requested load: when a fetch completes AND this id is
+        # the current image, we display it.
+        self._drive_pending_image_id: Optional[int] = None
+
         # Fullscreen state
         self._fs_hidden_widgets: List[QWidget] = []
         self._fs_was_maximized: bool = False
@@ -1156,6 +1169,37 @@ class ImageBrowserPanel(QWidget):
             if self._current_image_id is None:
                 self._open_first_image()
 
+    # ──────────────────────────────────────────────────────────────────
+    # Drive mode
+    # ──────────────────────────────────────────────────────────────────
+
+    def set_drive_mode(self, client, mirror_dir: Path, project_name: str) -> None:
+        """Activate Drive-aware lazy loading.
+
+        Called by the main window after a Drive project is opened.  The
+        panel uses *client* to download images on demand and *mirror_dir*
+        to write them.
+
+        Args:
+            client:       Authenticated :class:`~app.gdrive.protocols.GDriveClient`.
+            mirror_dir:   Persistent local directory for downloaded images.
+            project_name: Human-readable Drive folder name shown in the tree.
+        """
+        self._drive_client = client
+        self._drive_mirror_dir = mirror_dir
+        self._drive_project_name = project_name
+        self._prefetch_set.clear()
+        log.info("ImageBrowser: Drive mode ON — project=%r", project_name)
+
+    def clear_drive_mode(self) -> None:
+        """Deactivate Drive mode; revert to local-only file access."""
+        self._drive_client = None
+        self._drive_mirror_dir = None
+        self._drive_project_name = ""
+        self._prefetch_set.clear()
+        self._drive_pending_image_id = None
+        log.info("ImageBrowser: Drive mode OFF")
+
     def open_image_by_id(self, image_id: int) -> None:
         """Open an image in the existing viewer, expanding its folder when possible."""
         self._current_tree_item = None
@@ -1329,7 +1373,16 @@ class ImageBrowserPanel(QWidget):
             dot = "●"
             dot_color = "#f9e2af"
 
-        label = f"{summary.display_name}  ({summary.total_images})"
+        # In Drive mode show "☁ <project name>" instead of the ugly mirror path.
+        display = summary.display_name
+        if (
+            self._drive_client is not None
+            and self._drive_mirror_dir is not None
+            and summary.folder_path == str(self._drive_mirror_dir)
+        ):
+            display = f"☁ {self._drive_project_name}" if self._drive_project_name else "☁ Drive"
+
+        label = f"{display}  ({summary.total_images})"
         item = QTreeWidgetItem([label])
         item.setData(0, _ROLE_TYPE, "folder")
         item.setData(0, _ROLE_PAYLOAD, summary.folder_path)
@@ -1414,6 +1467,7 @@ class ImageBrowserPanel(QWidget):
             child.setData(0, _ROLE_TYPE, "image")
             child.setData(0, _ROLE_PAYLOAD, summary.image_id)
             child.setData(0, _ROLE_CACHE, summary.thumbnail_cache_key)
+            child.setData(0, _ROLE_FILE_PATH, summary.file_path)
             child.setIcon(0, placeholder_icon)
 
             # Face-count tooltip
@@ -1439,6 +1493,19 @@ class ImageBrowserPanel(QWidget):
                 worker.signals.ready.connect(self._on_thumbnail_ready)
                 worker.signals.failed.connect(self._on_thumbnail_failed)
                 pool.start(worker)
+            elif self._drive_client is not None:
+                # Mirror file missing — download from Drive and generate thumb.
+                from app.workers.drive_image_worker import DriveThumbRunnable
+                dw = DriveThumbRunnable(
+                    drive_client=self._drive_client,
+                    image_id=summary.image_id,
+                    local_path=summary.file_path,
+                    cache_key=summary.thumbnail_cache_key,
+                    size=_TREE_THUMB_SIZE,
+                )
+                dw.signals.ready.connect(self._on_thumbnail_ready)
+                dw.signals.failed.connect(self._on_thumbnail_failed)
+                pool.start(dw)
             else:
                 log.warning("Missing file for thumbnail: %s", summary.file_path)
 
@@ -1455,8 +1522,12 @@ class ImageBrowserPanel(QWidget):
         self._current_tree_item = item
         self._file_tree.setCurrentItem(item)
         self._file_tree.scrollToItem(item)
-        self._load_image(item.data(0, _ROLE_PAYLOAD))
+        image_id = item.data(0, _ROLE_PAYLOAD)
+        self._load_image(image_id)
         self._update_nav_buttons()
+        # Smart prefetch: queue downloads for adjacent images in Drive mode.
+        if self._drive_client is not None:
+            self._prefetch_adjacent(item)
 
     def _update_nav_buttons(self) -> None:
         """Grey out ◀ / ▶ when at the very first / last image across all folders."""
@@ -1563,6 +1634,99 @@ class ImageBrowserPanel(QWidget):
         pass  # placeholder icon stays
 
     # ──────────────────────────────────────────────────────────────────
+    # Drive on-demand download callbacks
+    # ──────────────────────────────────────────────────────────────────
+
+    @Slot(int, str)
+    def _on_drive_fetch_ready(self, image_id: int, local_path: str) -> None:
+        """Called when a DriveFetchRunnable completes.
+
+        If this fetch was for the currently requested image, display it.
+        Also update the thumbnail in the tree.
+        """
+        # Remove from prefetch-in-progress set.
+        self._prefetch_set.discard(image_id)
+
+        # Refresh the thumbnail in the tree if we have a cache key.
+        cache_key = f"thumb_{image_id}"
+        if cache_key not in self._thumb_cache:
+            tree_item = self._tree_items.get(cache_key)
+            if tree_item is not None:
+                from app.workers.drive_image_worker import DriveThumbRunnable
+                from app.workers.thumbnail_worker import ThumbnailRunnable
+                # File is now in mirror — generate thumbnail normally.
+                worker = ThumbnailRunnable(
+                    file_path=local_path,
+                    cache_key=cache_key,
+                    size=_TREE_THUMB_SIZE,
+                )
+                worker.signals.ready.connect(self._on_thumbnail_ready)
+                worker.signals.failed.connect(self._on_thumbnail_failed)
+                QThreadPool.globalInstance().start(worker)
+
+        # If this is the image the user is waiting to see, load it now.
+        if image_id == self._drive_pending_image_id:
+            self._drive_pending_image_id = None
+            self._load_image(image_id)
+
+    @Slot(int, str)
+    def _on_drive_fetch_failed(self, image_id: int, error: str) -> None:
+        self._prefetch_set.discard(image_id)
+        if image_id == self._drive_pending_image_id:
+            self._drive_pending_image_id = None
+            self._image_label.set_source_pixmap(None)
+            self._image_label.setText(
+                t("ibp_drive_download_failed", error=error)
+            )
+
+    # ──────────────────────────────────────────────────────────────────
+    # Drive smart prefetch
+    # ──────────────────────────────────────────────────────────────────
+
+    def _prefetch_adjacent(self, current_item: QTreeWidgetItem) -> None:
+        """Queue Drive downloads for the next *_DRIVE_PREFETCH_AHEAD* siblings.
+
+        Skips images whose mirror file already exists and ones already
+        in-flight.
+        """
+        if self._drive_client is None:
+            return
+        parent = current_item.parent()
+        if parent is None:
+            return
+
+        idx = parent.indexOfChild(current_item)
+        pool = QThreadPool.globalInstance()
+
+        for delta in range(1, _DRIVE_PREFETCH_AHEAD + 1):
+            si = idx + delta
+            if si >= parent.childCount():
+                break
+            sibling = parent.child(si)
+            if sibling.data(0, _ROLE_TYPE) != "image":
+                continue
+            img_id: int = sibling.data(0, _ROLE_PAYLOAD)
+            file_path: str = sibling.data(0, _ROLE_FILE_PATH) or ""
+            if not file_path:
+                continue
+            if Path(file_path).exists():
+                continue  # already in mirror
+            if img_id in self._prefetch_set:
+                continue  # already downloading
+
+            self._prefetch_set.add(img_id)
+            from app.workers.drive_image_worker import DriveFetchRunnable
+            fetcher = DriveFetchRunnable(
+                drive_client=self._drive_client,
+                image_id=img_id,
+                local_path=file_path,
+                silent=True,
+            )
+            fetcher.signals.ready.connect(self._on_drive_fetch_ready)
+            pool.start(fetcher)
+            log.debug("Drive prefetch queued: image_id=%d", img_id)
+
+    # ──────────────────────────────────────────────────────────────────
     # Image loading
     # ──────────────────────────────────────────────────────────────────
 
@@ -1667,6 +1831,24 @@ class ImageBrowserPanel(QWidget):
             if (self._deol_viewing_color and self._deol_pair_color_path)
             else self._current_path
         )
+
+        # Drive mode: if mirror file is missing, download it first.
+        if not Path(display_path).exists() and self._drive_client is not None:
+            self._drive_pending_image_id = image_id
+            self._image_label.set_source_pixmap(None)
+            self._image_label.setText(t("ibp_drive_downloading"))
+            from app.workers.drive_image_worker import DriveFetchRunnable
+            fetcher = DriveFetchRunnable(
+                drive_client=self._drive_client,
+                image_id=image_id,
+                local_path=display_path,
+                silent=False,
+            )
+            fetcher.signals.ready.connect(self._on_drive_fetch_ready)
+            fetcher.signals.failed.connect(self._on_drive_fetch_failed)
+            QThreadPool.globalInstance().start(fetcher)
+            return
+
         img_bgr = load_image_bgr(display_path)
         if img_bgr is None:
             self._orig_img_bgr = None
