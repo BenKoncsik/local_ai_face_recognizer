@@ -264,18 +264,19 @@ def _apply_windows_exe(exe_path: Path) -> None:
         log_file,
         installer_log,
     )
-    # ShellExecuteW with "runas" properly requests admin rights via UAC prompt.
-    # subprocess.Popen does NOT trigger UAC, causing silent failure on most systems.
+    # The installer uses PrivilegesRequired=lowest (per-user install), so no
+    # UAC elevation is needed.  "open" lets the installer handle its own
+    # privilege requirements without forcing an unnecessary UAC prompt.
     params = f'/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /LOG="{installer_log}"'
     ret = ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", str(exe_path), params, None, 1
+        None, "open", str(exe_path), params, None, 1
     )
     log.info("ShellExecuteW returned %s for installer update", ret)
     if ret <= 32:
-        # ShellExecute returns a value > 32 on success; fall back to direct launch
+        # ShellExecute returns a value > 32 on success; fall back to direct launch.
         import subprocess
         log.error(
-            "ShellExecuteW failed with code %s; falling back to direct installer launch without elevation",
+            "ShellExecuteW failed with code %s; falling back to direct installer launch",
             ret,
         )
         subprocess.Popen(

@@ -508,8 +508,6 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path release | Out-Null
 
       - name: Package Windows assets
-        env:
-          IS_SELF_HOSTED_WINDOWS: ${{ contains(needs.pick-runner.outputs.windows_runner, 'self-hosted') }}
         shell: powershell
         run: |
           Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
@@ -520,15 +518,27 @@ jobs:
           )
           $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) {
-            if ($env:IS_SELF_HOSTED_WINDOWS -eq "true") {
-              Write-Warning "Inno Setup 6 ISCC.exe not found. Skipping Windows installer; portable zip was created. Install Inno Setup once on the self-hosted Windows runner to also publish the .exe installer."
-              exit 0
+            Write-Host "Inno Setup 6 not found — installing."
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install innosetup --no-progress -y
+            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+              winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements
+            } else {
+              $isTmp = Join-Path $env:RUNNER_TEMP "innosetup-installer.exe"
+              Invoke-WebRequest -UseBasicParsing `
+                -Uri "https://jrsoftware.org/download.php/is.exe" `
+                -OutFile $isTmp
+              Start-Process -FilePath $isTmp -ArgumentList "/VERYSILENT /NORESTART" -Wait
+              Remove-Item $isTmp -ErrorAction SilentlyContinue
             }
-            choco install innosetup --no-progress -y
             $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
-          if (-not $iscc) { Write-Error "Inno Setup 6 ISCC.exe not found after Chocolatey installation."; exit 1 }
+          if (-not $iscc) {
+            Write-Error "Inno Setup 6 (ISCC.exe) not found. Pre-install it on this runner, or ensure Chocolatey or winget is available."
+            exit 1
+          }
           & $iscc "/DAppVersion=${{ needs.prepare.outputs.package_version }}" "scripts\build_windows_installer.iss"
+          if ($LASTEXITCODE -ne 0) { Write-Error "ISCC exited with code $LASTEXITCODE"; exit $LASTEXITCODE }
 
       - name: Upload Windows artifact
         id: upload_windows
@@ -970,10 +980,7 @@ jobs:
             require_file "release/Face-Local-macOS-installer-${version}.dmg"
           fi
           if [ "${{ needs.build-windows.result }}" = "success" ]; then
-            require_file "release/Face-Local-windows-portable-${version}.zip"
-            if [ ! -f "release/Face-Local-windows-installer-${version}.exe" ]; then
-              echo "::warning::Windows installer is missing; publishing portable zip only."
-            fi
+            require_file "release/Face-Local-windows-installer-${version}.exe"
           fi
           if [ "${{ needs.build-linux-arm64.result }}" = "success" ]; then
             require_file "release/Face-Local-linux-arm64-installer-${version}.deb"
