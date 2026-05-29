@@ -60,6 +60,9 @@ class FamilyImageSearchCriteria:
     photo_date: str = ""
     place_text: str = ""
     relationship_filter: RelationshipFilter = "any"
+    # Free-text terms from the universal search bar that match any field
+    # (person name, image path, photo date, place name).
+    any_terms: tuple[str, ...] = ()
 
 
 def normalize_family_code(value: Optional[str]) -> Optional[str]:
@@ -530,6 +533,24 @@ class FamilyService:
         if criteria.place_text.strip():
             q = q.filter(Image.place.has(Place.name.ilike(self._like_pattern(criteria.place_text))))
 
+        for term in criteria.any_terms:
+            pattern = self._like_pattern(term)
+            person_ids = self._person_ids_matching_name(term)
+            conditions = [
+                Image.file_path.ilike(pattern),
+                Image.photo_date.ilike(pattern),
+                Image.place.has(Place.name.ilike(pattern)),
+            ]
+            if person_ids:
+                face_subq = (
+                    self._session.query(Face.image_id)
+                    .filter(Face.is_excluded == False)  # noqa: E712
+                    .filter(Face.person_id.in_(person_ids))
+                    .subquery()
+                )
+                conditions.append(Image.id.in_(face_subq))
+            q = q.filter(or_(*conditions))
+
         total = q.count()
         rows = q.order_by(Image.file_path).limit(limit).offset(offset).all()
         return [self._row_to_result(row) for row in rows], total
@@ -638,6 +659,95 @@ class FamilyService:
             person_count=int(row.person_count or 0),
             face_count=int(row.face_count or 0),
         )
+
+    # ------------------------------------------------------------------
+    # Autocomplete suggestions
+    # ------------------------------------------------------------------
+
+    def get_search_suggestions(
+        self, query: str, max_per_type: int = 5
+    ) -> list[tuple[str, str, str]]:
+        """Return autocomplete suggestions for the universal search bar.
+
+        Returns a list of (value, token_type, display_text) tuples.
+        token_type is one of: "person", "nickname", "family_code",
+        "place", "date", "image".
+        """
+        if not query.strip():
+            return []
+        pattern = f"%{query.strip()}%"
+        results: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def _add(value: str, token_type: str) -> None:
+            if value and (value, token_type) not in seen:
+                seen.add((value, token_type))
+                results.append((value, token_type, value))
+
+        for person in (
+            self._session.query(Person)
+            .filter(
+                or_(
+                    Person.name.ilike(pattern),
+                    Person.first_name.ilike(pattern),
+                    Person.last_name.ilike(pattern),
+                    Person.second_name.ilike(pattern),
+                )
+            )
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(person.name, "person")
+
+        for (nick,) in (
+            self._session.query(Person.nickname)
+            .filter(Person.nickname.ilike(pattern), Person.nickname.isnot(None))
+            .distinct()
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(nick, "nickname")
+
+        for (code,) in (
+            self._session.query(Person.family_code)
+            .filter(Person.family_code.ilike(pattern), Person.family_code.isnot(None))
+            .distinct()
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(code, "family_code")
+
+        for (pname,) in (
+            self._session.query(Place.name)
+            .filter(Place.name.ilike(pattern))
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(pname, "place")
+
+        for (date,) in (
+            self._session.query(Image.photo_date)
+            .filter(Image.photo_date.ilike(pattern), Image.photo_date.isnot(None))
+            .distinct()
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(date, "date")
+
+        q_lower = query.strip().lower()
+        for (fpath,) in (
+            self._session.query(Image.file_path)
+            .filter(Image.file_path.ilike(pattern))
+            .limit(max_per_type * 3)
+            .all()
+        ):
+            fname = Path(fpath).name
+            if q_lower in fname.lower():
+                _add(fname, "image")
+            if len([r for r in results if r[1] == "image"]) >= max_per_type:
+                break
+
+        return results
 
     def _get_or_create_relationship(
         self,

@@ -1,4 +1,4 @@
-"""Family/person based image search panel."""
+"""Family/person based image search panel — redesigned with UniversalSearchBar."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Optional
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -31,6 +32,16 @@ from app.services.family_service import (
     FamilyService,
 )
 from app.ui.i18n import t
+from app.ui.widgets.universal_search_bar import (
+    TOKEN_ANY,
+    TOKEN_DATE,
+    TOKEN_FAMILY_CODE,
+    TOKEN_IMAGE,
+    TOKEN_NICKNAME,
+    TOKEN_PERSON,
+    TOKEN_PLACE,
+    UniversalSearchBar,
+)
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +58,7 @@ def _hline() -> QFrame:
 
 
 class FamilySearchPanel(QWidget):
-    """Search images by comma-separated person names and optional metadata."""
+    """Search images by universal query and optional detailed metadata filters."""
 
     image_open_requested = Signal(int)
 
@@ -57,36 +68,46 @@ class FamilySearchPanel(QWidget):
         self._total = 0
         self._build_ui()
 
+    # ──────────────────────────────────────────────────────────────────
+    # Build
+    # ──────────────────────────────────────────────────────────────────
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setSpacing(6)
 
-        search_row = QHBoxLayout()
-        search_row.setContentsMargins(0, 0, 0, 0)
-        search_row.setSpacing(6)
+        # ── Universal search bar ──────────────────────────────────────
+        self._universal_bar = UniversalSearchBar(
+            suggest_fn=self._suggest,
+            parent=self,
+        )
+        self._universal_bar.search_requested.connect(self._search_first_page)
+        root.addWidget(self._universal_bar)
 
-        self._names_edit = QLineEdit()
-        self._names_edit.returnPressed.connect(self._search_first_page)
-        search_row.addWidget(self._names_edit, 1)
+        # ── Action row: checkbox + search button ──────────────────────
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
 
-        self._allow_others_btn = QPushButton()
-        self._allow_others_btn.setCheckable(True)
-        self._allow_others_btn.setChecked(True)
-        self._allow_others_btn.toggled.connect(self._update_allow_others_text)
-        search_row.addWidget(self._allow_others_btn)
+        self._only_person_cb = QCheckBox()
+        self._only_person_cb.setChecked(False)
+        action_row.addWidget(self._only_person_cb)
+        action_row.addStretch(1)
 
         self._search_btn = QPushButton()
         self._search_btn.clicked.connect(self._search_first_page)
-        search_row.addWidget(self._search_btn)
-        root.addLayout(search_row)
+        action_row.addWidget(self._search_btn)
+        root.addLayout(action_row)
 
+        # ── Details toggle ────────────────────────────────────────────
         self._details_toggle = QToolButton()
         self._details_toggle.setCheckable(True)
         self._details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_toggle.toggled.connect(self._on_details_toggled)
         root.addWidget(self._details_toggle, alignment=Qt.AlignLeft)
 
+        # ── Details section ───────────────────────────────────────────
         self._details = QWidget()
         details_layout = QFormLayout(self._details)
         details_layout.setContentsMargins(0, 0, 0, 0)
@@ -96,6 +117,10 @@ class FamilySearchPanel(QWidget):
 
         self._relationship_filter = QComboBox()
         details_layout.addRow(t("family_relationship_filter"), self._relationship_filter)
+
+        # Names field — moved here from the old top position
+        self._names_edit = QLineEdit()
+        details_layout.addRow(t("search_names_detail_label"), self._names_edit)
 
         self._person_text = QLineEdit()
         details_layout.addRow(t("family_detail_person_text"), self._person_text)
@@ -120,9 +145,12 @@ class FamilySearchPanel(QWidget):
 
         root.addWidget(_hline())
 
+        # ── Result header ─────────────────────────────────────────────
         result_hdr = QHBoxLayout()
         self._result_label = QLabel()
-        self._result_label.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        self._result_label.setStyleSheet(
+            "font-weight: bold; color: #888; font-size: 11px;"
+        )
         result_hdr.addWidget(self._result_label)
         result_hdr.addStretch()
         self._prev_btn = QPushButton()
@@ -133,6 +161,7 @@ class FamilySearchPanel(QWidget):
         result_hdr.addWidget(self._next_btn)
         root.addLayout(result_hdr)
 
+        # ── Results list ──────────────────────────────────────────────
         self._results = QListWidget()
         self._results.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
         self._results.itemDoubleClicked.connect(self._open_selected_item)
@@ -141,10 +170,17 @@ class FamilySearchPanel(QWidget):
 
         self.retranslate()
 
+    # ──────────────────────────────────────────────────────────────────
+    # Translations
+    # ──────────────────────────────────────────────────────────────────
+
     def retranslate(self) -> None:
-        self._names_edit.setPlaceholderText(t("family_names_placeholder"))
+        self._universal_bar.set_placeholder(t("search_universal_placeholder"))
+        self._universal_bar.retranslate()
+        self._only_person_cb.setText(t("search_only_person_cb"))
         self._search_btn.setText(t("family_search_btn"))
         self._details_toggle.setText(t("family_details_closed"))
+        self._names_edit.setPlaceholderText(t("search_names_detail_placeholder"))
         self._person_text.setPlaceholderText(t("family_detail_person_placeholder"))
         self._family_code.setPlaceholderText(t("example_family_code"))
         self._image_text.setPlaceholderText(t("family_detail_image_placeholder"))
@@ -154,11 +190,14 @@ class FamilySearchPanel(QWidget):
         self._next_btn.setText(t("family_next"))
         self._populate_relation_filter()
         self._populate_gender_filter()
-        self._update_allow_others_text()
         self._update_result_label()
 
     def refresh(self) -> None:
         pass
+
+    # ──────────────────────────────────────────────────────────────────
+    # Combo population
+    # ──────────────────────────────────────────────────────────────────
 
     def _populate_relation_filter(self) -> None:
         data = self._relationship_filter.currentData() or "any"
@@ -184,6 +223,10 @@ class FamilySearchPanel(QWidget):
         self._gender.setCurrentIndex(idx if idx >= 0 else 0)
         self._gender.blockSignals(False)
 
+    # ──────────────────────────────────────────────────────────────────
+    # Details toggle
+    # ──────────────────────────────────────────────────────────────────
+
     def _on_details_toggled(self, expanded: bool) -> None:
         self._details.setVisible(expanded)
         self._details_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
@@ -191,30 +234,83 @@ class FamilySearchPanel(QWidget):
             t("family_details_open") if expanded else t("family_details_closed")
         )
 
-    def _update_allow_others_text(self) -> None:
-        self._allow_others_btn.setText(
-            t("family_allow_others_yes")
-            if self._allow_others_btn.isChecked()
-            else t("family_allow_others_no")
-        )
+    # ──────────────────────────────────────────────────────────────────
+    # Autocomplete suggestion provider
+    # ──────────────────────────────────────────────────────────────────
+
+    def _suggest(self, query: str) -> list[tuple[str, str, str]]:
+        try:
+            with session_scope() as session:
+                return FamilyService(session).get_search_suggestions(query)
+        except Exception:
+            log.exception("FamilySearchPanel: autocomplete error")
+            return []
+
+    # ──────────────────────────────────────────────────────────────────
+    # Criteria building
+    # ──────────────────────────────────────────────────────────────────
 
     def _criteria(self) -> FamilyImageSearchCriteria:
-        terms = tuple(
-            part.strip()
-            for part in self._names_edit.text().split(",")
-            if part.strip()
+        tokens = self._universal_bar.get_tokens()
+
+        name_terms_bar: list[str] = []
+        place_text = self._place_text.text().strip()
+        photo_date = self._photo_date.text().strip()
+        image_text = self._image_text.text().strip()
+        any_terms: list[str] = []
+
+        for tok in tokens:
+            if tok.token_type in (TOKEN_PERSON, TOKEN_NICKNAME, TOKEN_FAMILY_CODE):
+                name_terms_bar.append(tok.value)
+            elif tok.token_type == TOKEN_PLACE:
+                if not place_text:
+                    place_text = tok.value
+                else:
+                    any_terms.append(tok.value)
+            elif tok.token_type == TOKEN_DATE:
+                if not photo_date:
+                    photo_date = tok.value
+                else:
+                    any_terms.append(tok.value)
+            elif tok.token_type == TOKEN_IMAGE:
+                if not image_text:
+                    image_text = tok.value
+                else:
+                    any_terms.append(tok.value)
+            else:
+                any_terms.append(tok.value)
+
+        detail_names = tuple(
+            p.strip()
+            for p in self._names_edit.text().split(",")
+            if p.strip()
+        )
+        all_name_terms = tuple(name_terms_bar) + detail_names
+
+        log.debug(
+            "FamilySearchPanel criteria: name_terms=%r any_terms=%r place=%r date=%r image=%r",
+            all_name_terms,
+            any_terms,
+            place_text,
+            photo_date,
+            image_text,
         )
         return FamilyImageSearchCriteria(
-            name_terms=terms,
-            allow_other_people=self._allow_others_btn.isChecked(),
+            name_terms=all_name_terms,
+            allow_other_people=not self._only_person_cb.isChecked(),
             person_text=self._person_text.text().strip(),
             gender=self._gender.currentData(),
             family_code=self._family_code.text().strip(),
-            image_text=self._image_text.text().strip(),
-            photo_date=self._photo_date.text().strip(),
-            place_text=self._place_text.text().strip(),
+            image_text=image_text,
+            photo_date=photo_date,
+            place_text=place_text,
             relationship_filter=self._relationship_filter.currentData() or "any",
+            any_terms=tuple(any_terms),
         )
+
+    # ──────────────────────────────────────────────────────────────────
+    # Search execution
+    # ──────────────────────────────────────────────────────────────────
 
     def _search_first_page(self) -> None:
         self._offset = 0

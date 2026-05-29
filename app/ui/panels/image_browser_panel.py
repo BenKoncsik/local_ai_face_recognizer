@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -56,9 +58,11 @@ from PySide6.QtWidgets import (
 
 from app.ui.widgets.person_search_select import PersonSearchSelect
 from app.ui.widgets.place_search_select import PlaceSearchSelect
+from app.ui.widgets.universal_search_bar import UniversalSearchBar
 
 from app.db.database import session_scope
 from app.db.models import Face, Image, Person, Place
+from app.services.family_service import FamilyImageSearchCriteria, FamilyService
 from app.services.identity_service import IdentityService
 from app.services.image_browser_service import (
     FolderSummary,
@@ -674,20 +678,38 @@ class ImageBrowserPanel(QWidget):
         )
         tp_layout.addWidget(self._tree_hdr_lbl)
 
-        filter_row = QHBoxLayout()
-        filter_row.setContentsMargins(0, 0, 0, 0)
-        filter_row.setSpacing(4)
-        self._place_filter_edit = QLineEdit()
-        self._place_filter_edit.setClearButtonEnabled(True)
-        self._place_filter_edit.returnPressed.connect(self._apply_place_filter_by_name)
-        filter_row.addWidget(self._place_filter_edit, 1)
-        self._place_filter_btn = QPushButton()
-        self._place_filter_btn.clicked.connect(self._apply_place_filter_by_name)
-        filter_row.addWidget(self._place_filter_btn)
-        self._place_filter_clear_btn = QPushButton()
-        self._place_filter_clear_btn.clicked.connect(self._clear_place_filter)
-        filter_row.addWidget(self._place_filter_clear_btn)
-        tp_layout.addLayout(filter_row)
+        # Universal search bar (replaces the old place-filter row)
+        self._tree_search_bar = UniversalSearchBar(
+            suggest_fn=self._tree_suggest,
+            parent=self._tree_panel,
+        )
+        self._tree_search_bar.tokens_changed.connect(self._on_tree_search_changed)
+        self._tree_search_bar.search_requested.connect(self._on_tree_search_changed)
+        tp_layout.addWidget(self._tree_search_bar)
+
+        # Flat search results list (shown instead of tree when search is active)
+        self._search_results_list = QListWidget()
+        self._search_results_list.setIconSize(QSize(_TREE_THUMB_SIZE, _TREE_THUMB_SIZE))
+        self._search_results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._search_results_list.setStyleSheet(
+            "QListWidget {"
+            "  border: none;"
+            "  background: #181825;"
+            "  color: #cdd6f4;"
+            "  outline: 0;"
+            "}"
+            "QListWidget::item {"
+            "  padding: 3px 4px;"
+            "  border-bottom: 1px solid #1e1e2e;"
+            "}"
+            "QListWidget::item:selected { background: #2d2d50; }"
+            "QListWidget::item:hover:!selected { background: #22223a; }"
+        )
+        self._search_results_list.itemDoubleClicked.connect(
+            self._on_search_result_double_clicked
+        )
+        self._search_results_list.hide()
+        tp_layout.addWidget(self._search_results_list, stretch=1)
 
         self._file_tree = _BrowserTree()
         self._file_tree.setHeaderHidden(True)
@@ -1073,9 +1095,8 @@ class ImageBrowserPanel(QWidget):
 
     def retranslate(self) -> None:
         self._tree_hdr_lbl.setText(t("ib3_folders_hdr"))
-        self._place_filter_edit.setPlaceholderText(t("ibp_place_filter_placeholder"))
-        self._place_filter_btn.setText(t("ibp_place_filter_btn"))
-        self._place_filter_clear_btn.setText(t("ibp_place_filter_clear"))
+        self._tree_search_bar.set_placeholder(t("ibp_universal_placeholder"))
+        self._tree_search_bar.retranslate()
         self._toggle_left_btn.setToolTip(t("ib3_toggle_left_tip"))
         self._toggle_right_btn.setToolTip(t("ib3_toggle_right_tip"))
         self._draw_mode_btn.setText(t("ibp_manual_mark"))
@@ -2550,27 +2571,117 @@ class ImageBrowserPanel(QWidget):
         self._reload_places()
         self._update_place_panel(place_id, place_name, anon, source)
 
-    def _apply_place_filter_by_name(self) -> None:
-        name = self._place_filter_edit.text().strip()
-        if not name:
-            self._clear_place_filter()
+    # ── Universal tree search ─────────────────────────────────────────
+
+    def _tree_suggest(self, query: str) -> list[tuple[str, str, str]]:
+        """Provide autocomplete suggestions for the image-browser search bar."""
+        try:
+            with session_scope() as session:
+                return FamilyService(session).get_search_suggestions(query)
+        except Exception:
+            log.exception("ImageBrowserPanel: tree search autocomplete error")
+            return []
+
+    def _on_tree_search_changed(self) -> None:
+        tokens = self._tree_search_bar.get_tokens()
+        if not tokens:
+            self._search_results_list.hide()
+            self._file_tree.show()
+            self._tree_hdr_lbl.setText(t("ib3_folders_hdr"))
             return
-        with session_scope() as session:
-            place = PlaceService(session).find_by_name(name)
-            if place is None:
-                QMessageBox.information(
-                    self,
-                    t("ibp_place_filter_missing_title"),
-                    t("ibp_place_filter_missing_msg", name=name),
+        self._run_tree_search(tokens)
+
+    def _run_tree_search(self, tokens) -> None:
+        from app.ui.widgets.universal_search_bar import (
+            TOKEN_ANY, TOKEN_DATE, TOKEN_FAMILY_CODE, TOKEN_IMAGE,
+            TOKEN_NICKNAME, TOKEN_PERSON, TOKEN_PLACE,
+        )
+        name_terms: list[str] = []
+        any_terms: list[str] = []
+        place_text = ""
+        photo_date = ""
+        image_text = ""
+
+        for tok in tokens:
+            if tok.token_type in (TOKEN_PERSON, TOKEN_NICKNAME, TOKEN_FAMILY_CODE):
+                name_terms.append(tok.value)
+            elif tok.token_type == TOKEN_PLACE:
+                if not place_text:
+                    place_text = tok.value
+                else:
+                    any_terms.append(tok.value)
+            elif tok.token_type == TOKEN_DATE:
+                if not photo_date:
+                    photo_date = tok.value
+                else:
+                    any_terms.append(tok.value)
+            elif tok.token_type == TOKEN_IMAGE:
+                if not image_text:
+                    image_text = tok.value
+                else:
+                    any_terms.append(tok.value)
+            else:
+                any_terms.append(tok.value)
+
+        criteria = FamilyImageSearchCriteria(
+            name_terms=tuple(name_terms),
+            allow_other_people=True,
+            image_text=image_text,
+            photo_date=photo_date,
+            place_text=place_text,
+            any_terms=tuple(any_terms),
+        )
+        log.debug("ImageBrowserPanel tree search criteria: %r", criteria)
+
+        try:
+            with session_scope() as session:
+                results, total = FamilyService(session).search_images_by_criteria(
+                    criteria, limit=200
                 )
-                return
-            self._place_filter_id = place.id
-        self._current_tree_item = None
-        self.refresh()
+        except Exception:
+            log.exception("ImageBrowserPanel: tree search error")
+            results, total = [], 0
+
+        self._search_results_list.clear()
+        for result in results:
+            item = QListWidgetItem(result.filename)
+            item.setData(Qt.UserRole, result.image_id)
+            item.setToolTip(result.file_path)
+            pix = QPixmap(result.file_path)
+            if not pix.isNull():
+                item.setIcon(
+                    QIcon(
+                        pix.scaled(
+                            _TREE_THUMB_SIZE,
+                            _TREE_THUMB_SIZE,
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation,
+                        )
+                    )
+                )
+            self._search_results_list.addItem(item)
+
+        if not results:
+            placeholder = QListWidgetItem(t("ibp_search_no_results"))
+            placeholder.setFlags(Qt.NoItemFlags)
+            self._search_results_list.addItem(placeholder)
+
+        self._tree_hdr_lbl.setText(t("ibp_search_results_hdr", n=total))
+        self._file_tree.hide()
+        self._search_results_list.show()
+
+    def _on_search_result_double_clicked(self, item: QListWidgetItem) -> None:
+        image_id = item.data(Qt.UserRole)
+        if image_id is not None:
+            self._load_image(int(image_id))
+
+    # ── (legacy placeholder — no longer exposed in UI) ────────────────
+
+    def _apply_place_filter_by_name(self) -> None:
+        pass
 
     def _clear_place_filter(self) -> None:
         self._place_filter_id = None
-        self._place_filter_edit.clear()
         self._current_tree_item = None
         self.refresh()
 

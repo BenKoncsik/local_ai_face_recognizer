@@ -1163,6 +1163,39 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "A Google Drive mód be van kapcsolva, de a projekt még nincs megnyitva.\n"
               "Várj, amíg a Drive kapcsolat felépül, majd próbáld újra a beolvasást.",
     },
+
+    # ── Universal search bar ─────────────────────────────────────────────────
+    "search_universal_placeholder": {
+        "en": "Search persons, dates, places, files…",
+        "hu": "Keresés: személyek, dátumok, helyek, fájlok…",
+    },
+    "search_token_person":      {"en": "Person",    "hu": "Személy"},
+    "search_token_nickname":    {"en": "Nickname",  "hu": "Becenév"},
+    "search_token_family_code": {"en": "Family ID", "hu": "Csal. azon."},
+    "search_token_place":       {"en": "Place",     "hu": "Hely"},
+    "search_token_date":        {"en": "Date",      "hu": "Dátum"},
+    "search_token_image":       {"en": "Image",     "hu": "Képadat"},
+    "search_only_person_cb": {
+        "en": "Only this person",
+        "hu": "Csak az adott személy",
+    },
+    "search_names_detail_label": {"en": "Names", "hu": "Nevek"},
+    "search_names_detail_placeholder": {
+        "en": "Names separated by commas, e.g. Benedek, Matyi",
+        "hu": "Nevek vesszővel elválasztva, pl. Benedek, Matyi",
+    },
+    "ibp_universal_placeholder": {
+        "en": "Filter by filename, folder, place, date, person…",
+        "hu": "Szűrés fájlnév, mappa, hely, dátum, személy szerint…",
+    },
+    "ibp_search_results_hdr": {
+        "en": "Search results ({n})",
+        "hu": "Keresési találatok ({n})",
+    },
+    "ibp_search_no_results": {
+        "en": "No matching images.",
+        "hu": "Nincs megfelelő kép.",
+    },
 }
 
 
