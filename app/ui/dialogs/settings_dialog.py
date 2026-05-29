@@ -68,6 +68,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
+        tabs.addTab(self._build_tab_shortcuts(), t("settings_tab_shortcuts"))
         tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
         outer.addWidget(tabs, stretch=1)
 
@@ -256,6 +257,11 @@ class SettingsDialog(QDialog):
         layout.addWidget(deol_group)
         layout.addStretch()
         return widget
+
+    def _build_tab_shortcuts(self) -> QWidget:
+        """Build the keyboard shortcuts configuration tab."""
+        from app.ui.dialogs.shortcuts_settings_tab import ShortcutsSettingsTab
+        return ShortcutsSettingsTab(self)
 
     def _build_tab_gdrive(self) -> QWidget:
         """Build the Google Drive tab — implementation lives in its own module."""

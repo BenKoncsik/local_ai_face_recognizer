@@ -79,6 +79,12 @@ class Image(Base):
     exif_latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     exif_longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Image-level precise GPS coordinates (separate from the linked Place's
+    # coordinates).  NULL means not set.  Priority over place coordinates when
+    # resolving the effective GPS of a photo.
+    image_latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    image_longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
     # True once detection + embedding have been attempted for this file
     detection_done: Mapped[bool] = mapped_column(Boolean, default=False)
     embedding_done: Mapped[bool] = mapped_column(Boolean, default=False)

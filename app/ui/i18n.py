@@ -645,7 +645,39 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_place_rename_placeholder": {"en": "Name anonymous GPS place…",
                                      "hu": "Névtelen GPS-hely neve…"},
     "ibp_place_rename_btn": {"en": "Rename place", "hu": "Hely átnevezése"},
+    "ibp_place_coords_label": {"en": "Place GPS: {lat:.6f}, {lon:.6f}",
+                               "hu": "Helyszín GPS: {lat:.6f}, {lon:.6f}"},
+    "ibp_place_coords_none":  {"en": "Place GPS: —", "hu": "Helyszín GPS: —"},
     "place_search_placeholder": {"en": "Search place…", "hu": "Hely keresése…"},
+
+    # ── Image GPS coordinates ───────────────────────────────────────────
+    "ibp_gps_hdr":               {"en": "Image GPS coordinates:",
+                                  "hu": "Kép GPS koordinátája:"},
+    "ibp_gps_placeholder":       {"en": "lat, lon  e.g. 46.818068, 17.785863",
+                                  "hu": "szél., hossz.  pl. 46.818068, 17.785863"},
+    "ibp_gps_save_btn":          {"en": "Save GPS", "hu": "GPS mentése"},
+    "ibp_gps_clear_btn":         {"en": "Clear", "hu": "Törlés"},
+    "ibp_gps_source_exif":       {"en": "Source: EXIF", "hu": "Forrás: EXIF"},
+    "ibp_gps_source_manual":     {"en": "Source: manual", "hu": "Forrás: kézi"},
+    "ibp_gps_source_place":      {"en": "Source: inherited from place",
+                                  "hu": "Forrás: helyszíntől örökölt"},
+    "ibp_gps_source_none":       {"en": "Source: none", "hu": "Forrás: nincs"},
+    "ibp_gps_invalid":           {"en": "Invalid coordinates — not saved",
+                                  "hu": "Érvénytelen koordináta — nem mentve"},
+    "ibp_gps_write_exif_place":  {"en": "Write place GPS to EXIF",
+                                  "hu": "Helyszín GPS írása EXIF-be"},
+    "ibp_gps_write_exif_place_tip": {
+        "en": "Write the linked place's coordinates into this image's EXIF GPS fields",
+        "hu": "A hozzárendelt helyszín koordinátájának beírása a kép EXIF GPS mezőibe",
+    },
+
+    # ── EXIF date update button ─────────────────────────────────────────
+    "ibp_update_exif_date_btn":  {"en": "Update EXIF date from photo date",
+                                  "hu": "EXIF készítési dátum frissítése a kép dátuma alapján"},
+    "ibp_update_exif_date_tip":  {
+        "en": "Write the photo date into the image EXIF DateTimeOriginal field",
+        "hu": "A kép dátumának beírása az EXIF DateTimeOriginal mezőbe",
+    },
 
     # ── Places / Locations panel ────────────────────────────────────────
     "places_filter_name": {"en": "Name…", "hu": "Név…"},
@@ -693,9 +725,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                 "hu": "Infó panel mutatása / elrejtése"},
 
     # ── Settings tabs ────────────────────────────────────────────────────
-    "settings_tab_general":     {"en": "General",          "hu": "Általános"},
-    "settings_tab_pairing":     {"en": "Image Pairing",    "hu": "Képpárosítás"},
-    "settings_tab_quality":     {"en": "Face Quality",     "hu": "Arc minőség"},
+    "settings_tab_general":     {"en": "General",               "hu": "Általános"},
+    "settings_tab_pairing":     {"en": "Image Pairing",         "hu": "Képpárosítás"},
+    "settings_tab_quality":     {"en": "Face Quality",          "hu": "Arc minőség"},
+    "settings_tab_shortcuts":   {"en": "Shortcuts",             "hu": "Billentyűparancsok"},
 
     # ── Face quality filter settings ──────────────────────────────────────
     "fq_group":             {"en": "Face Quality Filter",
@@ -1196,6 +1229,54 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "en": "No matching images.",
         "hu": "Nincs megfelelő kép.",
     },
+
+    # ── Keyboard shortcuts settings ──────────────────────────────────────
+    "sc_enable_all":        {"en": "Enable keyboard shortcuts",
+                             "hu": "Billentyűparancsok engedélyezése"},
+    "sc_modify_btn":        {"en": "Modify",     "hu": "Módosít"},
+    "sc_save_btn":          {"en": "Save",        "hu": "Mentés"},
+    "sc_cancel_btn":        {"en": "Cancel",      "hu": "Mégse"},
+    "sc_delete_btn":        {"en": "Delete",      "hu": "Törlés"},
+    "sc_not_set":           {"en": "Not set",     "hu": "Nincs beállítva"},
+    "sc_press_key":         {"en": "⏺ Press a key…",
+                             "hu": "⏺ Nyomj le egy billentyűt…"},
+    "sc_conflict_msg":      {"en": "Already in use: {func}",
+                             "hu": "Ez a kombináció már használatban van: {func}"},
+
+    # categories
+    "sc_cat_general":       {"en": "General",       "hu": "Általános"},
+    "sc_cat_image":         {"en": "Image Browser", "hu": "Képböngésző"},
+    "sc_cat_faces":         {"en": "Faces",          "hu": "Arcok"},
+    "sc_cat_collage":       {"en": "Collage",        "hu": "Kollázs"},
+
+    # function names
+    "sc_fn_settings":       {"en": "Open Settings",          "hu": "Beállítások megnyitása"},
+    "sc_fn_search_focus":   {"en": "Focus Search",           "hu": "Keresés fókusz"},
+    "sc_fn_fullscreen":     {"en": "Fullscreen",             "hu": "Teljes képernyő"},
+    "sc_fn_log_panel":      {"en": "Log Panel",              "hu": "Log panel"},
+    "sc_fn_image_prev":     {"en": "Previous Image",         "hu": "Előző kép"},
+    "sc_fn_image_next":     {"en": "Next Image",             "hu": "Következő kép"},
+    "sc_fn_manual_sel":     {"en": "Manual Selection Mode",  "hu": "Kézi kijelölés mód"},
+    "sc_fn_face_assign":    {"en": "Assign to Person",       "hu": "Személyhez adás"},
+    "sc_fn_face_confirm":   {"en": "Confirm Assignment",     "hu": "Hozzárendelés véglegesítése"},
+    "sc_fn_deselect":       {"en": "Deselect / Cancel (Esc)","hu": "Kijelölés megszüntetése (Esc)"},
+    "sc_fn_bbox_delete":    {"en": "Delete BBox",            "hu": "BBox törlés"},
+    "sc_fn_bbox_edit":      {"en": "Edit BBox",              "hu": "BBox módosítás"},
+    "sc_fn_bbox_next":      {"en": "Next BBox",              "hu": "Következő bbox"},
+    "sc_fn_bbox_prev":      {"en": "Previous BBox",          "hu": "Előző bbox"},
+    "sc_fn_zoom_in":        {"en": "Zoom In",                "hu": "Zoom be"},
+    "sc_fn_zoom_out":       {"en": "Zoom Out",               "hu": "Zoom ki"},
+    "sc_fn_fit":            {"en": "Fit to Screen",          "hu": "Fit to screen"},
+    "sc_fn_info":           {"en": "Info Panel",             "hu": "Információ panel"},
+    "sc_fn_person_new":     {"en": "New Person",             "hu": "Új személy létrehozása"},
+    "sc_fn_person_rename":  {"en": "Rename Person",          "hu": "Átnevezés"},
+    "sc_fn_person_merge":   {"en": "Merge Persons",          "hu": "Merge"},
+    "sc_fn_person_reassign":{"en": "Reassign Face",          "hu": "Újrahozzárendelés"},
+    "sc_fn_person_exclude": {"en": "Exclude Face",           "hu": "Kizárás"},
+    "sc_fn_collage_import": {"en": "Import Collage",         "hu": "Kollázs import"},
+    "sc_fn_face_overlay":   {"en": "Face Overlay Toggle",    "hu": "Face overlay kapcsoló"},
+    "sc_fn_node_delete":    {"en": "Delete Node",            "hu": "Node törlés"},
+    "sc_fn_html_export":    {"en": "HTML Export",            "hu": "HTML export"},
 }
 
 

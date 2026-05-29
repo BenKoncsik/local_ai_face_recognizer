@@ -100,6 +100,8 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("place_id", "INTEGER REFERENCES places(id) ON DELETE SET NULL"),
             ("exif_latitude", "FLOAT"),
             ("exif_longitude", "FLOAT"),
+            ("image_latitude", "FLOAT"),
+            ("image_longitude", "FLOAT"),
         ],
         "faces": [
             ("assignment_source", "VARCHAR(32)"),

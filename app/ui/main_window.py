@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -116,6 +116,39 @@ class MainWindow(QMainWindow):
         self.resize(1280, 780)
         self._update_ready.connect(self._on_update_found)
         self._start_update_check()
+        self._setup_shortcuts()
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+
+    def _setup_shortcuts(self) -> None:
+        """Install app-level event filter and register global shortcut handlers."""
+        from app.services.shortcut_service import get_shortcut_service
+        svc = get_shortcut_service()
+        svc.register("general.settings",  self._on_settings)
+        svc.register("general.log_panel", self._toggle_log_panel)
+        QApplication.instance().installEventFilter(self)
+
+    def _toggle_log_panel(self) -> None:
+        if hasattr(self, "_log_dock"):
+            self._log_dock.setVisible(not self._log_dock.isVisible())
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        # Only dispatch when our window (not a dialog) is active
+        if QApplication.activeWindow() is not self:
+            return False
+        from app.services.shortcut_service import get_shortcut_service, is_input_widget, normalize_key
+        svc = get_shortcut_service()
+        if not svc.is_enabled():
+            return False
+        focused = QApplication.focusWidget()
+        if is_input_widget(focused):
+            return False
+        key_str = normalize_key(event)
+        return svc.dispatch(key_str)
 
     # ------------------------------------------------------------------
     # UI construction

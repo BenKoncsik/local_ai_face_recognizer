@@ -445,11 +445,21 @@ class _BrowserTree(QTreeWidget):
     def keyPressEvent(self, event) -> None:
         current = self.currentItem()
         if current is not None and current.data(0, _ROLE_TYPE) == "image":
-            if event.key() == Qt.Key_Left:
+            from app.services.shortcut_service import get_shortcut_service, normalize_key
+            svc = get_shortcut_service()
+            key_str = normalize_key(event)
+            if svc.is_enabled():
+                prev_sc = svc.get("image.previous")
+                next_sc = svc.get("image.next")
+                prev_key = (prev_sc.current_key if prev_sc and prev_sc.current_key else "Left")
+                next_key = (next_sc.current_key if next_sc and next_sc.current_key else "Right")
+            else:
+                prev_key, next_key = "Left", "Right"
+            if key_str == prev_key:
                 self.go_prev.emit()
                 event.accept()
                 return
-            elif event.key() == Qt.Key_Right:
+            elif key_str == next_key:
                 self.go_next.emit()
                 event.accept()
                 return
@@ -543,10 +553,20 @@ class _DrawableImageLabel(QLabel):
             self.rect_drawn.emit(rect)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Left:
+        from app.services.shortcut_service import get_shortcut_service, normalize_key
+        svc = get_shortcut_service()
+        key_str = normalize_key(event)
+        if svc.is_enabled():
+            prev_sc = svc.get("image.previous")
+            next_sc = svc.get("image.next")
+            prev_key = (prev_sc.current_key if prev_sc and prev_sc.current_key else "Left")
+            next_key = (next_sc.current_key if next_sc and next_sc.current_key else "Right")
+        else:
+            prev_key, next_key = "Left", "Right"
+        if key_str == prev_key:
             self.go_prev.emit()
             event.accept()
-        elif event.key() == Qt.Key_Right:
+        elif key_str == next_key:
             self.go_next.emit()
             event.accept()
         else:
@@ -944,6 +964,10 @@ class ImageBrowserPanel(QWidget):
         self._exif_row_widget.setVisible(False)
         info_layout.addWidget(self._exif_row_widget)
 
+        self._update_exif_date_btn = QPushButton()
+        self._update_exif_date_btn.clicked.connect(self._update_exif_date)
+        info_layout.addWidget(self._update_exif_date_btn)
+
         info_layout.addWidget(_hline())
 
         self._place_hdr = QLabel()
@@ -981,6 +1005,42 @@ class ImageBrowserPanel(QWidget):
         self._place_rename_btn = QPushButton()
         self._place_rename_btn.clicked.connect(self._rename_current_place)
         info_layout.addWidget(self._place_rename_btn)
+
+        self._place_coords_label = QLabel()
+        self._place_coords_label.setStyleSheet("color: #888; font-size: 10px;")
+        self._place_coords_label.setWordWrap(True)
+        info_layout.addWidget(self._place_coords_label)
+
+        info_layout.addWidget(_hline())
+
+        # ── Image-level GPS coordinates ───────────────────────────────
+        self._gps_hdr = QLabel()
+        self._gps_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._gps_hdr)
+
+        self._gps_source_label = QLabel()
+        self._gps_source_label.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+        info_layout.addWidget(self._gps_source_label)
+
+        self._gps_edit = QLineEdit()
+        self._gps_edit.returnPressed.connect(self._save_image_coords)
+        info_layout.addWidget(self._gps_edit)
+
+        gps_btns = QHBoxLayout()
+        gps_btns.setContentsMargins(0, 0, 0, 0)
+        gps_btns.setSpacing(4)
+        self._gps_save_btn = QPushButton()
+        self._gps_save_btn.clicked.connect(self._save_image_coords)
+        gps_btns.addWidget(self._gps_save_btn)
+        self._gps_clear_btn = QPushButton()
+        self._gps_clear_btn.clicked.connect(self._clear_image_coords)
+        gps_btns.addWidget(self._gps_clear_btn)
+        info_layout.addLayout(gps_btns)
+
+        self._gps_write_place_btn = QPushButton()
+        self._gps_write_place_btn.clicked.connect(self._write_place_coords_to_exif)
+        self._gps_write_place_btn.setVisible(False)
+        info_layout.addWidget(self._gps_write_place_btn)
 
         info_layout.addWidget(_hline())
 
@@ -1119,6 +1179,14 @@ class ImageBrowserPanel(QWidget):
         self._place_rename_edit.setPlaceholderText(t("ibp_place_rename_placeholder"))
         self._place_rename_btn.setText(t("ibp_place_rename_btn"))
         self._place_search.retranslate()
+        self._gps_hdr.setText(t("ibp_gps_hdr"))
+        self._gps_edit.setPlaceholderText(t("ibp_gps_placeholder"))
+        self._gps_save_btn.setText(t("ibp_gps_save_btn"))
+        self._gps_clear_btn.setText(t("ibp_gps_clear_btn"))
+        self._gps_write_place_btn.setText(t("ibp_gps_write_exif_place"))
+        self._gps_write_place_btn.setToolTip(t("ibp_gps_write_exif_place_tip"))
+        self._update_exif_date_btn.setText(t("ibp_update_exif_date_btn"))
+        self._update_exif_date_btn.setToolTip(t("ibp_update_exif_date_tip"))
         self._face_hdr.setText(t("ibp_face_hdr"))
         self._face_status_label.setText(t("ibp_click_face"))
         self._rename_btn.setText(t("ibp_rename_btn"))
@@ -1781,6 +1849,12 @@ class ImageBrowserPanel(QWidget):
             current_place_name = img.place.name if img.place else ""
             current_place_is_anonymous = bool(img.place and img.place.is_anonymous)
             current_place_source = img.place.source if img.place else None
+            current_place_lat = img.place.latitude if img.place else None
+            current_place_lon = img.place.longitude if img.place else None
+            current_image_lat = img.image_latitude
+            current_image_lon = img.image_longitude
+            current_exif_lat = img.exif_latitude
+            current_exif_lon = img.exif_longitude
             # Auto-fill date from filename when not yet set
             if not photo_date:
                 from_name = _parse_date_from_filename(img.file_path)
@@ -1839,6 +1913,17 @@ class ImageBrowserPanel(QWidget):
             current_place_name,
             current_place_is_anonymous,
             current_place_source,
+            current_place_lat,
+            current_place_lon,
+        )
+        self._load_image_coords(
+            current_image_lat,
+            current_image_lon,
+            current_exif_lat,
+            current_exif_lon,
+            current_place_lat,
+            current_place_lon,
+            current_place_id,
         )
 
         p = Path(self._current_path)
@@ -1906,6 +1991,7 @@ class ImageBrowserPanel(QWidget):
         self._filename_label.setText("")
         self._exif_row_widget.setVisible(False)
         self._update_place_panel(None, "", False, None)
+        self._load_image_coords(None, None, None, None, None, None, None)
         self._clear_face_panel()
         self._hide_inline_editor()
         self._draw_mode_btn.setChecked(False)
@@ -2500,6 +2586,8 @@ class ImageBrowserPanel(QWidget):
         place_name: str,
         is_anonymous: bool,
         source: Optional[str],
+        place_lat: Optional[float] = None,
+        place_lon: Optional[float] = None,
     ) -> None:
         self._place_search.set_current_by_id(place_id)
         self._place_rename_edit.setEnabled(place_id is not None)
@@ -2507,12 +2595,19 @@ class ImageBrowserPanel(QWidget):
         if place_id is None:
             self._place_status_label.setText(t("ibp_place_none"))
             self._place_rename_edit.clear()
+            self._place_coords_label.setText(t("ibp_place_coords_none"))
             return
         label = place_name
         if is_anonymous and source == "exif":
             label = f"{ANONYMOUS_GPS_PLACE_NAME} #{place_id}"
         self._place_status_label.setText(label)
         self._place_rename_edit.setText("" if is_anonymous else place_name)
+        if place_lat is not None and place_lon is not None:
+            self._place_coords_label.setText(
+                t("ibp_place_coords_label", lat=place_lat, lon=place_lon)
+            )
+        else:
+            self._place_coords_label.setText(t("ibp_place_coords_none"))
 
     def _on_place_selected(self, _place_id: int) -> None:
         pass
@@ -2529,9 +2624,25 @@ class ImageBrowserPanel(QWidget):
             name = place.name if place else ""
             anon = bool(place and place.is_anonymous)
             source = place.source if place else None
+            place_lat = place.latitude if place else None
+            place_lon = place.longitude if place else None
+            img = session.get(Image, self._current_image_id)
+            img_exif_lat = img.exif_latitude if img else None
+            img_image_lat = img.image_latitude if img else None
         log.info("Place assigned to image %d: %s", self._current_image_id, place_id)
         self._reload_places()
-        self._update_place_panel(place_id, name, anon, source)
+        self._update_place_panel(place_id, name, anon, source, place_lat, place_lon)
+        # Requirement #4: write place GPS to EXIF if no EXIF GPS and no image-level coords
+        if (
+            img_exif_lat is None
+            and img_image_lat is None
+            and place_lat is not None
+            and place_lon is not None
+            and self._current_path
+        ):
+            from app.utils.exif import write_exif_gps
+            write_exif_gps(self._current_path, place_lat, place_lon)
+        self._reload_gps_panel()
 
     def _create_or_assign_place_by_text(self) -> None:
         if self._current_image_id is None:
@@ -2548,9 +2659,25 @@ class ImageBrowserPanel(QWidget):
             place_name = place.name
             anon = place.is_anonymous
             source = place.source
+            place_lat = place.latitude
+            place_lon = place.longitude
+            img = session.get(Image, self._current_image_id)
+            img_exif_lat = img.exif_latitude if img else None
+            img_image_lat = img.image_latitude if img else None
         log.info("Place created/assigned to image %d: %r", self._current_image_id, name)
         self._reload_places()
-        self._update_place_panel(place_id, place_name, anon, source)
+        self._update_place_panel(place_id, place_name, anon, source, place_lat, place_lon)
+        # Requirement #4: write place GPS to EXIF if no EXIF GPS and no image-level coords
+        if (
+            img_exif_lat is None
+            and img_image_lat is None
+            and place_lat is not None
+            and place_lon is not None
+            and self._current_path
+        ):
+            from app.utils.exif import write_exif_gps
+            write_exif_gps(self._current_path, place_lat, place_lon)
+        self._reload_gps_panel()
 
     def _rename_current_place(self) -> None:
         if self._current_image_id is None:
@@ -2567,9 +2694,166 @@ class ImageBrowserPanel(QWidget):
             place_name = place.name
             anon = place.is_anonymous
             source = place.source
+            place_lat = place.latitude
+            place_lon = place.longitude
         log.info("Place renamed: %d -> %r", place_id, new_name)
         self._reload_places()
-        self._update_place_panel(place_id, place_name, anon, source)
+        self._update_place_panel(place_id, place_name, anon, source, place_lat, place_lon)
+
+    # ── Image GPS coordinates ─────────────────────────────────────────
+
+    def _load_image_coords(
+        self,
+        image_lat: Optional[float],
+        image_lon: Optional[float],
+        exif_lat: Optional[float],
+        exif_lon: Optional[float],
+        place_lat: Optional[float],
+        place_lon: Optional[float],
+        place_id: Optional[int],
+    ) -> None:
+        """Populate the GPS coordinate widgets according to priority order."""
+        self._gps_edit.blockSignals(True)
+        if image_lat is not None and image_lon is not None:
+            self._gps_edit.setText(f"{image_lat:.6f}, {image_lon:.6f}")
+            self._gps_source_label.setText(t("ibp_gps_source_manual"))
+            self._gps_source_label.setStyleSheet("color: #88ee88; font-size: 10px; font-style: italic;")
+        elif exif_lat is not None and exif_lon is not None:
+            self._gps_edit.setText(f"{exif_lat:.6f}, {exif_lon:.6f}")
+            self._gps_source_label.setText(t("ibp_gps_source_exif"))
+            self._gps_source_label.setStyleSheet("color: #aaddaa; font-size: 10px; font-style: italic;")
+        elif place_lat is not None and place_lon is not None:
+            self._gps_edit.setText(f"{place_lat:.6f}, {place_lon:.6f}")
+            self._gps_source_label.setText(t("ibp_gps_source_place"))
+            self._gps_source_label.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+        else:
+            self._gps_edit.clear()
+            self._gps_source_label.setText(t("ibp_gps_source_none"))
+            self._gps_source_label.setStyleSheet("color: #555; font-size: 10px; font-style: italic;")
+        self._gps_edit.blockSignals(False)
+
+        # Show the "write place coords to EXIF" button only when applicable:
+        # no EXIF GPS, no image-level coords, but place has coords
+        show_place_btn = (
+            exif_lat is None
+            and image_lat is None
+            and place_lat is not None
+            and place_id is not None
+        )
+        self._gps_write_place_btn.setVisible(bool(show_place_btn))
+
+    def _reload_gps_panel(self) -> None:
+        """Reload GPS panel from DB for the current image."""
+        if self._current_image_id is None:
+            return
+        with session_scope() as session:
+            img = session.get(Image, self._current_image_id)
+            if img is None:
+                return
+            self._load_image_coords(
+                img.image_latitude,
+                img.image_longitude,
+                img.exif_latitude,
+                img.exif_longitude,
+                img.place.latitude if img.place else None,
+                img.place.longitude if img.place else None,
+                img.place_id,
+            )
+
+    def _save_image_coords(self) -> None:
+        """Validate and save the image-level GPS coordinate to DB and optionally EXIF."""
+        if self._current_image_id is None:
+            return
+        from app.utils.exif import validate_coords, write_exif_gps
+
+        text = self._gps_edit.text()
+        parsed = validate_coords(text)
+        if parsed is None:
+            if text.strip():
+                log.warning(
+                    "Image %d: invalid GPS coordinate input %r — not saved",
+                    self._current_image_id, text,
+                )
+                self._gps_source_label.setText(t("ibp_gps_invalid"))
+                self._gps_source_label.setStyleSheet(
+                    "color: #ee8888; font-size: 10px; font-style: italic;"
+                )
+            else:
+                # Empty field → clear stored coords
+                self._clear_image_coords()
+            return
+
+        lat, lon = parsed
+        needs_exif_write = False
+        with session_scope() as session:
+            img = session.get(Image, self._current_image_id)
+            if img is None:
+                return
+            img.image_latitude = lat
+            img.image_longitude = lon
+            needs_exif_write = img.exif_latitude is None
+
+        log.info("Image %d: image_latitude=%.6f image_longitude=%.6f saved", self._current_image_id, lat, lon)
+        self._gps_source_label.setText(t("ibp_gps_source_manual"))
+        self._gps_source_label.setStyleSheet("color: #88ee88; font-size: 10px; font-style: italic;")
+        self._gps_write_place_btn.setVisible(False)
+
+        # Requirement #3: write to EXIF if no EXIF GPS exists
+        if needs_exif_write and self._current_path:
+            write_exif_gps(self._current_path, lat, lon)
+
+    def _clear_image_coords(self) -> None:
+        """Remove the image-level GPS coordinate."""
+        if self._current_image_id is None:
+            return
+        with session_scope() as session:
+            img = session.get(Image, self._current_image_id)
+            if img is None:
+                return
+            img.image_latitude = None
+            img.image_longitude = None
+        log.info("Image %d: image_latitude/longitude cleared", self._current_image_id)
+        self._reload_gps_panel()
+
+    def _write_place_coords_to_exif(self) -> None:
+        """Write the linked place's coordinates into this image's EXIF GPS fields."""
+        if self._current_image_id is None or not self._current_path:
+            return
+        from app.utils.exif import write_exif_gps
+        with session_scope() as session:
+            img = session.get(Image, self._current_image_id)
+            if img is None or img.place is None:
+                return
+            place_lat = img.place.latitude
+            place_lon = img.place.longitude
+        if place_lat is None or place_lon is None:
+            return
+        write_exif_gps(self._current_path, place_lat, place_lon)
+        self._gps_write_place_btn.setVisible(False)
+
+    def _update_exif_date(self) -> None:
+        """Write the photo date field into the image EXIF DateTimeOriginal."""
+        if not self._current_path:
+            return
+        from app.utils.exif import parse_flexible_date, write_exif_date
+
+        date_str = self._photo_date_edit.text().strip()
+        if not date_str:
+            # Also try the DB value in case the field is stale
+            if self._current_image_id is not None:
+                with session_scope() as session:
+                    img = session.get(Image, self._current_image_id)
+                    date_str = (img.photo_date or "") if img else ""
+
+        dt = parse_flexible_date(date_str)
+        if dt is None:
+            log.info(
+                "EXIF date update skipped — unparseable date for image %r: %r",
+                self._current_path, date_str,
+            )
+            return
+
+        write_exif_date(self._current_path, dt)
 
     # ── Universal tree search ─────────────────────────────────────────
 
