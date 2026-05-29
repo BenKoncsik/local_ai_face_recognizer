@@ -209,6 +209,19 @@ Relatív utak a config fájl könyvtárához képest oldódnak fel. Frozen build
 | `scan` | támogatott képformátumok, worker szám, thumbnail méret |
 | `base_dir` | relatív utak alapja |
 
+### QSettings alapú felhasználói beállítások
+
+A YAML konfiguráció mellett több UI- és gépspecifikus beállítás `QSettings("FaceLocal", "FaceLocal")` alatt él:
+
+| Namespace | Tartalom |
+|---|---|
+| `shortcuts/*` | globális billentyűparancs engedélyezése és egyedi kiosztások |
+| `face_quality/exclude_low_quality` | alacsony minőségű arcok automatikus kihagyása embedding/felismerés/suggestion közben |
+| `deoldified/auto_pair` | deoldified/colorized képek automatikus eredeti párhoz kötése a képböngészőben |
+| `updates/notify` | release értesítések engedélyezése |
+| `paths/*` | utoljára használt mappák és fájlválasztó kezdőpontok |
+| Drive preferenciák | aktív Google fiók, projektmappa, Drive mód, DB sync és cache beállítások |
+
 ### Lényeges alapértékek
 
 ```yaml
@@ -274,6 +287,8 @@ erDiagram
         int place_id FK
         float exif_latitude
         float exif_longitude
+        float image_latitude
+        float image_longitude
         bool detection_done
         bool embedding_done
     }
@@ -412,7 +427,7 @@ Nincs külön migration framework. Az `init_db()`:
 - migrálja a régi kollázs-helyszín mezőket a `places` táblához,
 - inicializálja a hordozható képgyűjtemény-kezelést.
 
-Kézzel migrált mezőcsoportok: strukturált személyadatok, `family_code`, `gender`, védett személyek, képek relatív útja és EXIF GPS adatai, arc assignment metaadatok, arcminőség mezők, helyszínek, kapcsolatok, remote image metadata.
+Kézzel migrált mezőcsoportok: strukturált személyadatok, `family_code`, `gender`, védett személyek, képek relatív útja, EXIF GPS és képszintű GPS koordinátái, arc assignment metaadatok, arcminőség mezők, helyszínek, kapcsolatok, remote image metadata.
 
 ---
 
@@ -435,7 +450,7 @@ Feloldási sorrend:
 2. legacy `file_path`,
 3. `None`, ha a kép nem feloldható.
 
-Az `ImageLibraryService` emellett közös rootot detektál, relatív utakra migrál, ellenőrzi a root elérhetőségét, és a scan közben képes régi abszolút rekordokat relatív út alapján újralinkelni.
+Az `ImageLibraryService` emellett közös rootot detektál, relatív utakra migrál, ellenőrzi a root elérhetőségét, és a scan közben képes régi abszolút rekordokat relatív út alapján újralinkelni. Hiányzó root esetén a UI külön dialógusban engedi a root átállítását; legacy DB-knél migrációs dialógus fut háttérszálon.
 
 ---
 
@@ -498,11 +513,12 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 | `ImageBrowserService` | mappa- és képösszefoglalók a böngésző tabhoz |
 | `ImageLibraryService` | hordozható útvonalkezelés és migráció |
 | `FaceCropService` | stabil crop fájlnevek, crop újragenerálás, thumbnail frissítés |
-| `FaceQualityEvaluator` | confidence, méret, blur és aspect ratio alapú minősítés |
+| `FaceQualityEvaluator` / `FaceQualityBatchService` | confidence, méret, blur és aspect ratio alapú minősítés, teljes DB újraminősítés |
 | `DuplicateUnknownFaceFinder` | ismert arcokra rálógó ismeretlen boxok keresése és törlése |
 | `CollageService` | Picasa `.cxf/.cfx` import, render, arc-projekció, annotált export |
 | `CollageParser` | kollázs XML parse, sérült XML recover, node geometria |
 | `DeoldifiedPairingService` | colorized/deoldified fájlok eredeti párjainak felismerése |
+| `ShortcutService` | központi, QSettingsben mentett billentyűparancs-definíciók és app-szintű dispatch |
 | `ExportService` | személy/kép/arc CSV, JSON, HTML, képfájl és kollázs HTML export |
 | `UpdateService` | GitHub release ellenőrzés, asset letöltés, platformfüggő update |
 
@@ -599,6 +615,7 @@ flowchart TB
 - pipeline megállítása,
 - export,
 - arcnélküli képek és kézi arcjelölés,
+- interaktív arckeret-szerkesztés (drag handles, move/resize, undo/redo Ctrl+Z/Ctrl+Y),
 - névjavaslatok,
 - beállítások,
 - Google Drive projekt nyitás/zárás.
@@ -616,14 +633,21 @@ flowchart TB
 
 ### Képböngésző tab
 
-- mappafa, mappakeresés és képkeresés,
+- mappafa, rejtett mappák szűrése, thumbnailes képlista,
+- univerzális tokenes keresés személy, hely, dátum és szöveges kulcsszavak alapján,
 - nagy kép nézet zoom/pan/fullscreen móddal,
+- bal/jobb oldali panelek elrejtése fullscreen módban,
+- bbox overlay kapcsoló és átlátszóság slider,
 - arc bbox overlay és kézi bbox rajzolás,
 - inline személy hozzárendelés vagy új személy létrehozás,
 - arc bbox módosítás és törlés,
-- kép dátum kezelése,
-- EXIF GPS javaslat elfogadása,
+- legutóbbi hozzárendelések előresorolása személyválasztásnál,
+- kép dátum kezelése, fájlnévből automatikus dátumkitöltés, EXIF dátumjavaslat elfogadása,
+- dátum visszaírása EXIF `DateTimeOriginal` mezőbe parse-olható dátum esetén,
 - helyszín keresés, létrehozás, hozzárendelés, átnevezés,
+- képszintű GPS koordináta szerkesztése, törlése és EXIF GPS-be írása,
+- koordináta-forrás prioritás: kézi képszintű GPS, EXIF GPS, majd helyszín koordináta,
+- helyszín koordinátáinak EXIF GPS-be írása,
 - deoldified/original párok közötti váltás,
 - Drive thumbnail/fetch támogatás.
 
@@ -640,6 +664,7 @@ flowchart TB
 - helyek listázása szűrőkkel,
 - névvel vagy EXIF-ből létrejött anonim helyek kezelése,
 - helyhez tartozó képek és személyek összefoglalása,
+- dátum- és koordináta-alapú helyszínfilterek,
 - közeli helyek felismerése,
 - helyek összevonása alias megőrzéssel.
 
@@ -655,7 +680,8 @@ flowchart TB
 
 | Dialógus | Feladat |
 |---|---|
-| `SettingsDialog` | DB út, TPU státusz, minőségszűrés, Drive beállítások |
+| `SettingsDialog` | nyelv, DB út, image library, update, TPU, párosítás, minőségszűrés, shortcutok, Drive beállítások |
+| `ShortcutsSettingsTab` | billentyűparancsok engedélyezése, módosítása, törlése, konfliktusellenőrzés |
 | `GDriveSettingsTab` | Google login/logout, Drive folder választás, Drive mód, DB sync, cache törlés |
 | `ScanModesDialog` | gyors, high-accuracy és rescan módok |
 | `ManualMarkDialog` | kézi arc hozzáadása képen |
@@ -673,6 +699,19 @@ flowchart TB
 | `TpuStatusDialog` | TPU diagnosztika és telepítési segítség |
 | `UpdateDialog` | release asset letöltés és update |
 
+### Billentyűparancsok
+
+**Fájlok**: `app/services/shortcut_service.py`, `app/ui/dialogs/shortcuts_settings_tab.py`
+
+A `ShortcutService` app-szintű event filteren keresztül diszpécsel, de editable input widgetekben nem nyeli el a gépelést. A kiosztás QSettingsben mentődik, capture módban konfliktust jelez, és néhány alapművelet nem törölhető.
+
+Alap kategóriák:
+
+- általános: beállítások, keresés fókusz, fullscreen, log panel,
+- képböngésző: előző/következő kép, kézi kijelölés, face assign/confirm, bbox edit/delete/next/prev, zoom/fit/info,
+- személyek: új személy, átnevezés, merge, reassign, exclude,
+- kollázs: import, face overlay, node törlés, HTML export.
+
 ---
 
 ## 11. Keresés, családfa és helyszínek
@@ -682,6 +721,12 @@ flowchart TB
 **Fájlok**: `app/utils/person_search.py`, `app/ui/widgets/person_search_select.py`
 
 A személykeresés normalizált, több mezős keresést használ. A találatoknál a név mellett a strukturált mezők, becenév, házassági név és családi kód is releváns.
+
+### Univerzális tokenes keresés
+
+**Fájl**: `app/ui/widgets/universal_search_bar.py`
+
+A képböngészőben használt kereső chip/token alapú. A beírt szövegből és kiválasztott javaslatokból `SearchToken` lista épül, amely a mappafa és képtalálatok szűrésére szolgál. A javaslatforrás panelenként cserélhető, így ugyanaz a widget használható személy-, hely-, dátum- vagy szabad szöveges kereséshez.
 
 ### Családi kódok és kapcsolatok
 
@@ -702,6 +747,14 @@ A családi szolgáltatás:
 **Fájlok**: `app/services/place_service.py`, `app/utils/exif.py`
 
 A scan EXIF GPS koordinátát olvas. Ha a képnek nincs helye, a `PlaceService` közeli meglévő helyhez kötheti, vagy anonim EXIF helyet hoz létre. A felhasználó ezeket később elnevezheti, összevonhatja vagy kézzel rendelheti képekhez.
+
+A képnek a helyszíntől külön saját koordinátája is lehet (`Image.image_latitude`, `Image.image_longitude`). Megjelenítéskor ez az elsődleges; ha nincs, az EXIF GPS, majd a kapcsolt hely koordinátája következik. Az EXIF helper validál koordinátát, rugalmas dátumot parse-ol, és támogatja a GPS/dátum visszaírását a képfájlba.
+
+### Deoldified párosítás
+
+**Fájl**: `app/services/deoldified_pairing_service.py`
+
+A deoldified/colorized fájlokat a `-deoldified` token alapján kapcsolja az eredeti képhez. A képböngészőben ez lehetővé teszi, hogy a színezett képet nézve az eredeti kép arcadatai, dátuma és metaadatai legyenek szerkeszthetők, és egy mozdulattal lehessen váltani az eredeti/színezett verzió között. A funkció QSettingsből kapcsolható.
 
 ---
 
@@ -772,7 +825,7 @@ Kapcsolódó fájlok:
 - `scripts/post_buffer_release.py`,
 - `app/diagnostics.py`.
 
-A projekt tartalmaz platformikonokat (`assets/icons`) és release automatizálási segédeket. Az `UpdateService` GitHub release asseteket ellenőriz és platformfüggően letölt. A diagnosztikai modul TFLite backendeket vizsgál, a TPU dialógus Edge TPU library/device állapotot és javító parancsokat mutat.
+A projekt tartalmaz platformikonokat (`assets/icons`) és release automatizálási segédeket. Az `UpdateService` GitHub release asseteket ellenőriz, platform szerint assetet választ, letöltési progresszt ad, majd macOS DMG, Windows EXE/ZIP, Linux DEB/tar.gz telepítési útvonalakat kezel. A `MainWindow` státuszsorban és system tray értesítésben is tud update-et jelezni, ha az értesítés engedélyezett. A diagnosztikai modul TFLite backendeket vizsgál, a TPU dialógus Edge TPU library/device állapotot és javító parancsokat mutat.
 
 ---
 
@@ -792,6 +845,7 @@ A tesztcsomag lefedi többek között:
 - képböngésző szolgáltatást,
 - helyszín- és családi szolgáltatásokat,
 - deoldified párosítást,
+- Drive projekt-session lock/heartbeat és távoli képszinkront,
 - kollázs parse-t,
 - exportot,
 - release és social posztoló scripteket.
@@ -813,6 +867,9 @@ pytest
 - UI műveleteknél a védett `Ismeretlen` személyt nem szabad átnevezni vagy törölni.
 - Kézi arc- vagy bbox-módosítás után a cropot, embedding állapotot és személy thumbnailt is konzisztensen kell frissíteni.
 - Helyszín merge esetén alias adatokat meg kell őrizni.
+- Képszintű GPS módosításnál a DB mezők és az opcionális EXIF visszaírás legyen külön kezelve; helyszín koordinátát csak explicit művelet írjon képfájlba.
+- Deoldified nézetben kézi arc-, dátum- és személymódosításnál a kanonikus, eredeti képre kell menteni, nem a színezett párra.
+- Új billentyűparancsnál a `ShortcutService` default listáját, az i18n kulcsokat és a handler-regisztrációt együtt kell frissíteni.
 - Családi kapcsolatnál kerülni kell az önhivatkozást, duplikált házastárs rekordot és ciklikus parent-child láncot.
 - Hosszabb futású munkát Qt workerben vagy QRunnable-ben kell végezni, nem a GUI szálon.
 - Exportnál, kollázsnál, preview-nál és képböngészőnél kezelni kell a hiányzó image library rootot és a Drive fetch hibákat.

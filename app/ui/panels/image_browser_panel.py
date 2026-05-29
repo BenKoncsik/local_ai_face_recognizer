@@ -18,21 +18,21 @@ import logging
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThreadPool, Signal, Slot
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QIcon,
     QImage,
-    QKeySequence,
     QPainter,
     QPen,
     QPixmap,
-    QShortcut,
 )
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -80,6 +80,16 @@ log = logging.getLogger(__name__)
 
 # (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None, person_id_or_None)
 _FaceData = Tuple[int, int, int, int, int, Optional[str], Optional[int]]
+
+
+@dataclass
+class _BboxEdit:
+    """One undo/redo entry for a face bounding-box modification."""
+    face_id: int
+    old_bbox: Tuple[int, int, int, int]  # x, y, w, h in original image coords
+    new_bbox: Tuple[int, int, int, int]
+    op_type: str  # "move" | "resize"
+
 
 _TREE_THUMB_SIZE = 56   # max side of thumbnail icon in tree
 
@@ -494,21 +504,37 @@ class _BrowserTree(QTreeWidget):
 
 
 class _DrawableImageLabel(QLabel):
-    clicked = Signal(int, int)
-    rect_drawn = Signal(QRect)
-    right_clicked = Signal(int, int)
-    wheel_zoomed = Signal(int, int, int)
-    pan_moved = Signal(int, int)
-    go_prev = Signal()
-    go_next = Signal()
+    clicked              = Signal(int, int)
+    rect_drawn           = Signal(QRect)
+    right_clicked        = Signal(int, int)
+    wheel_zoomed         = Signal(int, int, int)
+    pan_moved            = Signal(int, int)
+    go_prev              = Signal()
+    go_next              = Signal()
+    # Interactive bbox-edit mode signals
+    bbox_edit_committed  = Signal(int, int, int, int)   # drag-release save, stay in edit mode
+    bbox_edit_finalized  = Signal(int, int, int, int)   # click-outside / Enter → save AND exit
+    bbox_edit_cancelled  = Signal()
+    undo_requested       = Signal()
+    redo_requested       = Signal()
 
     _BORDER_NORMAL = "QLabel { background: #1a1a1a; }"
     _BORDER_DRAW   = "QLabel { background: #1a1a1a; border: 2px solid #ffcc00; }"
+    _BORDER_EDIT   = "QLabel { background: #1a1a1a; border: 2px solid #32dc32; }"
+
+    # Handle rendering constants
+    _HANDLE_HALF = 6    # half-side of handle squares in display pixels
+    _HIT_RADIUS  = 10   # hit-test radius around each handle
+    _MIN_DIM     = 12   # minimum bbox dimension in image pixels
+
+    # Handle identifiers (corners, edge-midpoints, centre)
+    _HANDLES = ("tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setCursor(Qt.CrossCursor)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setMouseTracking(True)   # needed for hover cursor changes without button held
         self._draw_mode = False
         self._start: Optional[QPoint] = None
         self._end: Optional[QPoint] = None
@@ -517,7 +543,18 @@ class _DrawableImageLabel(QLabel):
         self._zoom: float = 1.0
         self._pan_x: float = 0.0
         self._pan_y: float = 0.0
+        # Interactive edit mode
+        self._imode: bool = False
+        self._imode_bbox: Optional[Tuple[int, int, int, int]] = None   # image coords
+        self._imode_img_w: int = 0
+        self._imode_img_h: int = 0
+        self._imode_handle: Optional[str] = None   # which handle is being dragged
+        self._imode_drag_start: Optional[QPointF] = None
+        self._imode_drag_start_bbox: Optional[Tuple[int, int, int, int]] = None
+        self._last_op_type: str = "resize"   # set by mouseReleaseEvent
         self.setStyleSheet(self._BORDER_NORMAL)
+
+    # ── Public setters ─────────────────────────────────────────────────
 
     def set_source_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self._source_pix = pixmap
@@ -533,8 +570,193 @@ class _DrawableImageLabel(QLabel):
         self._draw_mode = enabled
         self._start = None
         self._end = None
+        if enabled:
+            self._exit_interactive_edit(commit=False, silent=True)
         self.setStyleSheet(self._BORDER_DRAW if enabled else self._BORDER_NORMAL)
         self.update()
+
+    def set_interactive_edit(
+        self,
+        bbox: Tuple[int, int, int, int],
+        img_w: int,
+        img_h: int,
+    ) -> None:
+        """Enter interactive-edit mode showing resize/move handles for *bbox*."""
+        self._imode = True
+        self._imode_bbox = bbox
+        self._imode_img_w = img_w
+        self._imode_img_h = img_h
+        self._imode_handle = None
+        self._imode_drag_start = None
+        self._imode_drag_start_bbox = None
+        self._draw_mode = False
+        self._start = None
+        self._end = None
+        self.setStyleSheet(self._BORDER_EDIT)
+        self.update()
+
+    def cancel_interactive_edit(self) -> None:
+        """Exit interactive-edit mode; emit bbox_edit_cancelled."""
+        self._exit_interactive_edit(commit=False, silent=False)
+
+    def commit_interactive_edit(self) -> None:
+        """Commit the current bbox and exit interactive-edit mode."""
+        self._exit_interactive_edit(commit=True, silent=False)
+
+    def _exit_interactive_edit(
+        self, *, commit: bool, silent: bool
+    ) -> None:
+        if not self._imode:
+            return
+        bbox = self._imode_bbox
+        self._imode = False
+        self._imode_bbox = None
+        self._imode_handle = None
+        self._imode_drag_start = None
+        self._imode_drag_start_bbox = None
+        self.setStyleSheet(self._BORDER_NORMAL)
+        self.update()
+        if not silent:
+            if commit and bbox is not None:
+                # finalized = save AND exit (click-outside or Enter)
+                self.bbox_edit_finalized.emit(*bbox)
+            else:
+                self.bbox_edit_cancelled.emit()
+
+    # ── Coordinate helpers ──────────────────────────────────────────────
+
+    def _imode_transform(self) -> Optional[Tuple[float, float, float]]:
+        """Return (eff, ox, oy) for image→display mapping, or None."""
+        if self._source_pix is None:
+            return None
+        cr = self.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._source_pix.width(), self._source_pix.height()
+        if pw <= 0 or ph <= 0 or lw <= 0 or lh <= 0:
+            return None
+        base_scale = min(lw / pw, lh / ph)
+        eff = base_scale * self._zoom
+        disp_w = pw * eff
+        disp_h = ph * eff
+        ox = cr.x() + (lw - disp_w) / 2 + self._pan_x
+        oy = cr.y() + (lh - disp_h) / 2 + self._pan_y
+        return eff, ox, oy
+
+    def _img_to_disp(
+        self, ix: float, iy: float,
+        eff: float, ox: float, oy: float,
+    ) -> Tuple[float, float]:
+        return ox + ix * eff, oy + iy * eff
+
+    def _disp_to_img(
+        self, lx: float, ly: float,
+        eff: float, ox: float, oy: float,
+    ) -> Tuple[float, float]:
+        return (lx - ox) / eff, (ly - oy) / eff
+
+    def _handle_positions(
+        self,
+        bbox: Tuple[int, int, int, int],
+        eff: float,
+        ox: float,
+        oy: float,
+    ) -> Dict[str, Tuple[float, float]]:
+        """Return display-coord centre of each handle for *bbox*."""
+        x, y, w, h = bbox
+        cx, cy = x + w / 2, y + h / 2
+        img_pts = {
+            "tl": (x,      y),
+            "tc": (cx,     y),
+            "tr": (x + w,  y),
+            "ml": (x,      cy),
+            "mc": (cx,     cy),
+            "mr": (x + w,  cy),
+            "bl": (x,      y + h),
+            "bc": (cx,     y + h),
+            "br": (x + w,  y + h),
+        }
+        return {
+            name: self._img_to_disp(ix, iy, eff, ox, oy)
+            for name, (ix, iy) in img_pts.items()
+        }
+
+    def _hit_test_handle(
+        self, lx: float, ly: float
+    ) -> Optional[str]:
+        """Return the name of the nearest handle if within hit radius."""
+        if not self._imode or self._imode_bbox is None:
+            return None
+        t = self._imode_transform()
+        if t is None:
+            return None
+        eff, ox, oy = t
+        positions = self._handle_positions(self._imode_bbox, eff, ox, oy)
+        best_name: Optional[str] = None
+        best_dist = self._HIT_RADIUS + 1.0
+        for name, (hx, hy) in positions.items():
+            dist = ((lx - hx) ** 2 + (ly - hy) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        return best_name
+
+    # ── Drag update ─────────────────────────────────────────────────────
+
+    def _apply_drag(
+        self,
+        handle: str,
+        start: QPointF,
+        current: QPointF,
+    ) -> None:
+        """Update _imode_bbox according to the current drag position."""
+        if self._imode_drag_start_bbox is None:
+            return
+        t = self._imode_transform()
+        if t is None:
+            return
+        eff, ox, oy = t
+
+        sx, sy = self._disp_to_img(start.x(), start.y(), eff, ox, oy)
+        cx, cy = self._disp_to_img(current.x(), current.y(), eff, ox, oy)
+        dx, dy = cx - sx, cy - sy
+
+        x0, y0, w0, h0 = self._imode_drag_start_bbox
+        iw, ih = self._imode_img_w, self._imode_img_h
+        _m = self._MIN_DIM
+
+        if handle == "mc":
+            # Move the whole box
+            nx = max(0, min(iw - w0, x0 + dx))
+            ny = max(0, min(ih - h0, y0 + dy))
+            self._imode_bbox = (int(nx), int(ny), w0, h0)
+            return
+
+        # Resize: determine which edges move
+        nx, ny, nw, nh = x0, y0, w0, h0
+
+        if handle in ("tl", "ml", "bl"):
+            new_x = max(0, min(x0 + w0 - _m, x0 + dx))
+            nw = w0 - (int(new_x) - x0)
+            nx = int(new_x)
+        if handle in ("tr", "mr", "br"):
+            new_w = max(_m, min(iw - x0, w0 + dx))
+            nw = int(new_w)
+        if handle in ("tl", "tc", "tr"):
+            new_y = max(0, min(y0 + h0 - _m, y0 + dy))
+            nh = h0 - (int(new_y) - y0)
+            ny = int(new_y)
+        if handle in ("bl", "bc", "br"):
+            new_h = max(_m, min(ih - y0, h0 + dy))
+            nh = int(new_h)
+
+        # Final clamp: ensure box stays inside image
+        nx = max(0, min(iw - nw, nx))
+        ny = max(0, min(ih - nh, ny))
+        nw = max(_m, min(iw - nx, nw))
+        nh = max(_m, min(ih - ny, nh))
+        self._imode_bbox = (nx, ny, nw, nh)
+
+    # ── Mouse events ────────────────────────────────────────────────────
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MiddleButton:
@@ -543,13 +765,26 @@ class _DrawableImageLabel(QLabel):
             return
         if event.button() != Qt.LeftButton:
             return
+        pos = event.position()
+        lx, ly = pos.x(), pos.y()
+
+        if self._imode:
+            handle = self._hit_test_handle(lx, ly)
+            if handle is not None:
+                self._imode_handle = handle
+                self._imode_drag_start = pos
+                self._imode_drag_start_bbox = self._imode_bbox
+            # Click outside any handle exits edit mode
+            elif self._imode_bbox is not None:
+                self._exit_interactive_edit(commit=True, silent=False)
+            return
+
         if self._draw_mode:
             self._start = event.position().toPoint()
             self._end = self._start
             self.update()
         else:
-            pos = event.position().toPoint()
-            self.clicked.emit(pos.x(), pos.y())
+            self.clicked.emit(int(lx), int(ly))
 
     def mouseMoveEvent(self, event) -> None:
         if self._mid_start is not None:
@@ -560,6 +795,23 @@ class _DrawableImageLabel(QLabel):
             )
             self._mid_start = cur
             return
+
+        pos = event.position()
+        lx, ly = pos.x(), pos.y()
+
+        if self._imode and self._imode_handle is not None:
+            self._apply_drag(self._imode_handle, self._imode_drag_start, pos)
+            # Update cursor based on which handle is being dragged
+            self._update_edit_cursor(self._imode_handle)
+            self.update()
+            return
+
+        if self._imode:
+            # Hover: update cursor to show which handle would be grabbed
+            handle = self._hit_test_handle(lx, ly)
+            self._update_edit_cursor(handle)
+            return
+
         if self._draw_mode and self._start is not None:
             self._end = event.position().toPoint()
             self.update()
@@ -567,9 +819,29 @@ class _DrawableImageLabel(QLabel):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MiddleButton:
             self._mid_start = None
-            self.setCursor(Qt.CrossCursor)
+            self.setCursor(Qt.CrossCursor if not self._imode else Qt.ArrowCursor)
             return
-        if not self._draw_mode or self._start is None or event.button() != Qt.LeftButton:
+        if event.button() != Qt.LeftButton:
+            return
+
+        if self._imode and self._imode_handle is not None:
+            was_handle = self._imode_handle
+            old_bbox = self._imode_drag_start_bbox
+            new_bbox = self._imode_bbox
+            self._imode_handle = None
+            self._imode_drag_start = None
+            self._imode_drag_start_bbox = None
+            # Emit a committed signal if the bbox actually changed
+            if new_bbox is not None and old_bbox != new_bbox:
+                # Determine op type and tag BEFORE emitting (slot runs synchronously)
+                ow, oh = old_bbox[2], old_bbox[3]
+                nw, nh = new_bbox[2], new_bbox[3]
+                self._last_op_type = "move" if (ow == nw and oh == nh) else "resize"
+                self.bbox_edit_committed.emit(*new_bbox)
+            self.update()
+            return
+
+        if not self._draw_mode or self._start is None:
             return
         end = event.position().toPoint()
         rect = QRect(self._start, end).normalized()
@@ -579,27 +851,68 @@ class _DrawableImageLabel(QLabel):
         if rect.width() >= 8 and rect.height() >= 8:
             self.rect_drawn.emit(rect)
 
+    def _update_edit_cursor(self, handle: Optional[str]) -> None:
+        cursors = {
+            "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
+            "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor,
+            "tc": Qt.SizeVerCursor,   "bc": Qt.SizeVerCursor,
+            "ml": Qt.SizeHorCursor,   "mr": Qt.SizeHorCursor,
+            "mc": Qt.SizeAllCursor,
+        }
+        if handle and handle in cursors:
+            self.setCursor(cursors[handle])
+        else:
+            self.setCursor(Qt.CrossCursor)
+
+    # ── Key events ──────────────────────────────────────────────────────
+
     def keyPressEvent(self, event) -> None:
         from app.services.shortcut_service import get_shortcut_service, normalize_key
         svc = get_shortcut_service()
         key_str = normalize_key(event)
+
+        if self._imode:
+            if key_str == "Esc":
+                self._exit_interactive_edit(commit=False, silent=False)
+                event.accept()
+                return
+            if key_str in ("Return", "Enter"):
+                self._exit_interactive_edit(commit=True, silent=False)
+                event.accept()
+                return
+
         if svc.is_enabled():
+            undo_sc = svc.get("bbox.undo")
+            redo_sc = svc.get("bbox.redo")
+            undo_key = undo_sc.current_key if undo_sc and undo_sc.current_key else "Ctrl+Z"
+            redo_key = redo_sc.current_key if redo_sc and redo_sc.current_key else "Ctrl+Y"
             prev_sc = svc.get("image.previous")
             next_sc = svc.get("image.next")
-            prev_key = (prev_sc.current_key if prev_sc and prev_sc.current_key else "Left")
-            next_key = (next_sc.current_key if next_sc and next_sc.current_key else "Right")
+            prev_key = prev_sc.current_key if prev_sc and prev_sc.current_key else "Left"
+            next_key = next_sc.current_key if next_sc and next_sc.current_key else "Right"
         else:
+            undo_key, redo_key = "Ctrl+Z", "Ctrl+Y"
             prev_key, next_key = "Left", "Right"
-        if key_str == prev_key:
+
+        if key_str == undo_key:
+            self.undo_requested.emit()
+            event.accept()
+        elif key_str == redo_key:
+            self.redo_requested.emit()
+            event.accept()
+        elif key_str == prev_key and not self._imode:
             self.go_prev.emit()
             event.accept()
-        elif key_str == next_key:
+        elif key_str == next_key and not self._imode:
             self.go_next.emit()
             event.accept()
         else:
             super().keyPressEvent(event)
 
     def contextMenuEvent(self, event) -> None:
+        if self._imode:
+            # Cancel edit before opening context menu
+            self._exit_interactive_edit(commit=True, silent=False)
         self.right_clicked.emit(event.pos().x(), event.pos().y())
 
     def wheelEvent(self, event) -> None:
@@ -608,6 +921,8 @@ class _DrawableImageLabel(QLabel):
             pos = event.position().toPoint()
             self.wheel_zoomed.emit(delta, pos.x(), pos.y())
         event.accept()
+
+    # ── Painting ────────────────────────────────────────────────────────
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -635,6 +950,42 @@ class _DrawableImageLabel(QLabel):
         if self._draw_mode and self._start is not None and self._end is not None:
             painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
             painter.drawRect(QRect(self._start, self._end).normalized())
+
+        if self._imode and self._imode_bbox is not None:
+            self._paint_edit_handles(painter)
+
+    def _paint_edit_handles(self, painter: QPainter) -> None:
+        t = self._imode_transform()
+        if t is None:
+            return
+        eff, ox, oy = t
+        bbox = self._imode_bbox
+        x, y, w, h = bbox
+        dx = ox + x * eff
+        dy = oy + y * eff
+        dw = w * eff
+        dh = h * eff
+
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        # Bbox outline (bright green dashed)
+        painter.setPen(QPen(QColor(50, 220, 50), 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(dx, dy, dw, dh))
+
+        # Handles
+        positions = self._handle_positions(bbox, eff, ox, oy)
+        hs = self._HANDLE_HALF
+        for name, (hx, hy) in positions.items():
+            if name == "mc":
+                # Centre handle: filled circle
+                painter.setPen(QPen(QColor(50, 220, 50), 1))
+                painter.setBrush(QBrush(QColor(50, 220, 50, 200)))
+                painter.drawEllipse(QPointF(hx, hy), float(hs), float(hs))
+            else:
+                painter.setPen(QPen(QColor(50, 220, 50), 1))
+                painter.setBrush(QBrush(QColor(20, 40, 20, 220)))
+                painter.drawRect(QRectF(hx - hs, hy - hs, hs * 2, hs * 2))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -666,6 +1017,12 @@ class ImageBrowserPanel(QWidget):
         self._all_persons: List[Person] = []
         self._all_places: List[Place] = []
         self._place_filter_id: Optional[int] = None
+
+        # Interactive bbox editor state
+        self._interactive_edit_face_id: Optional[int] = None
+        self._interactive_edit_orig_bbox: Optional[Tuple[int, int, int, int]] = None
+        self._undo_stack: List[_BboxEdit] = []
+        self._redo_stack: List[_BboxEdit] = []
 
         # Overlay state
         self._show_bboxes: bool = True
@@ -979,7 +1336,19 @@ class ImageBrowserPanel(QWidget):
         self._image_label.pan_moved.connect(self._on_pan_moved)
         self._image_label.go_prev.connect(self._navigate_prev)
         self._image_label.go_next.connect(self._navigate_next)
+        self._image_label.bbox_edit_committed.connect(self._on_interactive_bbox_committed)
+        self._image_label.bbox_edit_finalized.connect(self._on_interactive_bbox_finalized)
+        self._image_label.bbox_edit_cancelled.connect(self._on_interactive_bbox_cancelled)
+        self._image_label.undo_requested.connect(self._undo_bbox_edit)
+        self._image_label.redo_requested.connect(self._redo_bbox_edit)
         im_layout.addWidget(self._image_label, stretch=1)
+
+        # Register undo/redo with the global ShortcutService so Ctrl+Z/Y
+        # fires even when the image label doesn't have keyboard focus.
+        from app.services.shortcut_service import get_shortcut_service
+        _svc = get_shortcut_service()
+        _svc.register("bbox.undo", self._undo_bbox_edit)
+        _svc.register("bbox.redo", self._redo_bbox_edit)
 
         # Inline editor (floats over image label)
         self._inline_editor = _InlineFaceEditor(self._image_label)
@@ -1248,7 +1617,8 @@ class ImageBrowserPanel(QWidget):
         self.retranslate()
 
     def _setup_shortcuts(self) -> None:
-        QShortcut(QKeySequence(Qt.Key_F11), self, self._toggle_fullscreen)
+        from app.services.shortcut_service import get_shortcut_service
+        get_shortcut_service().register("general.fullscreen", self._toggle_fullscreen)
 
     # ──────────────────────────────────────────────────────────────────
     # Public API  (consumed by MainWindow)
@@ -1962,6 +2332,12 @@ class ImageBrowserPanel(QWidget):
         self._editing_face_id = None
         self._hide_inline_editor()
         self._cancel_rename()
+        # Exit interactive edit mode without restoring (different image)
+        if self._interactive_edit_face_id is not None:
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._image_label.cancel_interactive_edit()
+            self._draw_hint.setVisible(False)
 
         # Reset deoldified pairing state
         self._deol_pair_orig_id = None
@@ -2114,6 +2490,8 @@ class ImageBrowserPanel(QWidget):
         self._face_data = []
         self._selected_face_id = None
         self._editing_face_id = None
+        self._interactive_edit_face_id = None
+        self._interactive_edit_orig_bbox = None
         self._orig_img_bgr = None
         self._full_pixmap = None
         self._deol_pair_orig_id = None
@@ -2197,7 +2575,7 @@ class ImageBrowserPanel(QWidget):
             menu.addSeparator()
             assign_action = menu.addAction(t("ibp_ctx_assign_person"))
             menu.addSeparator()
-            edit_action = menu.addAction(t("ibp_ctx_edit_bbox"))
+            edit_action = menu.addAction(t("ibp_ctx_edit_frame"))
             menu.addSeparator()
             delete_action = menu.addAction(t("ibp_ctx_delete"))
             menu.addSeparator()
@@ -2215,7 +2593,7 @@ class ImageBrowserPanel(QWidget):
         if chosen is assign_action and face_id is not None:
             self._show_inline_editor(face_id)
         elif chosen is edit_action and face_id is not None:
-            self._start_face_edit(face_id)
+            self._start_interactive_face_edit(face_id)
         elif chosen is delete_action and face_id is not None:
             self._delete_face(face_id)
         elif chosen is manual_mark_action:
@@ -2226,10 +2604,15 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
+        if active and self._interactive_edit_face_id is not None:
+            # Switching to draw mode cancels interactive edit without restoring
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
         self._image_label.set_draw_mode(active)
         self._draw_hint.setVisible(active)
         if active:
             self._hide_inline_editor()
+            self._draw_hint.setText(t("ibp_draw_hint_add"))
         else:
             self._editing_face_id = None
             self._draw_hint.setText(t("ibp_draw_hint_add"))
@@ -2276,6 +2659,173 @@ class ImageBrowserPanel(QWidget):
         self._show_face_info(face_id)
         self._draw_hint.setText(t("ibp_draw_hint_edit"))
         self._draw_mode_btn.setChecked(True)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Interactive bbox editor (handle-based move / resize)
+    # ──────────────────────────────────────────────────────────────────
+
+    def _start_interactive_face_edit(self, face_id: int) -> None:
+        """Enter interactive handle-drag edit mode for *face_id*."""
+        entry = next((f for f in self._face_data if f[0] == face_id), None)
+        if entry is None:
+            return
+        _, bx, by, bw, bh, *_ = entry
+        self._hide_inline_editor()
+        self._draw_mode_btn.setChecked(False)
+        self._interactive_edit_face_id = face_id
+        self._interactive_edit_orig_bbox = (bx, by, bw, bh)
+        self._selected_face_id = face_id
+
+        # Redraw without baking in the editing face's bbox so only handles show it
+        self._redraw_faces(exclude_edit_id=face_id)
+        self._show_face_info(face_id)
+
+        if self._orig_img_bgr is not None:
+            ih, iw = self._orig_img_bgr.shape[:2]
+        else:
+            iw = self._full_pixmap.width() if self._full_pixmap else 1
+            ih = self._full_pixmap.height() if self._full_pixmap else 1
+
+        self._image_label.set_interactive_edit((bx, by, bw, bh), iw, ih)
+        self._image_label.setFocus()   # ensure Esc / Enter key events reach the label
+        self._draw_hint.setText(t("ibp_bbox_edit_hint"))
+        self._draw_hint.setVisible(True)
+
+    def _on_interactive_bbox_committed(
+        self, ix: int, iy: int, iw: int, ih: int
+    ) -> None:
+        """Called each time the user releases a drag handle with a changed bbox."""
+        face_id = self._interactive_edit_face_id
+        if face_id is None:
+            return
+
+        # Find old bbox for undo record
+        entry = next((f for f in self._face_data if f[0] == face_id), None)
+        old_bbox: Tuple[int, int, int, int]
+        if entry is not None:
+            old_bbox = (entry[1], entry[2], entry[3], entry[4])
+        else:
+            old_bbox = (ix, iy, iw, ih)
+
+        new_bbox = (ix, iy, iw, ih)
+        op_type = getattr(self._image_label, "_last_op_type", "resize")
+
+        # Save to DB
+        self._update_face_bbox(face_id, ix, iy, iw, ih)
+
+        # Push to undo stack, clear redo
+        if old_bbox != new_bbox:
+            self._undo_stack.append(
+                _BboxEdit(face_id=face_id, old_bbox=old_bbox, new_bbox=new_bbox, op_type=op_type)
+            )
+            self._redo_stack.clear()
+
+        # Reload face data and update the handle overlay with the latest bbox
+        self._fetch_face_data()
+        self._selected_face_id = face_id
+
+        if self._orig_img_bgr is not None:
+            img_h, img_w = self._orig_img_bgr.shape[:2]
+        else:
+            img_w = self._full_pixmap.width() if self._full_pixmap else 1
+            img_h = self._full_pixmap.height() if self._full_pixmap else 1
+
+        self._redraw_faces(exclude_edit_id=face_id)
+        self._image_label.set_interactive_edit((ix, iy, iw, ih), img_w, img_h)
+        self._show_face_info(face_id)
+
+    def _on_interactive_bbox_finalized(
+        self, ix: int, iy: int, iw: int, ih: int
+    ) -> None:
+        """Called when the user clicks outside the box or presses Enter — save and exit."""
+        face_id = self._interactive_edit_face_id
+        if face_id is None:
+            return
+
+        # Grab old bbox before clearing state
+        entry = next((f for f in self._face_data if f[0] == face_id), None)
+        old_bbox: Tuple[int, int, int, int]
+        if entry is not None:
+            old_bbox = (entry[1], entry[2], entry[3], entry[4])
+        else:
+            old_bbox = (ix, iy, iw, ih)
+
+        new_bbox = (ix, iy, iw, ih)
+        op_type = getattr(self._image_label, "_last_op_type", "resize")
+
+        # Exit edit state first
+        self._interactive_edit_face_id = None
+        self._interactive_edit_orig_bbox = None
+        self._draw_hint.setVisible(False)
+
+        # Save to DB
+        self._update_face_bbox(face_id, ix, iy, iw, ih)
+
+        # Push to undo stack only if bbox actually changed
+        if old_bbox != new_bbox:
+            self._undo_stack.append(
+                _BboxEdit(face_id=face_id, old_bbox=old_bbox, new_bbox=new_bbox, op_type=op_type)
+            )
+            self._redo_stack.clear()
+
+        # Normal redraw (all faces baked in, no handle overlay)
+        self._fetch_face_data()
+        self._selected_face_id = face_id
+        self._redraw_faces()
+        self._show_face_info(face_id)
+
+    def _on_interactive_bbox_cancelled(self) -> None:
+        """Called when the user presses Esc or otherwise cancels the edit."""
+        face_id = self._interactive_edit_face_id
+        orig_bbox = self._interactive_edit_orig_bbox
+        self._interactive_edit_face_id = None
+        self._interactive_edit_orig_bbox = None
+        self._draw_hint.setVisible(False)
+
+        if face_id is not None and orig_bbox is not None:
+            # Restore original bbox
+            self._update_face_bbox(face_id, *orig_bbox)
+            # Remove any undo entries added during this edit session for this face
+            # (since the cancel should restore everything to the start-of-session state)
+            self._undo_stack = [e for e in self._undo_stack if e.face_id != face_id]
+            self._redo_stack = [e for e in self._redo_stack if e.face_id != face_id]
+            self._fetch_face_data()
+            self._selected_face_id = face_id
+            self._redraw_faces()
+            self._show_face_info(face_id)
+
+    def _undo_bbox_edit(self) -> None:
+        """Undo the last bbox modification (Ctrl+Z)."""
+        if not self._undo_stack:
+            return
+        entry = self._undo_stack.pop()
+        self._redo_stack.append(entry)
+        self._apply_bbox_edit(entry.face_id, entry.old_bbox)
+
+    def _redo_bbox_edit(self) -> None:
+        """Redo the last undone bbox modification (Ctrl+Y)."""
+        if not self._redo_stack:
+            return
+        entry = self._redo_stack.pop()
+        self._undo_stack.append(entry)
+        self._apply_bbox_edit(entry.face_id, entry.new_bbox)
+
+    def _apply_bbox_edit(
+        self, face_id: int, bbox: Tuple[int, int, int, int]
+    ) -> None:
+        """Apply *bbox* to *face_id* in DB and refresh the view."""
+        self._update_face_bbox(face_id, *bbox)
+        self._fetch_face_data()
+        self._selected_face_id = face_id
+
+        # If we're in interactive edit mode for this face, update the handle overlay
+        if self._interactive_edit_face_id == face_id and self._orig_img_bgr is not None:
+            img_h, img_w = self._orig_img_bgr.shape[:2]
+            self._redraw_faces(exclude_edit_id=face_id)
+            self._image_label.set_interactive_edit(bbox, img_w, img_h)
+        else:
+            self._redraw_faces()
+        self._show_face_info(face_id)
 
     def _save_manual_face(
         self, img_id: int, x: int, y: int, w: int, h: int
@@ -2335,6 +2885,14 @@ class ImageBrowserPanel(QWidget):
         if self._editing_face_id == face_id:
             self._editing_face_id = None
             self._draw_mode_btn.setChecked(False)
+        if self._interactive_edit_face_id == face_id:
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._image_label.cancel_interactive_edit()
+            self._draw_hint.setVisible(False)
+        # Remove any undo/redo entries for the deleted face
+        self._undo_stack = [e for e in self._undo_stack if e.face_id != face_id]
+        self._redo_stack = [e for e in self._redo_stack if e.face_id != face_id]
         self._reload_current_face_data()
 
     def _update_face_bbox(
@@ -2452,7 +3010,15 @@ class ImageBrowserPanel(QWidget):
                 return face_id
         return None
 
-    def _redraw_faces(self) -> None:
+    def _redraw_faces(
+        self, *, exclude_edit_id: Optional[int] = None
+    ) -> None:
+        """Render the annotated image and push it to the image label.
+
+        When *exclude_edit_id* is given, that face's bounding box is omitted
+        from the baked-in PIL rendering so the handle overlay is the only
+        visual representation of the editing face.
+        """
         if self._orig_img_bgr is None:
             return
         log.debug(
@@ -2464,8 +3030,13 @@ class ImageBrowserPanel(QWidget):
             self._deol_pair_color_path if self._deol_viewing_color else self._current_path,
             self._deol_viewing_color,
         )
+        render_faces = (
+            [f for f in self._face_data if f[0] != exclude_edit_id]
+            if exclude_edit_id is not None
+            else self._face_data
+        )
         annotated = _draw_faces(
-            self._orig_img_bgr, self._face_data, self._selected_face_id,
+            self._orig_img_bgr, render_faces, self._selected_face_id,
             show_bboxes=self._show_bboxes,
             bbox_opacity=self._bbox_opacity if self._show_bboxes else 0.0,
             show_labels=self._show_labels,

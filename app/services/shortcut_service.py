@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import copy
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QKeyCombination, QSettings, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence
+
+# On macOS F11 is grabbed by Mission Control ("Show Desktop") before Qt
+# sees it, so we use Ctrl+Shift+F (⌘⇧F) as the fullscreen default instead.
+_FULLSCREEN_DEFAULT = "Ctrl+Shift+F" if sys.platform == "darwin" else "F11"
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +42,7 @@ _DEFAULTS: List[ShortcutDef] = [
     # ── General ──────────────────────────────────────────────────────────
     ShortcutDef("general.settings",      "sc_fn_settings",        "sc_cat_general", "Ctrl+,"),
     ShortcutDef("general.search_focus",  "sc_fn_search_focus",    "sc_cat_general", "Ctrl+F"),
-    ShortcutDef("general.fullscreen",    "sc_fn_fullscreen",      "sc_cat_general", "F11"),
+    ShortcutDef("general.fullscreen",    "sc_fn_fullscreen",      "sc_cat_general", _FULLSCREEN_DEFAULT),
     ShortcutDef("general.log_panel",     "sc_fn_log_panel",       "sc_cat_general", "Ctrl+L"),
     # ── Image browser ─────────────────────────────────────────────────────
     ShortcutDef("image.previous",        "sc_fn_image_prev",      "sc_cat_image",   "Left"),
@@ -45,9 +50,11 @@ _DEFAULTS: List[ShortcutDef] = [
     ShortcutDef("image.manual_sel",      "sc_fn_manual_sel",      "sc_cat_image",   "B"),
     ShortcutDef("face.assign",           "sc_fn_face_assign",     "sc_cat_image",   "A"),
     ShortcutDef("face.confirm",          "sc_fn_face_confirm",    "sc_cat_image",   "Return"),
-    ShortcutDef("image.deselect",        "sc_fn_deselect",        "sc_cat_image",   "Escape",  deletable=False),
-    ShortcutDef("bbox.delete",           "sc_fn_bbox_delete",     "sc_cat_image",   "Delete"),
+    ShortcutDef("image.deselect",        "sc_fn_deselect",        "sc_cat_image",   "Esc",     deletable=False),
+    ShortcutDef("bbox.delete",           "sc_fn_bbox_delete",     "sc_cat_image",   "Del"),
     ShortcutDef("bbox.edit",             "sc_fn_bbox_edit",       "sc_cat_image",   "E"),
+    ShortcutDef("bbox.undo",             "sc_fn_bbox_undo",       "sc_cat_image",   "Ctrl+Z"),
+    ShortcutDef("bbox.redo",             "sc_fn_bbox_redo",       "sc_cat_image",   "Ctrl+Y"),
     ShortcutDef("bbox.next",             "sc_fn_bbox_next",       "sc_cat_image",   "]"),
     ShortcutDef("bbox.prev",             "sc_fn_bbox_prev",       "sc_cat_image",   "["),
     ShortcutDef("image.zoom_in",         "sc_fn_zoom_in",         "sc_cat_image",   "+"),
@@ -63,7 +70,7 @@ _DEFAULTS: List[ShortcutDef] = [
     # ── Collage ───────────────────────────────────────────────────────────
     ShortcutDef("collage.import",        "sc_fn_collage_import",  "sc_cat_collage", "Ctrl+I"),
     ShortcutDef("collage.face_overlay",  "sc_fn_face_overlay",    "sc_cat_collage", "F"),
-    ShortcutDef("collage.node_delete",   "sc_fn_node_delete",     "sc_cat_collage", "Delete"),
+    ShortcutDef("collage.node_delete",   "sc_fn_node_delete",     "sc_cat_collage", "Del"),
     ShortcutDef("collage.html_export",   "sc_fn_html_export",     "sc_cat_collage", "Ctrl+H"),
 ]
 
@@ -78,7 +85,10 @@ def normalize_key(event: QKeyEvent) -> str:
         Qt.Key_unknown, 0,
     ):
         return ""
-    seq = QKeySequence(int(event.modifiers()) | key)
+    # QKeyCombination is the correct API for PySide6 6.4+ where
+    # KeyboardModifiers is no longer directly int()-convertible.
+    combo = QKeyCombination(event.modifiers(), Qt.Key(key))
+    seq = QKeySequence(combo)
     return seq.toString(QKeySequence.PortableText)
 
 
@@ -111,13 +121,16 @@ class ShortcutService:
         for d in _DEFAULTS:
             self._shortcuts[d.id] = copy.copy(d)
 
+    # Older builds stored "Escape"/"Delete"; normalize_key now returns "Esc"/"Del".
+    _KEY_MIGRATE = {"Escape": "Esc", "Delete": "Del"}
+
     def _load(self) -> None:
         qs = QSettings("FaceLocal", "FaceLocal")
         self._enabled = qs.value(f"{_SETTINGS_NS}/enabled", True, type=bool)
         for sc in self._shortcuts.values():
             stored = qs.value(f"{_SETTINGS_NS}/{sc.id}", None)
             if stored is not None:
-                sc.current_key = stored
+                sc.current_key = self._KEY_MIGRATE.get(stored, stored)
 
     # ── Persistence ───────────────────────────────────────────────────────
 

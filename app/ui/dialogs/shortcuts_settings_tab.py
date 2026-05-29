@@ -288,7 +288,7 @@ class ShortcutsSettingsTab(QWidget):
         key_str = normalize_key(event)
 
         # Escape cancels capture mode
-        if key_str == "Escape":
+        if key_str == "Esc":
             self._on_cancel(self._capturing_id)
             event.accept()
             return
