@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QThreadPool, Signal, Slot
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -1794,7 +1794,8 @@ class ImageBrowserPanel(QWidget):
 
     def _setup_deoldified_pair(self, image_id: int, image_path: str) -> None:
         """Detect deoldified pairing and configure the toggle bar."""
-        settings = QSettings("FaceLocal", "FaceLocal")
+        from app.app_settings import app_qsettings
+        settings = app_qsettings()
         if not settings.value("deoldified/auto_pair", False, type=bool):
             return
 

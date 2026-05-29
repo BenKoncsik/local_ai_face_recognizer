@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -9,6 +10,11 @@ from pathlib import Path
 APP_NAME = "Face-Local"
 APP_SLUG = "face-local"
 APP_ICON_RELATIVE_PATH = "assets/icons/app-icon.png"
+
+# Folder name used under Documents for all user-writable settings files.
+SETTINGS_APP_DIR = "localAIFaceRecognizer"
+
+log = logging.getLogger(__name__)
 
 
 def is_frozen() -> bool:
@@ -83,6 +89,65 @@ def drive_mirror_dir(folder_id: str) -> Path:
     # Use only the first 24 chars of the folder_id to keep paths sane.
     safe_id = folder_id[:24].replace("/", "_").replace("\\", "_")
     return user_data_dir() / "drive-mirrors" / safe_id
+
+
+def user_documents_dir() -> Path:
+    """Return the platform-specific Documents folder.
+
+    Platform mapping:
+        - macOS:   ``~/Documents``
+        - Windows: ``%USERPROFILE%\\Documents``  (falls back to ``~/Documents``)
+        - Linux:   ``$XDG_DOCUMENTS_DIR`` if set, else ``~/Documents``
+    """
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Documents"
+    if os.name == "nt":
+        userprofile = os.environ.get("USERPROFILE", "")
+        base = Path(userprofile) if userprofile else home
+        return base / "Documents"
+    # Linux/other: respect XDG_DOCUMENTS_DIR if the shell has set it
+    xdg_docs = os.environ.get("XDG_DOCUMENTS_DIR", "")
+    if xdg_docs:
+        return Path(xdg_docs)
+    return home / "Documents"
+
+
+def user_settings_dir() -> Path:
+    """Return the persistent settings directory: ``Documents/localAIFaceRecognizer/settings``.
+
+    This is the canonical location for all user-writable settings files
+    (INI, JSON preferences, etc.) on every supported platform.
+    Call :func:`ensure_settings_dir` to guarantee the directory exists before
+    reading or writing any file inside it.
+    """
+    return user_documents_dir() / SETTINGS_APP_DIR / "settings"
+
+
+def ensure_settings_dir() -> Path:
+    """Create :func:`user_settings_dir` if it does not exist and return it.
+
+    If the Documents folder is unavailable (e.g. a restricted environment),
+    the function logs a warning and falls back to
+    ``user_config_dir() / "settings"`` so the application can always start.
+    """
+    target = user_settings_dir()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    except OSError as exc:
+        fallback = user_config_dir() / "settings"
+        log.warning(
+            "Cannot create settings directory %s: %s — falling back to %s",
+            target,
+            exc,
+            fallback,
+        )
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return fallback
 
 
 def gdrive_cache_dir() -> Path:

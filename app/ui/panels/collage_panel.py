@@ -428,8 +428,8 @@ class CollagePanel(QWidget):
             QMessageBox.warning(self, t("export"), t("no_collage_selected"))
             return
 
-        from PySide6.QtCore import QSettings
-        settings = QSettings("FaceLocal", "FaceLocal")
+        from app.app_settings import app_qsettings
+        settings = app_qsettings()
         start_dir = settings.value("paths/last_export", "", type=str)
         target = QFileDialog.getExistingDirectory(
             self, t("select_export_folder"), start_dir

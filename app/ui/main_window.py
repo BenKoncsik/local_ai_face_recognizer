@@ -63,16 +63,16 @@ log = logging.getLogger(__name__)
 
 def _last_dir(key: str, default: str = "") -> str:
     """Read a remembered directory path from persistent settings."""
-    from PySide6.QtCore import QSettings
+    from app.app_settings import app_qsettings
 
-    return QSettings("FaceLocal", "FaceLocal").value(key, default, type=str)
+    return app_qsettings().value(key, default, type=str)
 
 
 def _save_dir(key: str, path: str) -> None:
     """Persist a directory path so the next file dialog reopens there."""
-    from PySide6.QtCore import QSettings
+    from app.app_settings import app_qsettings
 
-    QSettings("FaceLocal", "FaceLocal").setValue(key, path)
+    app_qsettings().setValue(key, path)
 
 
 class MainWindow(QMainWindow):
@@ -1680,11 +1680,10 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         with session_scope() as session:
-            n = len(
-                RecognitionService(
-                    session, self._config.recognition
-                ).recognize_pending()
-            )
+            assignments, _stats = RecognitionService(
+                session, self._config.recognition
+            ).recognize_pending()
+            n = len(assignments)
 
         self._status_label.setText(t("recluster_done", n=n))
         self._refresh_persons()
@@ -1821,8 +1820,8 @@ class MainWindow(QMainWindow):
 
     def _notify(self, title: str, message: str) -> None:
         """Send a system tray notification if enabled in settings."""
-        from PySide6.QtCore import QSettings
-        enabled = QSettings("FaceLocal", "FaceLocal").value("updates/notify", True, type=bool)
+        from app.app_settings import app_qsettings
+        enabled = app_qsettings().value("updates/notify", True, type=bool)
         if not enabled:
             return
         if QSystemTrayIcon.isSystemTrayAvailable() and QSystemTrayIcon.supportsMessages():

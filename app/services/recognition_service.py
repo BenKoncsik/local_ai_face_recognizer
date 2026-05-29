@@ -67,6 +67,19 @@ class RecognitionAssignment:
     margin: float
 
 
+@dataclass
+class RecognitionStats:
+    """Diagnostic counters from a single :meth:`RecognitionService.recognize_pending` run."""
+
+    n_profiles: int = 0           # known persons with usable training examples
+    n_candidates: int = 0         # unresolved embedded faces tried
+    n_assigned: int = 0           # successfully assigned to known person
+    n_below_threshold: int = 0    # rejected: best score < threshold
+    n_margin_rejected: int = 0    # rejected: margin between 1st and 2nd too small
+    n_no_embedding: int = 0       # skipped: face had no embedding vector
+    n_pass2_assigned: int = 0     # extra assignments from same-image context pass
+
+
 class RecognitionService:
     """Recognizes unresolved faces from labeled person profiles."""
 
@@ -80,22 +93,32 @@ class RecognitionService:
         self._config = config or RecognitionConfig()
         self._exclude_low_quality = exclude_low_quality
 
-    def recognize_pending(self) -> List[RecognitionAssignment]:
+    def recognize_pending(self) -> "tuple[List[RecognitionAssignment], RecognitionStats]":
         """Assign unresolved faces to known people when confidence is high.
 
         Returns:
-            Automatic assignments made during this run.
+            Tuple of (assignments, stats) where *assignments* is the list of
+            automatic assignments made this run and *stats* holds diagnostic
+            counters useful for the pipeline summary.
         """
         profiles = self.build_profiles()
         assignments: List[RecognitionAssignment] = []
+        stats = RecognitionStats(n_profiles=len(profiles))
 
         if not profiles:
-            log.info("Recognition skipped: no known people with trusted examples")
+            log.info(
+                "Recognition skipped: no known people with trusted training examples"
+            )
         else:
             candidates = self._load_candidate_faces()
+            stats.n_candidates = len(candidates)
             if not candidates:
                 log.info("Recognition skipped: no unresolved embedded faces")
             else:
+                log.info(
+                    "Recognition: %d profile(s), %d candidate face(s)",
+                    len(profiles), len(candidates),
+                )
                 rejected_face_targets = self._load_rejected_face_targets(candidates)
                 rejected_person_pairs = self._load_rejected_person_pairs()
                 now = _utcnow_naive()
@@ -104,7 +127,7 @@ class RecognitionService:
                 unresolved: List[Face] = []
                 for face in candidates:
                     threshold = self._compute_adaptive_threshold(face)
-                    match = self._match_face(
+                    match, reject_reason = self._match_face(
                         face=face,
                         profiles=profiles,
                         rejected_face_targets=rejected_face_targets,
@@ -115,7 +138,14 @@ class RecognitionService:
                     if match is not None:
                         self._apply_match(face, match, now)
                         assignments.append(match)
+                        stats.n_assigned += 1
                     else:
+                        if reject_reason == "no_embedding":
+                            stats.n_no_embedding += 1
+                        elif reject_reason == "below_threshold":
+                            stats.n_below_threshold += 1
+                        elif reject_reason == "margin":
+                            stats.n_margin_rejected += 1
                         unresolved.append(face)
 
                 # --- Pass 2: same-image context-assisted recognition ---
@@ -128,6 +158,8 @@ class RecognitionService:
                         now=now,
                         assignments=assignments,
                     )
+                    stats.n_pass2_assigned = n_extra
+                    stats.n_assigned += n_extra
                     if n_extra:
                         log.info(
                             "Same-image assist: %d additional face(s) assigned", n_extra
@@ -136,10 +168,15 @@ class RecognitionService:
         self._delete_orphan_auto_persons()
         self._session.commit()
         log.info(
-            "Recognition assigned %d unresolved face(s)",
-            len(assignments),
+            "Recognition summary: %d profile(s), %d candidate(s), "
+            "%d assigned (%d pass-2), %d below threshold, %d margin rejected, "
+            "%d no embedding",
+            stats.n_profiles, stats.n_candidates,
+            stats.n_assigned, stats.n_pass2_assigned,
+            stats.n_below_threshold, stats.n_margin_rejected,
+            stats.n_no_embedding,
         )
-        return assignments
+        return assignments, stats
 
     # ------------------------------------------------------------------
     # Profile building
@@ -270,7 +307,7 @@ class RecognitionService:
             if not restricted:
                 continue
 
-            match = self._match_face(
+            match, _ = self._match_face(
                 face=face,
                 profiles=restricted,
                 rejected_face_targets=rejected_face_targets,
@@ -348,11 +385,19 @@ class RecognitionService:
         rejected_person_pairs: Set[frozenset],
         threshold: float,
         margin: float,
-    ) -> Optional[RecognitionAssignment]:
+    ) -> "tuple[Optional[RecognitionAssignment], Optional[str]]":
+        """Try to match *face* against *profiles*.
+
+        Returns
+        -------
+        ``(assignment, None)`` on success, or ``(None, reason)`` on failure
+        where *reason* is one of ``"no_embedding"``, ``"below_threshold"``,
+        ``"margin"``, or ``"no_profiles"``.
+        """
         embedding = self._normalise(face.get_embedding())
         if embedding is None:
             log.debug("Face id=%d: no embedding — skipped", face.id)
-            return None
+            return None, "no_embedding"
 
         scored: List[tuple[float, PersonRecognitionProfile]] = []
         for profile in profiles.values():
@@ -369,7 +414,7 @@ class RecognitionService:
 
         if not scored:
             log.debug("Face id=%d: no eligible profiles after corrections", face.id)
-            return None
+            return None, "no_profiles"
 
         scored.sort(key=lambda item: item[0], reverse=True)
         best_score, best_profile = scored[0]
@@ -384,7 +429,7 @@ class RecognitionService:
                 face.quality_score if face.quality_score is not None else -1.0,
                 face.bbox_w, face.bbox_h,
             )
-            return None
+            return None, "below_threshold"
 
         if actual_margin < margin:
             log.debug(
@@ -395,7 +440,7 @@ class RecognitionService:
                 scored[1][1].name if len(scored) > 1 else "none",
                 second_score,
             )
-            return None
+            return None, "margin"
 
         log.debug(
             "Face id=%d: assigned → %r (score=%.3f, margin=%.3f, threshold=%.3f)",
@@ -407,7 +452,7 @@ class RecognitionService:
             target_name=best_profile.name,
             score=best_score,
             margin=actual_margin,
-        )
+        ), None
 
     def _score(self, embedding: np.ndarray, profile: PersonRecognitionProfile) -> float:
         centroid_similarity = float(np.dot(embedding, profile.centroid))

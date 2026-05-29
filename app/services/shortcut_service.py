@@ -12,7 +12,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QKeyCombination, QSettings, Qt
+from PySide6.QtCore import QKeyCombination, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence
 
 # On macOS F11 is grabbed by Mission Control ("Show Desktop") before Qt
@@ -125,7 +125,8 @@ class ShortcutService:
     _KEY_MIGRATE = {"Escape": "Esc", "Delete": "Del"}
 
     def _load(self) -> None:
-        qs = QSettings("FaceLocal", "FaceLocal")
+        from app.app_settings import app_qsettings
+        qs = app_qsettings()
         self._enabled = qs.value(f"{_SETTINGS_NS}/enabled", True, type=bool)
         for sc in self._shortcuts.values():
             stored = qs.value(f"{_SETTINGS_NS}/{sc.id}", None)
@@ -135,7 +136,8 @@ class ShortcutService:
     # ── Persistence ───────────────────────────────────────────────────────
 
     def save(self) -> None:
-        qs = QSettings("FaceLocal", "FaceLocal")
+        from app.app_settings import app_qsettings
+        qs = app_qsettings()
         qs.setValue(f"{_SETTINGS_NS}/enabled", self._enabled)
         for sc in self._shortcuts.values():
             qs.setValue(f"{_SETTINGS_NS}/{sc.id}", sc.current_key)

@@ -31,7 +31,8 @@ from app.ui.i18n import SUPPORTED, current_language, set_language, t
 
 
 def _qsettings() -> QSettings:
-    return QSettings("FaceLocal", "FaceLocal")
+    from app.app_settings import app_qsettings
+    return app_qsettings()
 
 
 class _TpuProbeThread(QThread):

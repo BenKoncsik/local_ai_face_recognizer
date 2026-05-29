@@ -19,15 +19,16 @@ import logging
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QThread, Signal
+from PySide6.QtCore import QThread, Signal
 
 from app.config import AppConfig
 from app.db.database import init_db, session_scope
 from app.detectors.factory import create_detector
 from app.embeddings.tflite_embedder import TFLiteEmbedder
+from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
-from app.services.recognition_service import RecognitionService
+from app.services.recognition_service import RecognitionService, RecognitionStats
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
 from typing import Optional
@@ -99,7 +100,8 @@ class PipelineWorker(QThread):
 
     def _run_pipeline(self) -> None:
         # Read user preference for face quality filtering.
-        _qs = QSettings("FaceLocal", "FaceLocal")
+        from app.app_settings import app_qsettings
+        _qs = app_qsettings()
         exclude_low_quality: bool = _qs.value(
             "face_quality/exclude_low_quality", True, type=bool
         )
@@ -111,9 +113,9 @@ class PipelineWorker(QThread):
 
         # --- Stage 1: Scan ---
         if self._drive_mode:
-            self.log_message.emit("Stage 1/5: Scanning Google Drive project folder …")
+            self.log_message.emit("Stage 1/6: Scanning Google Drive project folder …")
         else:
-            self.log_message.emit("Stage 1/5: Scanning image folder …")
+            self.log_message.emit("Stage 1/6: Scanning image folder …")
         new_ids = self._run_scan()
         if self._abort:
             self.finished.emit(False, "Aborted after scan")
@@ -123,7 +125,7 @@ class PipelineWorker(QThread):
         all_pending = self._get_pending_detection_ids()
         mode_label = "high-accuracy" if self._high_accuracy else "fast"
         self.log_message.emit(
-            f"Stage 2/5: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
+            f"Stage 2/6: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
         )
         total_faces = self._run_detection(all_pending)
         if self._abort:
@@ -131,7 +133,7 @@ class PipelineWorker(QThread):
             return
 
         # --- Stage 3: Embedding ---
-        self.log_message.emit("Stage 3/5: Generating face embeddings …")
+        self.log_message.emit("Stage 3/6: Generating face embeddings …")
         try:
             embedded = self._run_embedding(exclude_low_quality)
         except ImportError as exc:
@@ -151,23 +153,37 @@ class PipelineWorker(QThread):
 
         # --- Stage 4: Recognition ---
         self.log_message.emit(
-            "Stage 4/5: Recognizing faces from learned people …"
+            "Stage 4/6: Recognizing faces from learned people …"
         )
-        n_assigned = self._run_recognition(exclude_low_quality)
+        rec_stats = self._run_recognition(exclude_low_quality)
 
-        # --- Stage 5: Name suggestions ---
+        # --- Stage 5: Unknown-face clustering ---
         self.log_message.emit(
-            "Stage 5/5: Matching unknown faces against named people …"
+            "Stage 5/6: Clustering unassigned faces into Unknown persons …"
+        )
+        cluster_stats = self._run_clustering(exclude_low_quality)
+
+        # --- Stage 6: Name suggestions ---
+        self.log_message.emit(
+            "Stage 6/6: Matching unknown faces against named people …"
         )
         n_suggestions = self._run_suggestions(exclude_low_quality)
         self.suggestions_ready.emit(n_suggestions)
 
         summary = (
             f"Done — {len(new_ids)} new image(s), "
-            f"{total_faces} face(s) detected, "
-            f"{embedded} embedded, "
-            f"{n_assigned} face(s) auto-assigned, "
-            f"{n_suggestions} name suggestion(s)"
+            f"{total_faces} detected, "
+            f"{embedded} embedded | "
+            f"known: {rec_stats.n_assigned}"
+            f" (of {rec_stats.n_candidates} candidates, "
+            f"{rec_stats.n_profiles} profiles, "
+            f"{rec_stats.n_below_threshold} below-thr, "
+            f"{rec_stats.n_margin_rejected} margin-rej) | "
+            f"unknown: +{cluster_stats.n_new_persons} new persons "
+            f"({cluster_stats.n_assigned_to_new} faces), "
+            f"+{cluster_stats.n_assigned_to_existing} → existing, "
+            f"{cluster_stats.n_singletons} unassigned | "
+            f"{n_suggestions} suggestion(s)"
         )
         self.log_message.emit(summary)
         self.finished.emit(True, summary)
@@ -267,17 +283,35 @@ class PipelineWorker(QThread):
             )
             return svc.process_pending(exclude_low_quality=exclude_low_quality)
 
-    def _run_recognition(self, exclude_low_quality: bool = False) -> int:
+    def _run_recognition(self, exclude_low_quality: bool = False) -> RecognitionStats:
         with session_scope() as session:
             svc = RecognitionService(
                 session=session,
                 config=self._config.recognition,
                 exclude_low_quality=exclude_low_quality,
             )
-            assignments = svc.recognize_pending()
-            n = len(assignments)
-            self.progress.emit(1, 1, "Recognition", f"{n} face(s)")
-            return n
+            assignments, stats = svc.recognize_pending()
+            self.progress.emit(1, 1, "Recognition", f"{stats.n_assigned} face(s) assigned")
+            return stats
+
+    def _run_clustering(self, exclude_low_quality: bool = False) -> ClusteringStats:
+        """Cluster unassigned embedded faces into Unknown N persons."""
+        try:
+            with session_scope() as session:
+                svc = ClusteringService(
+                    session=session,
+                    config=self._config.clustering,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                stats = svc.cluster_unassigned()
+                self.progress.emit(
+                    1, 1, "Clustering",
+                    f"{stats.n_new_persons} new Unknown persons",
+                )
+                return stats
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Unknown clustering stage failed: %s", exc)
+            return ClusteringStats()
 
     def _run_suggestions(self, exclude_low_quality: bool = False) -> int:
         """Compute name suggestions; never aborts the pipeline on failure."""

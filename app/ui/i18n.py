@@ -10,8 +10,17 @@ from typing import Dict
 log = logging.getLogger(__name__)
 
 SUPPORTED: Dict[str, str] = {"en": "English", "hu": "Magyar"}
-_PREFS_FILE = Path.home() / ".face_local_prefs.json"
+_LEGACY_PREFS_FILE = Path.home() / ".face_local_prefs.json"
 _lang: str = "en"
+
+
+def _prefs_file() -> Path:
+    """Return the active language preferences file path, creating its directory."""
+    try:
+        from app.paths import ensure_settings_dir
+        return ensure_settings_dir() / "language_prefs.json"
+    except Exception:  # noqa: BLE001
+        return _LEGACY_PREFS_FILE
 
 _STRINGS: Dict[str, Dict[str, str]] = {
     # ── Toolbar ───────────────────────────────────────────────────────────────
@@ -1324,8 +1333,17 @@ def set_language(lang: str) -> None:
 def load_prefs() -> None:
     global _lang
     try:
-        if _PREFS_FILE.exists():
-            data = json.loads(_PREFS_FILE.read_text(encoding="utf-8"))
+        target = _prefs_file()
+        # One-time migration: move legacy ~/.face_local_prefs.json to new location.
+        if not target.exists() and _LEGACY_PREFS_FILE.exists():
+            try:
+                import shutil
+                shutil.copy2(_LEGACY_PREFS_FILE, target)
+                log.info("i18n: migrated language prefs from %s to %s", _LEGACY_PREFS_FILE, target)
+            except Exception as mig_exc:  # noqa: BLE001
+                log.warning("i18n: could not migrate prefs: %s", mig_exc)
+        if target.exists():
+            data = json.loads(target.read_text(encoding="utf-8"))
             lang = data.get("language", "en")
             if lang in SUPPORTED:
                 _lang = lang
@@ -1335,10 +1353,11 @@ def load_prefs() -> None:
 
 def _save_prefs() -> None:
     try:
+        target = _prefs_file()
         data: dict = {}
-        if _PREFS_FILE.exists():
-            data = json.loads(_PREFS_FILE.read_text(encoding="utf-8"))
+        if target.exists():
+            data = json.loads(target.read_text(encoding="utf-8"))
         data["language"] = _lang
-        _PREFS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        target.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         log.warning("i18n: could not save prefs: %s", exc)

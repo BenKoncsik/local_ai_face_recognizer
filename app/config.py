@@ -89,6 +89,15 @@ class ClusteringConfig:
     # Distance metric passed to DBSCAN
     metric: str = "cosine"
 
+    # Maximum cosine distance to assign an unassigned face to an *existing*
+    # Unknown person (incremental clustering in the pipeline).
+    # Should be >= epsilon so faces that would cluster together also match existing ones.
+    unknown_assign_threshold: float = 0.45
+
+    # Minimum cluster size to create a new Unknown person.
+    # Clusters smaller than this remain unassigned (avoid singleton Unknown spam).
+    create_unknown_min_cluster_size: int = 2
+
 
 @dataclass
 class RecognitionConfig:
@@ -307,6 +316,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             epsilon=clu.get("epsilon", cfg.clustering.epsilon),
             min_samples=clu.get("min_samples", cfg.clustering.min_samples),
             metric=clu.get("metric", cfg.clustering.metric),
+            unknown_assign_threshold=clu.get(
+                "unknown_assign_threshold", cfg.clustering.unknown_assign_threshold
+            ),
+            create_unknown_min_cluster_size=clu.get(
+                "create_unknown_min_cluster_size",
+                cfg.clustering.create_unknown_min_cluster_size,
+            ),
         )
 
         rec = raw.get("recognition", {})

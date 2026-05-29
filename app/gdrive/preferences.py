@@ -25,8 +25,8 @@ from typing import Optional
 
 
 def _qs():  # noqa: ANN202
-    from PySide6.QtCore import QSettings
-    return QSettings("FaceLocal", "FaceLocal")
+    from app.app_settings import app_qsettings
+    return app_qsettings()
 
 
 @dataclass

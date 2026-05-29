@@ -106,6 +106,10 @@ def main() -> None:
     from app.ui.theme import apply_theme
     apply_theme(app)
 
+    # Migrate settings from legacy native QSettings store (one-time, no-op afterwards)
+    from app.app_settings import migrate_legacy_settings
+    migrate_legacy_settings()
+
     from app.ui.main_window import MainWindow
 
     window = MainWindow(config=config)
