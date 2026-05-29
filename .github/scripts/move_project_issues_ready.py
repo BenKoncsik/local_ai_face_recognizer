@@ -108,13 +108,26 @@ def git_log_messages(before: str, after: str) -> list[str]:
     return [message.strip() for message in output.split("\x1e") if message.strip()]
 
 
+def unique_messages(messages: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for message in messages:
+        if message in seen:
+            continue
+        seen.add(message)
+        unique.append(message)
+    return unique
+
+
 def referenced_issue_numbers() -> list[int]:
     event = load_event()
     messages = collect_messages_from_event(event)
-    if not messages:
-        before = str(event.get("before") or env("GITHUB_EVENT_BEFORE"))
-        after = str(event.get("after") or env("GITHUB_SHA"))
-        messages = git_log_messages(before, after)
+    before = str(event.get("before") or env("GITHUB_EVENT_BEFORE"))
+    after = str(event.get("after") or env("GITHUB_SHA"))
+    messages.extend(git_log_messages(before, after))
+    if after:
+        messages.extend(git_log_messages("", after))
+    messages = unique_messages(messages)
 
     numbers = sorted({int(match) for message in messages for match in ISSUE_RE.findall(message)})
     if numbers:

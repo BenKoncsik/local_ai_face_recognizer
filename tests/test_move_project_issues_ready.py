@@ -44,6 +44,28 @@ def test_resolve_owner_type_uses_repository_owner_for_users(monkeypatch) -> None
     assert move_project_issues_ready.resolve_owner_type("octocat") == "User"
 
 
+def test_referenced_issue_numbers_falls_back_to_checked_out_commit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        move_project_issues_ready,
+        "load_event",
+        lambda: {
+            "before": "before-sha",
+            "after": "after-sha",
+            "commits": [{"message": "Update workflow"}],
+            "head_commit": {"message": "Update workflow"},
+        },
+    )
+
+    def fake_git_log_messages(before: str, after: str) -> list[str]:
+        if before == "" and after == "after-sha":
+            return ["#54 #12 #53"]
+        return []
+
+    monkeypatch.setattr(move_project_issues_ready, "git_log_messages", fake_git_log_messages)
+
+    assert move_project_issues_ready.referenced_issue_numbers() == [12, 53, 54]
+
+
 def test_resolve_status_options_returns_requested_option_ids(monkeypatch) -> None:
     def fake_graphql(query: str, variables: dict[str, object]) -> dict[str, object]:
         assert variables == {"projectId": "project-id"}
