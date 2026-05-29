@@ -500,6 +500,14 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "assign_to_person":  {"en": "Assign to Person …", "hu": "Személyhez adás…"},
     "delete_selection":  {"en": "Delete Selection", "hu": "Kijelölés törlése"},
     "unknown_face":      {"en": "Unknown face", "hu": "Ismeretlen arc"},
+    "overlay_bboxes":    {"en": "Boxes", "hu": "Keretek"},
+    "overlay_labels":    {"en": "Labels", "hu": "Nevek"},
+    "overlay_bbox_lbl":  {"en": "Box:", "hu": "Keret:"},
+    "overlay_label_lbl": {"en": "Label:", "hu": "Név:"},
+    "overlay_bbox_tip":  {"en": "Bounding box opacity", "hu": "Keretek áttetszősége"},
+    "overlay_label_tip": {"en": "Label opacity", "hu": "Nevek áttetszősége"},
+    "prev_image":        {"en": "← Prev", "hu": "← Előző"},
+    "next_image":        {"en": "Next →", "hu": "Következő →"},
 
     # ── Overlapping unknown face cleanup ─────────────────────────────────
     "overlap_dialog_title": {"en": "Overlapping ? Face Boxes",

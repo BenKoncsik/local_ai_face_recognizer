@@ -35,6 +35,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDockWidget,
     QFrame,
     QHBoxLayout,
@@ -47,6 +48,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QTabWidget,
     QToolBar,
@@ -221,6 +223,10 @@ def _draw_faces(
     img_bgr: np.ndarray,
     faces: List[_FaceData],
     selected_id: Optional[int],
+    show_bboxes: bool = True,
+    bbox_opacity: float = 1.0,
+    show_labels: bool = True,
+    label_opacity: float = 1.0,
 ) -> np.ndarray:
     from PIL import Image as PILImage, ImageDraw
 
@@ -234,7 +240,7 @@ def _draw_faces(
     image_h, image_w = img.shape[:2]
     font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
-    # --- Phase 1: measure all labels ---
+    # --- Phase 1: measure all labels (needed for layout even if hidden) ---
     face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
     for face_id, x, y, w, h, person_name, _ in faces:
         selected = face_id == selected_id
@@ -276,32 +282,53 @@ def _draw_faces(
     ]
     layouts = place_labels(image_w, image_h, face_labels)
 
-    # --- Phase 3: render labels ---
-    for i, layout in enumerate(layouts):
-        name, font, pad_x, pad_y, label_w, label_h, color_rgb = face_meta[i]
+    # --- Phase 3: render labels with opacity via RGBA compositing ---
+    if show_labels and label_opacity > 0.0 and faces:
+        lbl_alpha = int(label_opacity * 255)
+        overlay = PILImage.new("RGBA", pil_img.size, (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
 
-        if layout.leader_start and layout.leader_end:
-            draw.line([layout.leader_start, layout.leader_end],
-                      fill=(120, 120, 120), width=2)
+        for i, layout in enumerate(layouts):
+            name, font, pad_x, pad_y, label_w, label_h, color_rgb = face_meta[i]
 
-        draw.rectangle(
-            [layout.label_x, layout.label_y,
-             layout.label_x + label_w, layout.label_y + label_h],
-            fill=(20, 20, 20),
-        )
-        draw.text(
-            (layout.label_x + pad_x, layout.label_y + pad_y),
-            name,
-            font=font,
-            fill=color_rgb,
-        )
+            if layout.leader_start and layout.leader_end:
+                odraw.line([layout.leader_start, layout.leader_end],
+                           fill=(120, 120, 120, lbl_alpha), width=2)
+
+            odraw.rectangle(
+                [layout.label_x, layout.label_y,
+                 layout.label_x + label_w, layout.label_y + label_h],
+                fill=(20, 20, 20, lbl_alpha),
+            )
+            odraw.text(
+                (layout.label_x + pad_x, layout.label_y + pad_y),
+                name,
+                font=font,
+                fill=(*color_rgb, lbl_alpha),
+            )
+
+        base_rgba = pil_img.convert("RGBA")
+        pil_img = PILImage.alpha_composite(base_rgba, overlay).convert("RGB")
 
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-    for face_id, x, y, w, h, _, _ in faces:
-        selected = face_id == selected_id
-        color = (50, 220, 50) if selected else (180, 180, 180)
-        thickness = 3 if selected else 2
-        cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
+
+    # --- Phase 4: render bounding boxes ---
+    if show_bboxes and bbox_opacity > 0.0:
+        if bbox_opacity >= 0.99:
+            for face_id, x, y, w, h, _, _ in faces:
+                selected = face_id == selected_id
+                color = (50, 220, 50) if selected else (180, 180, 180)
+                thickness = 3 if selected else 2
+                cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
+        else:
+            overlay_cv = img.copy()
+            for face_id, x, y, w, h, _, _ in faces:
+                selected = face_id == selected_id
+                color = (50, 220, 50) if selected else (180, 180, 180)
+                thickness = 3 if selected else 2
+                cv2.rectangle(overlay_cv, (x, y), (x + w, y + h), color, thickness)
+            cv2.addWeighted(overlay_cv, bbox_opacity, img, 1.0 - bbox_opacity, 0, img)
+
     return img
 
 
@@ -640,6 +667,14 @@ class ImageBrowserPanel(QWidget):
         self._all_places: List[Place] = []
         self._place_filter_id: Optional[int] = None
 
+        # Overlay state
+        self._show_bboxes: bool = True
+        self._bbox_opacity: float = 0.7
+        self._prev_bbox_opacity: float = 0.7
+        self._show_labels: bool = True
+        self._label_opacity: float = 0.4
+        self._prev_label_opacity: float = 0.4
+
         # Zoom / pan
         self._zoom: float = 1.0
         self._pan_x: float = 0.0
@@ -802,6 +837,72 @@ class ImageBrowserPanel(QWidget):
         top_bar.addWidget(self._draw_mode_btn)
 
         top_bar.addStretch()
+
+        # ── Overlay controls ─────────────────────────────────────────────
+        _ov_lbl_style = "QLabel { color: #aaa; font-size: 11px; }"
+        _ov_pct_style = "QLabel { color: #888; font-size: 11px; min-width: 30px; }"
+        _ov_chk_style = (
+            "QCheckBox { color: #cdd6f4; font-size: 11px; spacing: 3px; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; }"
+        )
+        _ov_sld_style = (
+            "QSlider::groove:horizontal { height: 4px; background: #45475a; border-radius: 2px; }"
+            "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
+            " background: #89b4fa; border-radius: 5px; }"
+            "QSlider::sub-page:horizontal { background: #89b4fa; border-radius: 2px; }"
+            "QSlider:disabled { opacity: 0.4; }"
+        )
+
+        self._bbox_check = QCheckBox(t("overlay_bboxes"))
+        self._bbox_check.setChecked(True)
+        self._bbox_check.setToolTip(t("overlay_bbox_tip"))
+        self._bbox_check.setStyleSheet(_ov_chk_style)
+        top_bar.addWidget(self._bbox_check)
+
+        self._bbox_slider = QSlider(Qt.Horizontal)
+        self._bbox_slider.setRange(0, 100)
+        self._bbox_slider.setValue(70)
+        self._bbox_slider.setToolTip(t("overlay_bbox_tip"))
+        self._bbox_slider.setMinimumWidth(60)
+        self._bbox_slider.setMaximumWidth(110)
+        self._bbox_slider.setStyleSheet(_ov_sld_style)
+        top_bar.addWidget(self._bbox_slider)
+
+        self._bbox_pct_label = QLabel("70%")
+        self._bbox_pct_label.setStyleSheet(_ov_pct_style)
+        self._bbox_pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        top_bar.addWidget(self._bbox_pct_label)
+
+        top_bar.addSpacing(12)
+
+        self._label_check = QCheckBox(t("overlay_labels"))
+        self._label_check.setChecked(True)
+        self._label_check.setToolTip(t("overlay_label_tip"))
+        self._label_check.setStyleSheet(_ov_chk_style)
+        top_bar.addWidget(self._label_check)
+
+        self._label_slider = QSlider(Qt.Horizontal)
+        self._label_slider.setRange(0, 100)
+        self._label_slider.setValue(40)
+        self._label_slider.setToolTip(t("overlay_label_tip"))
+        self._label_slider.setMinimumWidth(60)
+        self._label_slider.setMaximumWidth(110)
+        self._label_slider.setStyleSheet(_ov_sld_style)
+        top_bar.addWidget(self._label_slider)
+
+        self._label_pct_label = QLabel("40%")
+        self._label_pct_label.setStyleSheet(_ov_pct_style)
+        self._label_pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        top_bar.addWidget(self._label_pct_label)
+
+        top_bar.addSpacing(12)
+
+        # Wire overlay signals
+        self._bbox_check.toggled.connect(self._on_ov_bbox_check)
+        self._bbox_slider.valueChanged.connect(self._on_ov_bbox_slider)
+        self._label_check.toggled.connect(self._on_ov_label_check)
+        self._label_slider.valueChanged.connect(self._on_ov_label_slider)
+        # ─────────────────────────────────────────────────────────────────
 
         self._prev_btn = QPushButton("◀")
         self._prev_btn.setToolTip("Előző kép  (←)")
@@ -1656,6 +1757,40 @@ class ImageBrowserPanel(QWidget):
         if first_child.data(0, _ROLE_TYPE) == "image":
             self._select_tree_item(first_child)
 
+    # ── Overlay control handlers ──────────────────────────────────────────
+
+    def _on_ov_bbox_check(self, checked: bool) -> None:
+        self._show_bboxes = checked
+        self._bbox_slider.setEnabled(checked)
+        if checked:
+            self._bbox_opacity = self._prev_bbox_opacity
+        self._redraw_faces()
+
+    def _on_ov_bbox_slider(self, value: int) -> None:
+        pct = value / 100.0
+        self._bbox_opacity = pct
+        if self._show_bboxes:
+            self._prev_bbox_opacity = pct
+        self._bbox_pct_label.setText(f"{value}%")
+        self._redraw_faces()
+
+    def _on_ov_label_check(self, checked: bool) -> None:
+        self._show_labels = checked
+        self._label_slider.setEnabled(checked)
+        if checked:
+            self._label_opacity = self._prev_label_opacity
+        self._redraw_faces()
+
+    def _on_ov_label_slider(self, value: int) -> None:
+        pct = value / 100.0
+        self._label_opacity = pct
+        if self._show_labels:
+            self._prev_label_opacity = pct
+        self._label_pct_label.setText(f"{value}%")
+        self._redraw_faces()
+
+    # ── Navigation ───────────────────────────────────────────────────────
+
     def _navigate_prev(self) -> None:
         self._navigate(-1)
 
@@ -2330,7 +2465,11 @@ class ImageBrowserPanel(QWidget):
             self._deol_viewing_color,
         )
         annotated = _draw_faces(
-            self._orig_img_bgr, self._face_data, self._selected_face_id
+            self._orig_img_bgr, self._face_data, self._selected_face_id,
+            show_bboxes=self._show_bboxes,
+            bbox_opacity=self._bbox_opacity if self._show_bboxes else 0.0,
+            show_labels=self._show_labels,
+            label_opacity=self._label_opacity if self._show_labels else 0.0,
         )
         self._full_pixmap = _bgr_to_qpixmap(annotated)
         self._image_label.set_source_pixmap(self._full_pixmap)

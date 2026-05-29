@@ -1,4 +1,12 @@
-"""Preview panel — shows the original image with all face bounding boxes and names."""
+"""Preview panel — shows the original image with all face bounding boxes and names.
+
+Overlay architecture:
+  - The base image is stored as a clean QPixmap (no baked-in annotations).
+  - _FaceImageLabel.paintEvent() draws bounding boxes and labels via QPainter
+    on top of the clean image, using separately controllable opacity values.
+  - Slider movement triggers only overlay.update() — no image reload.
+  - Face selection change (select_face) also only triggers an overlay repaint.
+"""
 
 from __future__ import annotations
 
@@ -6,12 +14,21 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -32,6 +49,23 @@ log = logging.getLogger(__name__)
 # (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None)
 _FaceData = Tuple[int, int, int, int, int, Optional[str]]
 
+# Colours used for bounding-box / label rendering
+_COLOR_SELECTED = QColor(50, 220, 50)
+_COLOR_HOVER    = QColor(255, 200, 60)
+_COLOR_NORMAL   = QColor(180, 180, 180)
+
+_BG_SELECTED = QColor(10,  30, 10, 210)
+_BG_HOVER    = QColor(30,  25,  5, 210)
+_BG_NORMAL   = QColor(20,  20, 20, 200)
+
+_BORDER_SELECTED = QColor(50,  220, 50,  180)
+_BORDER_HOVER    = QColor(255, 200, 60,  180)
+_BORDER_NORMAL   = QColor(100, 100, 100, 120)
+
+
+# ---------------------------------------------------------------------------
+# PIL-based renderer kept for the full-resolution Zoom dialog
+# ---------------------------------------------------------------------------
 
 def _get_pil_font(size: int):
     import sys
@@ -62,12 +96,12 @@ def _get_pil_font(size: int):
     return ImageFont.load_default()
 
 
-def _draw_faces(
+def _draw_faces_pil(
     img_bgr: np.ndarray,
     faces: List[_FaceData],
     selected_id: Optional[int],
 ) -> np.ndarray:
-    """Draw all face boxes with names; selected face in bright green, others in gray."""
+    """Draw face boxes and labels using OpenCV + PIL (for the zoom dialog)."""
     from PIL import Image as PILImage
     from PIL import ImageDraw
 
@@ -88,8 +122,7 @@ def _draw_faces(
     image_h, image_w = img.shape[:2]
     font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
-    # --- Phase 1: measure all labels ---
-    face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
+    face_meta = []
     for face_id, x, y, w, h, person_name in faces:
         selected = face_id == selected_id
         color_rgb = (50, 220, 50) if selected else (180, 180, 180)
@@ -116,7 +149,6 @@ def _draw_faces(
         label_h = th + 2 * pad_y
         face_meta.append((name, font, pad_x, pad_y, label_w, label_h, color_rgb))
 
-    # --- Phase 2: compute collision-free positions ---
     face_labels = [
         FaceLabel(
             face_id=faces[i][0],
@@ -130,7 +162,6 @@ def _draw_faces(
     ]
     layouts = place_labels(image_w, image_h, face_labels)
 
-    # --- Phase 3: render ---
     for i, layout in enumerate(layouts):
         name, font, pad_x, pad_y, label_w, label_h, color_rgb = face_meta[i]
 
@@ -159,6 +190,10 @@ def _bgr_to_qpixmap(img_bgr: np.ndarray) -> QPixmap:
     qimg = QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format_RGB888)
     return QPixmap.fromImage(qimg)
 
+
+# ---------------------------------------------------------------------------
+# Zoom dialog
+# ---------------------------------------------------------------------------
 
 class _ZoomDialog(QDialog):
     """Fullscreen-ish dialog showing the image at full resolution with scroll."""
@@ -231,33 +266,85 @@ class _WheelZoomScrollArea(QScrollArea):
         event.accept()
 
 
-class _FaceImageLabel(QLabel):
-    """QLabel that detects face clicks and can draw a manual face rectangle."""
+# ---------------------------------------------------------------------------
+# Face image label with QPainter overlay
+# ---------------------------------------------------------------------------
 
-    face_clicked = Signal(int)        # face_id clicked with left button
-    canvas_clicked = Signal()         # left click outside all faces → open zoom
-    face_right_clicked = Signal(int, int, int)  # face_id, global_x, global_y
+class _FaceImageLabel(QLabel):
+    """QLabel that detects face clicks, supports draw mode, and renders
+    face bounding-box / label overlays directly via QPainter.
+
+    The base image pixmap is kept clean (no baked-in annotations).  All
+    overlay drawing happens in paintEvent, controlled by opacity sliders.
+    """
+
+    face_clicked = Signal(int)
+    canvas_clicked = Signal()
+    face_right_clicked = Signal(int, int, int)
     rect_drawn = Signal(QRect)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
+        self.setMouseTracking(True)
+
+        # Hit-test data (image coordinates)
         self._face_data: List[Tuple[int, int, int, int, int]] = []  # (id, x, y, w, h)
         self._full_w: int = 0
         self._full_h: int = 0
+
+        # Extended render data including names
+        self._face_render_data: List[_FaceData] = []  # (id, x, y, w, h, name)
+
+        # Draw-mode state
         self._draw_mode = False
         self._start: Optional[QPoint] = None
         self._end: Optional[QPoint] = None
 
+        # Overlay settings
+        self._selected_face_id: Optional[int] = None
+        self._hover_face_id: Optional[int] = None
+        self._show_bboxes: bool = True
+        self._bbox_opacity: float = 0.7
+        self._show_labels: bool = True
+        self._label_opacity: float = 0.4
+
+        # Layout cache: avoids re-running place_labels() on every repaint
+        # when nothing has changed.
+        self._layout_cache_key: Optional[tuple] = None
+        self._layout_cache: Optional[tuple] = None  # (label_sizes, layouts)
+
+    # ------------------------------------------------------------------
+    # Public setters
+    # ------------------------------------------------------------------
+
     def set_face_data(
         self,
-        faces: List[Tuple[int, int, int, int, int]],
+        faces: List[_FaceData],
         full_w: int,
         full_h: int,
     ) -> None:
-        self._face_data = faces
+        self._face_render_data = faces
+        self._face_data = [(fd[0], fd[1], fd[2], fd[3], fd[4]) for fd in faces]
         self._full_w = full_w
         self._full_h = full_h
+        self._layout_cache_key = None
+        self.update()
+
+    def set_overlay_settings(
+        self,
+        show_bboxes: bool,
+        bbox_opacity: float,
+        show_labels: bool,
+        label_opacity: float,
+        selected_id: Optional[int],
+    ) -> None:
+        self._show_bboxes = show_bboxes
+        self._bbox_opacity = bbox_opacity
+        self._show_labels = show_labels
+        self._label_opacity = label_opacity
+        self._selected_face_id = selected_id
+        self.update()
 
     def set_draw_mode(self, enabled: bool) -> None:
         self._draw_mode = enabled
@@ -266,19 +353,34 @@ class _FaceImageLabel(QLabel):
         self.setCursor(Qt.CrossCursor if enabled else Qt.PointingHandCursor)
         self.update()
 
-    def _label_to_image(self, lx: float, ly: float) -> Tuple[int, int]:
+    # ------------------------------------------------------------------
+    # Coordinate helpers
+    # ------------------------------------------------------------------
+
+    def _display_transform(self) -> Optional[Tuple[float, float, float]]:
+        """Return (scale, offset_x, offset_y) for image→display mapping.
+
+        Returns None when dimensions are unknown.
+        """
         if self._full_w == 0 or self._full_h == 0:
-            return -1, -1
+            return None
         lw, lh = self.width(), self.height()
         if lw == 0 or lh == 0:
-            return -1, -1
+            return None
         scale = min(lw / self._full_w, lh / self._full_h)
-        disp_w = self._full_w * scale
-        disp_h = self._full_h * scale
-        ox = (lw - disp_w) / 2
-        oy = (lh - disp_h) / 2
+        ox = (lw - self._full_w * scale) / 2
+        oy = (lh - self._full_h * scale) / 2
+        return scale, ox, oy
+
+    def _label_to_image(self, lx: float, ly: float) -> Tuple[int, int]:
+        t = self._display_transform()
+        if t is None:
+            return -1, -1
+        scale, ox, oy = t
         rx = lx - ox
         ry = ly - oy
+        disp_w = self._full_w * scale
+        disp_h = self._full_h * scale
         if rx < 0 or ry < 0 or rx >= disp_w or ry >= disp_h:
             return -1, -1
         return int(rx / scale), int(ry / scale)
@@ -291,6 +393,10 @@ class _FaceImageLabel(QLabel):
             if x <= ix <= x + w and y <= iy <= y + h:
                 return face_id
         return None
+
+    # ------------------------------------------------------------------
+    # Mouse events
+    # ------------------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -310,6 +416,13 @@ class _FaceImageLabel(QLabel):
         if self._draw_mode and self._start is not None:
             self._end = event.position().toPoint()
             self.update()
+            return
+        # Hover tracking
+        pos = event.position()
+        new_hover = self._hit_test(pos.x(), pos.y())
+        if new_hover != self._hover_face_id:
+            self._hover_face_id = new_hover
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:
         if not self._draw_mode or self._start is None or event.button() != Qt.LeftButton:
@@ -321,36 +434,224 @@ class _FaceImageLabel(QLabel):
         if rect.width() >= 8 and rect.height() >= 8:
             self.rect_drawn.emit(rect)
 
+    def leaveEvent(self, event) -> None:
+        if self._hover_face_id is not None:
+            self._hover_face_id = None
+            self.update()
+
     def contextMenuEvent(self, event) -> None:
         face_id = self._hit_test(event.pos().x(), event.pos().y())
         if face_id is not None:
             gp = self.mapToGlobal(event.pos())
             self.face_right_clicked.emit(face_id, gp.x(), gp.y())
 
+    # ------------------------------------------------------------------
+    # Painting
+    # ------------------------------------------------------------------
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        if self._draw_mode and self._start is not None and self._end is not None:
-            painter = QPainter(self)
-            painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
-            painter.drawRect(QRect(self._start, self._end).normalized())
+        needs_overlay = bool(self._face_render_data)
+        needs_rubber  = self._draw_mode and self._start is not None and self._end is not None
+        if not needs_overlay and not needs_rubber:
+            return
+        t = self._display_transform()
+        self._draw_overlay(t)  # handles both overlay and rubber band; t may be None
 
+    def _get_label_layouts(
+        self,
+        disp_faces: List[Tuple],
+        disp_w: int,
+        disp_h: int,
+        font: QFont,
+    ) -> Tuple[List[Tuple], List]:
+        """Return (label_sizes, layouts), using cache when possible."""
+        from app.ui.helpers.label_placement import FaceLabel, place_labels
+
+        cache_key = (
+            disp_w, disp_h,
+            self._selected_face_id,
+            tuple((f[0], int(f[1]), int(f[2]), int(f[3]), int(f[4])) for f in disp_faces),
+        )
+        if self._layout_cache_key == cache_key and self._layout_cache is not None:
+            return self._layout_cache
+
+        metrics = QFontMetrics(font)
+        pad_x = max(4, font.pixelSize() // 4) if font.pixelSize() > 0 else 6
+        pad_y = max(3, font.pixelSize() // 7) if font.pixelSize() > 0 else 4
+
+        label_sizes: List[Tuple[str, int, int, int, int]] = []
+        for face_id, dx, dy, dw, dh, name in disp_faces:
+            display_name = name or "?"
+            tw = metrics.horizontalAdvance(display_name)
+            th = metrics.height()
+            label_sizes.append((display_name, tw + 2 * pad_x, th + 2 * pad_y, pad_x, pad_y))
+
+        face_labels = [
+            FaceLabel(
+                face_id=disp_faces[i][0],
+                x=int(disp_faces[i][1]),
+                y=int(disp_faces[i][2]),
+                w=max(1, int(disp_faces[i][3])),
+                h=max(1, int(disp_faces[i][4])),
+                selected=(disp_faces[i][0] == self._selected_face_id),
+                label_w=label_sizes[i][1],
+                label_h=label_sizes[i][2],
+            )
+            for i in range(len(disp_faces))
+        ]
+        layouts = place_labels(disp_w, disp_h, face_labels)
+
+        result = (label_sizes, layouts)
+        self._layout_cache_key = cache_key
+        self._layout_cache = result
+        return result
+
+    def _draw_overlay(self, transform: Optional[Tuple[float, float, float]]) -> None:
+        # Rubber band when in draw mode (may work without transform)
+        if self._draw_mode and self._start is not None and self._end is not None:
+            p = QPainter(self)
+            p.setOpacity(1.0)
+            p.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(QRect(self._start, self._end).normalized())
+            p.end()
+
+        if transform is None or not self._face_render_data:
+            return
+
+        scale, ox, oy = transform
+        disp_w = int(self._full_w * scale)
+        disp_h = int(self._full_h * scale)
+
+        # Build display-space face list
+        disp_faces: List[Tuple] = []
+        for face_id, ix, iy, iw, ih, name in self._face_render_data:
+            dx = ox + ix * scale
+            dy = oy + iy * scale
+            dw = iw * scale
+            dh = ih * scale
+            disp_faces.append((face_id, dx, dy, dw, dh, name))
+
+        # Font sized for display space
+        img_font_size = max(34, min(96, int(min(self._full_w, self._full_h) * 0.028)))
+        disp_font_px = max(9, int(img_font_size * scale))
+        font = QFont()
+        font.setPixelSize(disp_font_px)
+
+        label_sizes, layouts = self._get_label_layouts(disp_faces, disp_w, disp_h, font)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setFont(font)
+
+        # ── Bounding boxes ───────────────────────────────────────────────
+        if self._show_bboxes:
+            for i, (face_id, dx, dy, dw, dh, name) in enumerate(disp_faces):
+                is_selected = face_id == self._selected_face_id
+                is_hovered = face_id == self._hover_face_id
+
+                if is_selected:
+                    color = _COLOR_SELECTED
+                    thickness = 3.0
+                    opacity = 1.0
+                elif is_hovered:
+                    color = _COLOR_HOVER
+                    thickness = 2.5
+                    opacity = 1.0
+                else:
+                    color = _COLOR_NORMAL
+                    thickness = 1.5
+                    opacity = self._bbox_opacity
+
+                painter.setOpacity(opacity)
+                painter.setPen(QPen(color, thickness))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(dx, dy, dw, dh))
+
+        # ── Labels ──────────────────────────────────────────────────────
+        if self._show_labels:
+            pad_x = max(4, disp_font_px // 4)
+            pad_y = max(3, disp_font_px // 7)
+
+            for i, (face_id, dx, dy, dw, dh, name) in enumerate(disp_faces):
+                if layouts[i] is None:
+                    continue
+                layout = layouts[i]
+                display_name, lw_label, lh_label, _, _ = label_sizes[i]
+
+                is_selected = face_id == self._selected_face_id
+                is_hovered = face_id == self._hover_face_id
+
+                if is_selected:
+                    text_color   = _COLOR_SELECTED
+                    bg_color     = _BG_SELECTED
+                    border_color = _BORDER_SELECTED
+                    opacity      = 1.0
+                elif is_hovered:
+                    text_color   = _COLOR_HOVER
+                    bg_color     = _BG_HOVER
+                    border_color = _BORDER_HOVER
+                    opacity      = 1.0
+                else:
+                    text_color   = _COLOR_NORMAL
+                    bg_color     = _BG_NORMAL
+                    border_color = _BORDER_NORMAL
+                    opacity      = self._label_opacity
+
+                painter.setOpacity(opacity)
+
+                # Leader line (only when label moved far from face)
+                if layout.leader_start and layout.leader_end:
+                    painter.setPen(QPen(QColor(120, 120, 120, 160), 1))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawLine(
+                        QPointF(*layout.leader_start),
+                        QPointF(*layout.leader_end),
+                    )
+
+                # Label background
+                lx, ly = float(layout.label_x), float(layout.label_y)
+                painter.setPen(QPen(border_color, 1))
+                painter.setBrush(QBrush(bg_color))
+                painter.drawRoundedRect(QRectF(lx, ly, lw_label, lh_label), 3, 3)
+
+                # Label text
+                painter.setPen(text_color)
+                painter.setBrush(Qt.NoBrush)
+                text_rect = QRectF(
+                    lx + pad_x, ly + pad_y,
+                    lw_label - 2 * pad_x, lh_label - 2 * pad_y,
+                )
+                painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, display_name)
+
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+# Preview panel
+# ---------------------------------------------------------------------------
 
 class PreviewPanel(QWidget):
     """Shows a full image preview with all faces highlighted and named.
 
     Signals:
-        face_selected: ``(face_id: int)`` — emitted when user clicks a face in the image.
-        face_assign_requested: ``(face_id: int)`` — user chose "Személyhez adás" from context menu.
-        face_delete_requested: ``(face_id: int)`` — user chose "Törlés" from context menu.
-        face_create_requested: ``(image_id, x, y, w, h)`` — user drew a new face.
-        face_bbox_update_requested: ``(face_id, x, y, w, h)`` — user redrew a face bbox.
+        face_selected: ``(face_id: int)``
+        face_assign_requested: ``(face_id: int)``
+        face_delete_requested: ``(face_id: int)``
+        face_create_requested: ``(image_id, x, y, w, h)``
+        face_bbox_update_requested: ``(face_id, x, y, w, h)``
+        prev_image_requested: emitted when the user clicks "← Előző"
+        next_image_requested: emitted when the user clicks "Következő →"
     """
 
-    face_selected = Signal(int)
-    face_assign_requested = Signal(int)
-    face_delete_requested = Signal(int)
-    face_create_requested = Signal(int, int, int, int, int)
+    face_selected              = Signal(int)
+    face_assign_requested      = Signal(int)
+    face_delete_requested      = Signal(int)
+    face_create_requested      = Signal(int, int, int, int, int)
     face_bbox_update_requested = Signal(int, int, int, int, int)
+    prev_image_requested       = Signal()
+    next_image_requested       = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -361,12 +662,21 @@ class PreviewPanel(QWidget):
         self._face_data: List[_FaceData] = []
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None
+
+        # Overlay state (fixed defaults — no UI controls in this panel)
+        self._show_bboxes: bool = True
+        self._bbox_opacity: float = 0.7
+        self._show_labels: bool = True
+        self._label_opacity: float = 0.4
+
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
+        # ── Image area ───────────────────────────────────────────────────
         self._image_label = _FaceImageLabel()
         self._image_label.setText(t("preview_empty"))
         self._image_label.setAlignment(Qt.AlignCenter)
@@ -375,15 +685,14 @@ class PreviewPanel(QWidget):
         self._image_label.setStyleSheet(
             "QLabel { background: #222; border: 1px solid #444; }"
         )
-        self._image_label.setToolTip(
-            t("preview_tip")
-        )
+        self._image_label.setToolTip(t("preview_tip"))
         self._image_label.face_clicked.connect(self._on_face_clicked)
         self._image_label.canvas_clicked.connect(self._open_zoom)
         self._image_label.face_right_clicked.connect(self._on_face_right_clicked)
         self._image_label.rect_drawn.connect(self._on_rect_drawn)
         layout.addWidget(self._image_label)
 
+        # ── Draw-mode hint ───────────────────────────────────────────────
         self._draw_hint = QLabel(t("draw_face_hint"))
         self._draw_hint.setAlignment(Qt.AlignCenter)
         self._draw_hint.setStyleSheet(
@@ -392,6 +701,7 @@ class PreviewPanel(QWidget):
         self._draw_hint.setVisible(False)
         layout.addWidget(self._draw_hint)
 
+        # ── Path label ───────────────────────────────────────────────────
         self._path_label = QLabel("")
         self._path_label.setWordWrap(True)
         self._path_label.setMinimumWidth(0)
@@ -399,53 +709,99 @@ class PreviewPanel(QWidget):
         self._path_label.setStyleSheet("QLabel { color: #aaa; font-size: 10px; }")
         layout.addWidget(self._path_label)
 
+        # ── Nav buttons ───────────────────────────────────────────────────
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(4)
+        nav_row.addStretch()
+
+        self._prev_btn = QPushButton(t("prev_image"))
+        self._prev_btn.setEnabled(False)
+        self._prev_btn.clicked.connect(self.prev_image_requested)
+        nav_row.addWidget(self._prev_btn)
+
+        self._next_btn = QPushButton(t("next_image"))
+        self._next_btn.setEnabled(False)
+        self._next_btn.clicked.connect(self.next_image_requested)
+        nav_row.addWidget(self._next_btn)
+
+        layout.addLayout(nav_row)
+
+        # ── Action buttons ────────────────────────────────────────────────
+        # Each button uses Expanding policy so the row fills available width.
+        # The stretch factor passed to addWidget() is proportional to the
+        # character count of the label: longer text → more allocated width →
+        # equal padding density across all buttons regardless of label length.
         btn_row = QHBoxLayout()
-        self._open_btn = QPushButton(t("open_file_manager"))
+        btn_row.setSpacing(4)
+
+        _BTN_STYLE = "QPushButton { padding: 3px 4px; }"
+
+        def _action_btn(text: str) -> QPushButton:
+            b = QPushButton(text)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            b.setMinimumWidth(0)
+            b.setStyleSheet(_BTN_STYLE)
+            return b
+
+        def _add(btn: QPushButton) -> None:
+            # stretch ∝ visible character count so label always fits
+            btn_row.addWidget(btn, stretch=max(1, len(btn.text())))
+
+        self._open_btn = _action_btn(t("open_file_manager"))
         self._open_btn.setEnabled(False)
         self._open_btn.clicked.connect(self._open_in_filemanager)
-        btn_row.addWidget(self._open_btn)
-        self._zoom_btn = QPushButton(f"🔍 {t('zoom')}")
+        _add(self._open_btn)
+
+        self._zoom_btn = _action_btn(f"🔍 {t('zoom')}")
         self._zoom_btn.setEnabled(False)
         self._zoom_btn.clicked.connect(self._open_zoom)
-        btn_row.addWidget(self._zoom_btn)
-        self._draw_btn = QPushButton(f"✏ {t('selection')}")
+        _add(self._zoom_btn)
+
+        self._draw_btn = _action_btn(f"✏ {t('selection')}")
         self._draw_btn.setCheckable(True)
         self._draw_btn.setEnabled(False)
         self._draw_btn.setToolTip(t("draw_face_hint"))
         self._draw_btn.toggled.connect(self._on_draw_mode_toggled)
-        btn_row.addWidget(self._draw_btn)
-        self._edit_btn = QPushButton(t("modify_selection"))
+        _add(self._draw_btn)
+
+        self._edit_btn = _action_btn(t("modify_selection"))
         self._edit_btn.setEnabled(False)
         self._edit_btn.clicked.connect(self._start_selected_face_edit)
-        btn_row.addWidget(self._edit_btn)
-        self._assign_btn = QPushButton(t("assign_to_person"))
+        _add(self._edit_btn)
+
+        self._assign_btn = _action_btn(t("assign_to_person"))
         self._assign_btn.setEnabled(False)
         self._assign_btn.clicked.connect(self._assign_selected_face)
-        btn_row.addWidget(self._assign_btn)
-        self._delete_btn = QPushButton(t("delete_selection"))
+        _add(self._assign_btn)
+
+        self._delete_btn = _action_btn(t("delete_selection"))
         self._delete_btn.setEnabled(False)
         self._delete_btn.clicked.connect(self._delete_selected_face)
-        btn_row.addWidget(self._delete_btn)
-        btn_row.addStretch()
+        _add(self._delete_btn)
+
         layout.addLayout(btn_row)
+
+    def _push_overlay_settings(self) -> None:
+        """Forward current overlay state to the image label (overlay repaint only)."""
+        self._image_label.set_overlay_settings(
+            self._show_bboxes,
+            self._bbox_opacity if self._show_bboxes else 0.0,
+            self._show_labels,
+            self._label_opacity if self._show_labels else 0.0,
+            self._selected_face_id,
+        )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def show_face(self, face: Face) -> None:
-        """Load and display the image for *face*, highlighting all faces.
-
-        Draw mode is preserved when the same image is refreshed (e.g. after a
-        manual face is created while draw mode was active), so the user can
-        keep drawing additional faces without having to re-enable the mode.
-        """
+        """Load and display the image for *face*, highlighting all faces."""
         if face.image is None:
             self._image_label.setText(t("no_recognized_face"))
             return
 
         img_path = face.image.file_path
-        # Remember draw state BEFORE we reset it — restore if staying on same image
         same_image = (face.image.id == self._current_image_id)
         preserve_draw = (
             same_image
@@ -475,24 +831,16 @@ class PreviewPanel(QWidget):
         for f in face.image.faces:
             if not f.is_excluded:
                 log.debug(
-                    "Preview face entity: FaceId=%s PersonId=%s crop_path=%r "
-                    "image_path=%r bbox=(%s,%s,%s,%s) preview_source=%r",
-                    f.id,
-                    f.person_id,
-                    f.crop_path,
-                    img_path,
-                    f.bbox_x,
-                    f.bbox_y,
-                    f.bbox_w,
-                    f.bbox_h,
-                    img_path,
+                    "Preview face entity: FaceId=%s PersonId=%s bbox=(%s,%s,%s,%s)",
+                    f.id, f.person_id,
+                    f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
                 )
         self._selected_face_id = face.id
         self._editing_face_id = None
         self._draw_btn.setChecked(False)
 
         self._image_label.set_face_data(
-            [(fd[0], fd[1], fd[2], fd[3], fd[4]) for fd in self._face_data],
+            self._face_data,
             img_bgr.shape[1],
             img_bgr.shape[0],
         )
@@ -502,10 +850,10 @@ class PreviewPanel(QWidget):
         self._open_btn.setEnabled(True)
         self._zoom_btn.setEnabled(True)
         self._draw_btn.setEnabled(True)
+        self._prev_btn.setEnabled(True)
+        self._next_btn.setEnabled(True)
         self._update_action_buttons()
 
-        # Restore draw mode so the user can continue adding faces without
-        # having to click the draw button again after each creation.
         if preserve_draw:
             self._draw_btn.setChecked(True)
 
@@ -514,7 +862,8 @@ class PreviewPanel(QWidget):
         if self._selected_face_id == face_id:
             return
         self._selected_face_id = face_id
-        self._render()
+        # Overlay-only repaint — no image reload needed.
+        self._push_overlay_settings()
         self._update_action_buttons()
 
     def clear(self) -> None:
@@ -537,6 +886,8 @@ class PreviewPanel(QWidget):
         self._edit_btn.setEnabled(False)
         self._assign_btn.setEnabled(False)
         self._delete_btn.setEnabled(False)
+        self._prev_btn.setEnabled(False)
+        self._next_btn.setEnabled(False)
         self._current_image_path = None
 
     @property
@@ -550,17 +901,21 @@ class PreviewPanel(QWidget):
         self._update_scaled_pixmap()
 
     def _render(self) -> None:
+        """Convert the raw BGR image to a clean QPixmap and push overlay settings."""
         if self._orig_img_bgr is None:
             return
         log.debug(
-            "Render image preview: selected_FaceId=%s faces=%s preview_source=%r",
+            "Render image preview: selected_FaceId=%s faces=%s",
             self._selected_face_id,
             [fd[0] for fd in self._face_data],
-            self._current_image_path,
         )
-        annotated = _draw_faces(self._orig_img_bgr, self._face_data, self._selected_face_id)
-        self._full_pixmap = _bgr_to_qpixmap(annotated)
+        # Convert clean image (no annotations baked in)
+        rgb = cv2.cvtColor(self._orig_img_bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        qimg = QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format_RGB888)
+        self._full_pixmap = QPixmap.fromImage(qimg)
         self._update_scaled_pixmap()
+        self._push_overlay_settings()
 
     def _update_scaled_pixmap(self) -> None:
         if self._full_pixmap is None:
@@ -575,14 +930,12 @@ class PreviewPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_face_clicked(self, face_id: int) -> None:
-        """Highlight the clicked face and notify parent."""
         self._selected_face_id = face_id
-        self._render()
+        self._push_overlay_settings()
         self._update_action_buttons()
         self.face_selected.emit(face_id)
 
     def _on_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
-        """Show context menu for the right-clicked face."""
         self.show_face_context_menu(face_id, gx, gy)
 
     def show_face_context_menu(
@@ -592,14 +945,10 @@ class PreviewPanel(QWidget):
         gy: int,
         person_name: Optional[str] = None,
     ) -> None:
-        """Show the face context menu at global position (gx, gy).
-
-        If *person_name* is None it is looked up from the currently loaded face data.
-        Can be called externally (e.g. from the cluster thumbnail grid).
-        """
+        """Show the face context menu at global position (gx, gy)."""
         if self._selected_face_id != face_id:
             self._selected_face_id = face_id
-            self._render()
+            self._push_overlay_settings()
             self._update_action_buttons()
             self.face_selected.emit(face_id)
 
@@ -608,29 +957,21 @@ class PreviewPanel(QWidget):
             person_name = entry[5] if entry else None
 
         menu = QMenu(self)
-
         title = menu.addAction(f"👤  {person_name}" if person_name else f"👤  {t('unknown_face')}")
         title.setEnabled(False)
         menu.addSeparator()
 
         assign_action = menu.addAction(f"👤  {t('assign_to_person')}")
-        edit_action = menu.addAction(f"✏  {t('modify_selection')}")
+        edit_action   = menu.addAction(f"✏  {t('modify_selection')}")
         delete_action = menu.addAction(f"🗑  {t('delete_selection')}")
 
         chosen = menu.exec(QPoint(gx, gy))
-
         if chosen == assign_action:
             self.face_assign_requested.emit(face_id)
         elif chosen == edit_action:
             self._start_face_edit(face_id)
         elif chosen == delete_action:
             self.face_delete_requested.emit(face_id)
-
-    def _select_face_for_action(self, face_id: int) -> None:
-        self._selected_face_id = face_id
-        self._render()
-        self._update_action_buttons()
-        self.face_selected.emit(face_id)
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
         self._image_label.set_draw_mode(active)
@@ -689,7 +1030,7 @@ class PreviewPanel(QWidget):
     def _start_face_edit(self, face_id: int) -> None:
         self._editing_face_id = face_id
         self._selected_face_id = face_id
-        self._render()
+        self._push_overlay_settings()
         self._update_action_buttons()
         self._draw_hint.setText(t("redraw_face_hint"))
         self._draw_btn.setChecked(True)
@@ -704,16 +1045,19 @@ class PreviewPanel(QWidget):
 
     def _update_action_buttons(self) -> None:
         has_image = self._full_pixmap is not None
-        has_face = self._selected_face_id is not None
+        has_face  = self._selected_face_id is not None
         self._draw_btn.setEnabled(has_image)
         self._edit_btn.setEnabled(has_face)
         self._assign_btn.setEnabled(has_face)
         self._delete_btn.setEnabled(has_face)
 
     def _open_zoom(self) -> None:
-        if self._full_pixmap is None:
+        """Open the zoom dialog with a full-resolution annotated image."""
+        if self._orig_img_bgr is None:
             return
-        dlg = _ZoomDialog(self._full_pixmap, parent=self)
+        annotated = _draw_faces_pil(self._orig_img_bgr, self._face_data, self._selected_face_id)
+        zoom_pixmap = _bgr_to_qpixmap(annotated)
+        dlg = _ZoomDialog(zoom_pixmap, parent=self)
         dlg.exec()
 
     # ------------------------------------------------------------------
