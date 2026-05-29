@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Move GitHub issues referenced by the current push to a ProjectV2 status."""
+"""Move GitHub issues between ProjectV2 statuses for release workflows."""
 
 from __future__ import annotations
 
@@ -211,9 +211,12 @@ def resolve_project(project_owner: str, repo: str) -> dict[str, Any]:
     )
 
 
-def resolve_status_field(project_id: str) -> tuple[str, str]:
+def target_status_name() -> str:
+    return env("PROJECT_TARGET_OPTION") or env("PROJECT_READY_OPTION", "Ready")
+
+
+def resolve_status_options(project_id: str, option_names: list[str]) -> tuple[str, dict[str, str]]:
     status_field_name = env("PROJECT_STATUS_FIELD", "Status")
-    ready_option_name = env("PROJECT_READY_OPTION", "Ready")
     data = graphql(
         """
         query($projectId: ID!) {
@@ -246,21 +249,30 @@ def resolve_status_field(project_id: str) -> tuple[str, str]:
     if not status_field:
         raise GitHubError(f"Project field '{status_field_name}' was not found.")
 
-    ready_option = next(
-        (
-            option
-            for option in status_field["options"]
-            if normalize_title(option["name"]) == normalize_title(ready_option_name)
-        ),
-        None,
-    )
-    if not ready_option:
-        options = ", ".join(option["name"] for option in status_field["options"])
-        raise GitHubError(
-            f"Project status option '{ready_option_name}' was not found. Available options: {options}"
+    option_ids: dict[str, str] = {}
+    for option_name in option_names:
+        option = next(
+            (
+                candidate
+                for candidate in status_field["options"]
+                if normalize_title(candidate["name"]) == normalize_title(option_name)
+            ),
+            None,
         )
+        if not option:
+            options = ", ".join(candidate["name"] for candidate in status_field["options"])
+            raise GitHubError(
+                f"Project status option '{option_name}' was not found. Available options: {options}"
+            )
+        option_ids[option_name] = option["id"]
 
-    return status_field["id"], ready_option["id"]
+    return status_field["id"], option_ids
+
+
+def resolve_status_field(project_id: str) -> tuple[str, str]:
+    target_status = target_status_name()
+    field_id, option_ids = resolve_status_options(project_id, [target_status])
+    return field_id, option_ids[target_status]
 
 
 def query_issue(owner: str, repo: str, number: int) -> dict[str, Any] | None:
@@ -333,6 +345,91 @@ def set_project_status(project_id: str, item_id: str, field_id: str, option_id: 
     )
 
 
+def query_project_items(project_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    after: str | None = None
+    while True:
+        data = graphql(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
+                    nodes {
+                      id
+                      content {
+                        __typename
+                        ... on Issue {
+                          number
+                          title
+                          url
+                        }
+                      }
+                      fieldValues(first: 100) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            optionId
+                            name
+                            field {
+                              ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            {"projectId": project_id, "after": after},
+        )
+        page = data["node"]["items"]
+        items.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            return items
+        after = page["pageInfo"]["endCursor"]
+
+
+def item_status_option_id(item: dict[str, Any], field_id: str) -> str | None:
+    for field_value in item["fieldValues"]["nodes"]:
+        if not field_value:
+            continue
+        field = field_value.get("field") or {}
+        if field.get("id") == field_id:
+            return field_value.get("optionId")
+    return None
+
+
+def issue_label(issue: dict[str, Any]) -> str:
+    return f"#{issue['number']}"
+
+
+def move_project_issues_by_status(
+    project_id: str,
+    field_id: str,
+    source_option_id: str,
+    target_option_id: str,
+) -> list[str]:
+    moved: list[str] = []
+    for item in query_project_items(project_id):
+        issue = item.get("content") or {}
+        if issue.get("__typename") != "Issue":
+            continue
+        if item_status_option_id(item, field_id) != source_option_id:
+            continue
+        set_project_status(project_id, item["id"], field_id, target_option_id)
+        moved.append(issue_label(issue))
+    return moved
+
+
 def main() -> int:
     token = env("GITHUB_TOKEN") or env("GH_TOKEN")
     if not token:
@@ -344,14 +441,34 @@ def main() -> int:
         raise GitHubError("GITHUB_REPOSITORY must be set to owner/repo.")
     repo_owner, repo = repository.split("/", 1)
     project_owner = env("PROJECT_OWNER", repo_owner)
+    source_status = env("PROJECT_SOURCE_OPTION")
+    target_status = target_status_name()
 
-    numbers = referenced_issue_numbers()
-    if not numbers:
-        return 0
+    numbers: list[int] = []
+    if not source_status:
+        numbers = referenced_issue_numbers()
+        if not numbers:
+            return 0
 
     project = resolve_project(project_owner, repo)
     print(f"Target project: {project_owner}/#{project['number']} {project['title']}")
-    field_id, option_id = resolve_status_field(project["id"])
+
+    if source_status:
+        field_id, option_ids = resolve_status_options(project["id"], [source_status, target_status])
+        moved = move_project_issues_by_status(
+            project["id"],
+            field_id,
+            option_ids[source_status],
+            option_ids[target_status],
+        )
+        if moved:
+            print(f"Moved from {source_status} to {target_status}: {', '.join(moved)}")
+        else:
+            print(f"No issues found in {source_status}.")
+        return 0
+
+    field_id, option_id = resolve_status_options(project["id"], [target_status])
+    option_id = option_id[target_status]
 
     moved: list[str] = []
     skipped: list[str] = []
@@ -374,7 +491,7 @@ def main() -> int:
         moved.append(f"#{issue['number']}")
 
     if moved:
-        print(f"Moved to {env('PROJECT_READY_OPTION', 'Ready')}: {', '.join(moved)}")
+        print(f"Moved to {target_status}: {', '.join(moved)}")
     if skipped:
         warn(f"Skipped: {', '.join(skipped)}")
     return 0
@@ -385,8 +502,12 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except GitHubError as exc:
         if truthy_env("PROJECT_ISSUE_MOVE_BEST_EFFORT"):
-            target_status = env("PROJECT_READY_OPTION", "Ready")
-            warn(f"Could not move referenced issues to {target_status}; continuing. {exc}")
+            target_status = target_status_name()
+            source_status = env("PROJECT_SOURCE_OPTION")
+            if source_status:
+                warn(f"Could not move project issues from {source_status} to {target_status}; continuing. {exc}")
+            else:
+                warn(f"Could not move referenced issues to {target_status}; continuing. {exc}")
             raise SystemExit(0)
         print(f"::error::{exc}")
         raise SystemExit(1)
