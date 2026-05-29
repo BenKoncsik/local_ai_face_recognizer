@@ -2618,12 +2618,20 @@ class ImageBrowserPanel(QWidget):
             self._draw_hint.setText(t("ibp_draw_hint_add"))
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
+        log.debug(
+            "pointer up: label_rect=(%d,%d,%d,%d) image_id=%s editing=%s",
+            label_rect.x(), label_rect.y(), label_rect.width(), label_rect.height(),
+            self._current_image_id, self._editing_face_id,
+        )
         coords = self._label_rect_to_image(label_rect)
         if coords is None:
+            log.debug("pointer up: coords outside image — draw ignored")
             return
         ix, iy, iw, ih = coords
+        log.debug("bbox created in image coords: (%d,%d,%d,%d)", ix, iy, iw, ih)
 
         if self._current_image_id is None:
+            log.debug("pointer up: _current_image_id is None — draw ignored")
             return
 
         if self._editing_face_id is not None:
@@ -2639,13 +2647,16 @@ class ImageBrowserPanel(QWidget):
         else:
             # Always save manual faces to the canonical (non-deoldified) image
             face_img_id = self._deol_pair_orig_id or self._current_image_id
+            log.debug("face create requested: image_id=%d bbox=(%d,%d,%d,%d)", face_img_id, ix, iy, iw, ih)
             new_face_id = self._save_manual_face(
                 face_img_id, ix, iy, iw, ih
             )
+            log.debug("bbox added to state: face_id=%s", new_face_id)
             # Reload the full face list (includes the just-saved face),
             # select it and redraw once — draw mode intentionally stays ON
             # so the user can immediately add more faces without re-clicking.
             self._fetch_face_data()
+            log.debug("render annotations count: %d", len(self._face_data))
             if new_face_id is not None:
                 self._selected_face_id = new_face_id
                 self._redraw_faces()
@@ -2977,17 +2988,36 @@ class ImageBrowserPanel(QWidget):
             return -1, -1
         return int(rx / eff), int(ry / eff)
 
+    def _label_to_image_clamped(self, lx: int, ly: int) -> Tuple[int, int]:
+        """Like _label_to_image but clamps out-of-bounds to the image edge."""
+        if self._full_pixmap is None:
+            return -1, -1
+        cr = self._image_label.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
+        if pw == 0 or ph == 0:
+            return -1, -1
+        base_scale = min(lw / pw, lh / ph)
+        eff = base_scale * self._zoom
+        disp_w = pw * eff
+        disp_h = ph * eff
+        ox = cr.x() + (lw - disp_w) / 2 + self._pan_x
+        oy = cr.y() + (lh - disp_h) / 2 + self._pan_y
+        rx = max(0.0, min(lx - ox, disp_w - 1))
+        ry = max(0.0, min(ly - oy, disp_h - 1))
+        return int(rx / eff), int(ry / eff)
+
     def _label_rect_to_image(
         self, rect: QRect
     ) -> Optional[Tuple[int, int, int, int]]:
         x1, y1 = self._label_to_image(rect.left(), rect.top())
-        x2, y2 = self._label_to_image(rect.right(), rect.bottom())
         if x1 < 0 or y1 < 0:
             return None
-        if self._orig_img_bgr is not None:
-            ih, iw = self._orig_img_bgr.shape[:2]
-            x2 = min(max(x2, 0), iw - 1)
-            y2 = min(max(y2, 0), ih - 1)
+        # Use clamped conversion for bottom-right so rects that extend into
+        # the margin area are clipped to the image edge instead of becoming 1×1.
+        x2, y2 = self._label_to_image_clamped(rect.right(), rect.bottom())
+        if x2 < 0 or y2 < 0:
+            return None
         return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
 
     def _image_to_label(self, ix: int, iy: int) -> Tuple[int, int]:

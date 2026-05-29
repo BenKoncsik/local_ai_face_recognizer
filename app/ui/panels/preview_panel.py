@@ -403,6 +403,7 @@ class _FaceImageLabel(QLabel):
             if self._draw_mode:
                 self._start = event.position().toPoint()
                 self._end = self._start
+                log.debug("pointer down: draw start at (%d,%d)", self._start.x(), self._start.y())
                 self.update()
                 return
             pos = event.position()
@@ -428,11 +429,17 @@ class _FaceImageLabel(QLabel):
         if not self._draw_mode or self._start is None or event.button() != Qt.LeftButton:
             return
         rect = QRect(self._start, event.position().toPoint()).normalized()
+        log.debug(
+            "pointer up: raw label_rect=(%d,%d,%d,%d) draw_mode=%s",
+            rect.x(), rect.y(), rect.width(), rect.height(), self._draw_mode,
+        )
         self._start = None
         self._end = None
         self.update()
         if rect.width() >= 8 and rect.height() >= 8:
             self.rect_drawn.emit(rect)
+        else:
+            log.debug("pointer up: rect too small (%dx%d) — ignored", rect.width(), rect.height())
 
     def leaveEvent(self, event) -> None:
         if self._hover_face_id is not None:
@@ -815,8 +822,17 @@ class PreviewPanel(QWidget):
         from app.utils.image_utils import load_image_bgr
         img_bgr = load_image_bgr(img_path)
         if img_bgr is None:
-            self._image_label.setText(t("cannot_load", path=img_path))
-            return
+            # If the image was already loaded for this same path, reuse the
+            # cached BGR buffer so manual annotations still appear even when
+            # the file is temporarily inaccessible (e.g. cloud-sync lock).
+            if same_image and self._orig_img_bgr is not None:
+                log.warning(
+                    "show_face: cannot reload %r — reusing cached frame", img_path
+                )
+                img_bgr = self._orig_img_bgr
+            else:
+                self._image_label.setText(t("cannot_load", path=img_path))
+                return
 
         self._orig_img_bgr = img_bgr
         self._face_data = [
@@ -839,6 +855,10 @@ class PreviewPanel(QWidget):
         self._editing_face_id = None
         self._draw_btn.setChecked(False)
 
+        log.debug(
+            "show_face: face_id=%d image_id=%d annotations=%d same_image=%s preserve_draw=%s",
+            face.id, face.image.id, len(self._face_data), same_image, preserve_draw,
+        )
         self._image_label.set_face_data(
             self._face_data,
             img_bgr.shape[1],
@@ -981,28 +1001,40 @@ class PreviewPanel(QWidget):
             self._draw_hint.setText(t("draw_face_hint"))
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
+        log.debug(
+            "pointer up: label_rect=(%d,%d,%d,%d) image_id=%s editing=%s",
+            label_rect.x(), label_rect.y(), label_rect.width(), label_rect.height(),
+            self._current_image_id, self._editing_face_id,
+        )
         coords = self._label_rect_to_image(label_rect)
-        if coords is None or self._current_image_id is None:
+        if coords is None:
+            log.debug("pointer up: coords outside image — draw ignored")
+            return
+        if self._current_image_id is None:
+            log.debug("pointer up: _current_image_id is None — draw ignored")
             return
         x, y, w, h = coords
+        log.debug("bbox created in image coords: (%d,%d,%d,%d)", x, y, w, h)
         if self._editing_face_id is not None:
             face_id = self._editing_face_id
             self._editing_face_id = None
             self._draw_hint.setText(t("draw_face_hint"))
             self._selected_face_id = face_id
+            log.debug("bbox update requested for face_id=%d", face_id)
             self.face_bbox_update_requested.emit(face_id, x, y, w, h)
         else:
+            log.debug("face create requested: image_id=%d bbox=(%d,%d,%d,%d)", self._current_image_id, x, y, w, h)
             self.face_create_requested.emit(self._current_image_id, x, y, w, h)
 
     def _label_rect_to_image(self, rect: QRect) -> Optional[Tuple[int, int, int, int]]:
         x1, y1 = self._label_to_image(rect.left(), rect.top())
-        x2, y2 = self._label_to_image(rect.right(), rect.bottom())
         if x1 < 0 or y1 < 0:
             return None
-        if self._orig_img_bgr is not None:
-            ih, iw = self._orig_img_bgr.shape[:2]
-            x2 = min(max(x2, 0), iw - 1)
-            y2 = min(max(y2, 0), ih - 1)
+        # Use clamped conversion for bottom-right so rects that extend into
+        # the margin area are clipped to the image edge instead of becoming 1×1.
+        x2, y2 = self._label_to_image_clamped(rect.right(), rect.bottom())
+        if x2 < 0 or y2 < 0:
+            return None
         return x1, y1, max(1, x2 - x1), max(1, y2 - y1)
 
     def _label_to_image(self, lx: float, ly: float) -> Tuple[int, int]:
@@ -1021,6 +1053,23 @@ class PreviewPanel(QWidget):
         ry = ly - oy
         if rx < 0 or ry < 0 or rx >= disp_w or ry >= disp_h:
             return -1, -1
+        return int(rx / scale), int(ry / scale)
+
+    def _label_to_image_clamped(self, lx: float, ly: float) -> Tuple[int, int]:
+        """Like _label_to_image but clamps out-of-bounds to the image edge."""
+        if self._orig_img_bgr is None:
+            return -1, -1
+        full_h, full_w = self._orig_img_bgr.shape[:2]
+        lw, lh = self._image_label.width(), self._image_label.height()
+        if full_w == 0 or full_h == 0 or lw == 0 or lh == 0:
+            return -1, -1
+        scale = min(lw / full_w, lh / full_h)
+        disp_w = full_w * scale
+        disp_h = full_h * scale
+        ox = (lw - disp_w) / 2
+        oy = (lh - disp_h) / 2
+        rx = max(0.0, min(lx - ox, disp_w - 1))
+        ry = max(0.0, min(ly - oy, disp_h - 1))
         return int(rx / scale), int(ry / scale)
 
     def _start_selected_face_edit(self) -> None:

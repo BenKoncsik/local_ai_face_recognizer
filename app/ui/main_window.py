@@ -1238,12 +1238,18 @@ class MainWindow(QMainWindow):
         """Reload the preview image and select *face_id*."""
         with session_scope() as session:
             face = session.get(Face, face_id)
-            if face:
-                _ = face.image
-                if face.image:
-                    for f in face.image.faces:
-                        _ = f.person
-                self._preview_panel.show_face(face)
+            if face is None:
+                log.warning("_show_face_in_preview: face_id=%d not found in DB", face_id)
+                return
+            _ = face.image
+            if face.image:
+                for f in face.image.faces:
+                    _ = f.person
+                log.debug(
+                    "_show_face_in_preview: face_id=%d image_id=%d annotations=%d",
+                    face_id, face.image.id, len([f for f in face.image.faces if not f.is_excluded]),
+                )
+            self._preview_panel.show_face(face)
 
     @Slot(int, int, int)
     def _on_cluster_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
@@ -1304,27 +1310,44 @@ class MainWindow(QMainWindow):
         self, image_id: int, x: int, y: int, w: int, h: int
     ) -> None:
         """Save a manually marked face from the face-recognition preview."""
-        new_face_id: Optional[int] = None
-        with session_scope() as session:
-            from app.db.models import Image
-            from app.detectors.base import Detection
-            from app.utils.image_utils import load_image_bgr, save_face_crop
+        from app.db.models import Image
+        from app.detectors.base import Detection
+        from app.utils.image_utils import load_image_bgr, save_face_crop
 
+        log.debug(
+            "face create: image_id=%d bbox=(%d,%d,%d,%d)", image_id, x, y, w, h
+        )
+
+        # Load image for clamping bbox to actual dimensions.
+        # If the file is temporarily inaccessible we still create the face
+        # (unclamped) so the annotation is not silently lost.
+        img_path: Optional[str] = None
+        img_bgr = None
+        with session_scope() as session:
             image = session.get(Image, image_id)
             if image is None:
+                log.warning("face create: image_id=%d not found in DB", image_id)
                 return
-            img_bgr = load_image_bgr(image.file_path)
-            if img_bgr is None:
-                return
+            img_path = image.file_path
 
+        img_bgr = load_image_bgr(img_path) if img_path else None
+        if img_bgr is None:
+            log.warning(
+                "face create: cannot load image file %r — creating face with unclamped bbox",
+                img_path,
+            )
+
+        # Clamp bbox to image dimensions when the image is available.
+        if img_bgr is not None:
             detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(
                 img_bgr.shape[1], img_bgr.shape[0]
             )
-            crops_dir = self._config.crops_dir_resolved
-            crops_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0)
 
-            # Insert face first to obtain its stable DB primary key, then name
-            # the crop after it to guarantee a globally-unique filename.
+        # Commit face row first (atomically) so it always lands in the DB.
+        new_face_id: Optional[int] = None
+        with session_scope() as session:
             face = Face(
                 image_id=image_id,
                 bbox_x=detection.x,
@@ -1338,24 +1361,36 @@ class MainWindow(QMainWindow):
             session.add(face)
             session.flush()
             new_face_id = face.id
+            log.debug("bbox added to state: face_id=%d", new_face_id)
 
-            crop_path = save_face_crop(
-                img_bgr=img_bgr,
-                detection=detection,
-                crops_dir=crops_dir,
-                image_id=image_id,
-                thumbnail_size=self._config.scan.thumbnail_size,
-                face_index=new_face_id,
-            )
-            if crop_path is not None:
-                face.crop_path = str(crop_path)
+            # Save crop in the same transaction so face_id is available for naming.
+            if img_bgr is not None:
+                crops_dir = self._config.crops_dir_resolved
+                crops_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    crop_path = save_face_crop(
+                        img_bgr=img_bgr,
+                        detection=detection,
+                        crops_dir=crops_dir,
+                        image_id=image_id,
+                        thumbnail_size=self._config.scan.thumbnail_size,
+                        face_index=new_face_id,
+                    )
+                    if crop_path is not None:
+                        face.crop_path = str(crop_path)
+                except Exception:
+                    log.exception(
+                        "face create: crop save failed for face_id=%d — face will have no thumbnail",
+                        new_face_id,
+                    )
 
         if new_face_id is None:
+            log.warning("face create: face_id is None after flush — aborting")
             return
 
         log.info(
             "Manual face added from preview: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
-            image_id, new_face_id, x, y, w, h,
+            image_id, new_face_id, detection.x, detection.y, detection.w, detection.h,
         )
         self._current_face_id = new_face_id
         self._show_face_in_preview(new_face_id)
