@@ -385,7 +385,8 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except GitHubError as exc:
         if truthy_env("PROJECT_ISSUE_MOVE_BEST_EFFORT"):
-            warn(f"Could not move referenced issues to Ready; continuing. {exc}")
+            target_status = env("PROJECT_READY_OPTION", "Ready")
+            warn(f"Could not move referenced issues to {target_status}; continuing. {exc}")
             raise SystemExit(0)
         print(f"::error::{exc}")
         raise SystemExit(1)

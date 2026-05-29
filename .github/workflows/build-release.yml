@@ -1018,14 +1018,14 @@ jobs:
             --name "$RELEASE_NAME" \
             --notes "$notes"
 
-      - name: Move referenced issues to Ready
+      - name: Move referenced issues to Done
         if: ${{ github.event_name == 'push' }}
         env:
           GITHUB_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
           PROJECT_OWNER: ${{ github.repository_owner }}
           PROJECT_TITLE: Local AI Face Recognizer
           PROJECT_STATUS_FIELD: Status
-          PROJECT_READY_OPTION: Ready
+          PROJECT_READY_OPTION: Done
           PROJECT_ISSUE_MOVE_BEST_EFFORT: "true"
         shell: bash
         run: python3 .github/scripts/move_project_issues_ready.py
