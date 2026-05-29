@@ -518,7 +518,7 @@ jobs:
           )
           $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) {
-            Write-Host "Inno Setup 6 not found — installing."
+            Write-Host "Inno Setup 6 not found - installing."
             if (Get-Command choco -ErrorAction SilentlyContinue) {
               choco install innosetup --no-progress -y
             } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
