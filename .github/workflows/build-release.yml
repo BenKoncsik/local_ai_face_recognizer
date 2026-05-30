@@ -1183,117 +1183,113 @@ jobs:
           # Fine-grained PAT needed to bypass branch protection for appcast.xml commit
           token: ${{ secrets.APPCAST_PUSH_TOKEN }}
 
-      - name: Download macOS artifact
-        id: download_macos
-        if: ${{ needs.build-macos.result == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: face-local-macos-${{ needs.prepare.outputs.tag }}
-          path: release
-
-      - name: Fallback download macOS artifact from private repo
-        if: ${{ needs.build-macos.result == 'success' && steps.download_macos.outcome == 'failure' }}
+      - name: Download release artifacts
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PRIVATE_ARTIFACT_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          BUILD_MACOS_RESULT: ${{ needs.build-macos.result }}
+          BUILD_WINDOWS_RESULT: ${{ needs.build-windows.result }}
+          BUILD_LINUX_ARM64_RESULT: ${{ needs.build-linux-arm64.result }}
+          BUILD_LINUX_X64_RESULT: ${{ needs.build-linux-x64.result }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release
+
           if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
+            echo "gh CLI not found. Install GitHub CLI on this runner for artifact downloads." >&2
             exit 1
           fi
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "Face-Local-macOS-installer-${{ needs.prepare.outputs.package_version }}.dmg" \
-            --dir release
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "Face-Local-macOS-sparkle-${{ needs.prepare.outputs.package_version }}.zip" \
-            --dir release 2>/dev/null || true
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "sparkle_meta.json" \
-            --dir release 2>/dev/null || true
 
-      - name: Download Windows artifact
-        id: download_windows
-        if: ${{ needs.build-windows.result == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: face-local-windows-${{ needs.prepare.outputs.tag }}
-          path: release
+          download_workflow_artifact() {
+            local name="$1"
+            echo "Downloading workflow artifact: ${name}"
+            gh run download "${{ github.run_id }}" \
+              --repo "${{ github.repository }}" \
+              --name "$name" \
+              --dir release
+          }
 
-      - name: Fallback download Windows artifact from private repo
-        if: ${{ needs.build-windows.result == 'success' && steps.download_windows.outcome == 'failure' }}
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
-            exit 1
+          fallback_release_download() {
+            GH_TOKEN="$PRIVATE_ARTIFACT_TOKEN" gh release download "artifact-release-${PACKAGE_VERSION}" \
+              --repo "${{ env.ARTIFACT_REPO }}" \
+              --pattern "$1" \
+              --dir release
+          }
+
+          optional_fallback_release_download() {
+            fallback_release_download "$1" 2>/dev/null || true
+          }
+
+          download_platform() {
+            local label="$1"
+            local artifact_name="$2"
+            shift 2
+
+            if download_workflow_artifact "$artifact_name"; then
+              echo "${label}: workflow artifact downloaded"
+              return 0
+            fi
+
+            echo "${label}: workflow artifact download failed, trying private artifact repo fallback"
+            for pattern in "$@"; do
+              fallback_release_download "$pattern"
+            done
+          }
+
+          download_macos() {
+            if download_workflow_artifact "face-local-macos-${RELEASE_TAG}"; then
+              echo "macOS: workflow artifact downloaded"
+              return 0
+            fi
+
+            echo "macOS: workflow artifact download failed, trying private artifact repo fallback"
+            fallback_release_download "Face-Local-macOS-installer-${PACKAGE_VERSION}.dmg"
+            optional_fallback_release_download "Face-Local-macOS-sparkle-${PACKAGE_VERSION}.zip"
+            optional_fallback_release_download "sparkle_meta.json"
+          }
+
+          pids=()
+
+          if [ "$BUILD_MACOS_RESULT" = "success" ]; then
+            download_macos &
+            pids+=("$!")
           fi
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "Face-Local-windows-*-${{ needs.prepare.outputs.package_version }}.*" \
-            --dir release
 
-      - name: Download Linux ARM64 artifact
-        id: download_linux_arm64
-        if: ${{ needs.build-linux-arm64.result == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: face-local-linux-arm64-${{ needs.prepare.outputs.tag }}
-          path: release
-
-      - name: Fallback download Linux ARM64 artifact from private repo
-        if: ${{ needs.build-linux-arm64.result == 'success' && steps.download_linux_arm64.outcome == 'failure' }}
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
-            exit 1
+          if [ "$BUILD_WINDOWS_RESULT" = "success" ]; then
+            download_platform \
+              "Windows" \
+              "face-local-windows-${RELEASE_TAG}" \
+              "Face-Local-windows-*-${PACKAGE_VERSION}.*" &
+            pids+=("$!")
           fi
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "Face-Local-linux-arm64-*-${{ needs.prepare.outputs.package_version }}.*" \
-            --dir release
 
-      - name: Download Linux x64 artifact
-        id: download_linux_x64
-        if: ${{ needs.build-linux-x64.result == 'success' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: face-local-linux-x64-${{ needs.prepare.outputs.tag }}
-          path: release
-
-      - name: Fallback download Linux x64 artifact from private repo
-        if: ${{ needs.build-linux-x64.result == 'success' && steps.download_linux_x64.outcome == 'failure' }}
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found. Install GitHub CLI on this runner for artifact fallback downloads." >&2
-            exit 1
+          if [ "$BUILD_LINUX_ARM64_RESULT" = "success" ]; then
+            download_platform \
+              "Linux ARM64" \
+              "face-local-linux-arm64-${RELEASE_TAG}" \
+              "Face-Local-linux-arm64-*-${PACKAGE_VERSION}.*" &
+            pids+=("$!")
           fi
-          gh release download "artifact-release-${{ needs.prepare.outputs.package_version }}" \
-            --repo "${{ env.ARTIFACT_REPO }}" \
-            --pattern "Face-Local-linux-x64-*-${{ needs.prepare.outputs.package_version }}.*" \
-            --dir release
+
+          if [ "$BUILD_LINUX_X64_RESULT" = "success" ]; then
+            download_platform \
+              "Linux x64" \
+              "face-local-linux-x64-${RELEASE_TAG}" \
+              "Face-Local-linux-x64-*-${PACKAGE_VERSION}.*" &
+            pids+=("$!")
+          fi
+
+          failed=0
+          for pid in "${pids[@]}"; do
+            if ! wait "$pid"; then
+              failed=1
+            fi
+          done
+
+          exit "$failed"
 
       - name: Verify release assets
         shell: bash
