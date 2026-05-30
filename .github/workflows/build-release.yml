@@ -1253,7 +1253,11 @@ jobs:
             if artifact is None:
               raise RuntimeError(f"workflow artifact not found: {name}")
 
-            archive = download_bytes(artifact["archive_download_url"], github_token)
+            archive = download_bytes(
+              artifact["archive_download_url"],
+              github_token,
+              accept="application/vnd.github+json",
+            )
             with zipfile.ZipFile(io.BytesIO(archive)) as zf:
               zf.extractall(release_dir)
             print(f"{name}: workflow artifact downloaded", flush=True)
