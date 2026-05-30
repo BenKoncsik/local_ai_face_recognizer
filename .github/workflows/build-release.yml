@@ -829,7 +829,7 @@ jobs:
         run: |
           Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
 
-          # Per-user install target used by the no-admin direct-download fallback.
+          # Per-user install target — no admin rights required.
           $installDir = Join-Path $env:RUNNER_TEMP "InnoSetup6"
           $isccCandidates = @(
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
@@ -840,39 +840,19 @@ jobs:
 
           $iscc = Find-ISCC
           if (-not $iscc) {
-            Write-Host "Inno Setup 6 not found - attempting installation."
-
-            # 1. Chocolatey (needs an elevated shell; best-effort).
-            if (-not $iscc -and (Get-Command choco -ErrorAction SilentlyContinue)) {
-              Write-Host "Trying Chocolatey..."
-              try { choco install innosetup --no-progress -y } catch { Write-Warning "choco install failed: $_" }
-              $iscc = Find-ISCC
-            }
-
-            # 2. winget (best-effort).
-            if (-not $iscc -and (Get-Command winget -ErrorAction SilentlyContinue)) {
-              Write-Host "Trying winget..."
-              try { winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements } catch { Write-Warning "winget install failed: $_" }
-              $iscc = Find-ISCC
-            }
-
-            # 3. Direct download — silent per-user install, no admin rights required.
-            #    Works on service-account runners that cannot write to Program Files.
-            if (-not $iscc) {
-              Write-Host "Trying direct download (per-user install to $installDir)..."
-              try {
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                $isTmp = Join-Path $env:RUNNER_TEMP "innosetup-installer.exe"
-                Invoke-WebRequest -UseBasicParsing -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile $isTmp
-                if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
-                $proc = Start-Process -FilePath $isTmp `
-                  -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/DIR=$installDir" `
-                  -Wait -PassThru
-                Write-Host "Inno Setup installer exited with code $($proc.ExitCode)"
-                Remove-Item $isTmp -ErrorAction SilentlyContinue
-              } catch { Write-Warning "Direct Inno Setup download/install failed: $_" }
-              $iscc = Find-ISCC
-            }
+            Write-Host "Inno Setup 6 not found - installing via direct download (per-user, no admin required)."
+            try {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              $isTmp = Join-Path $env:RUNNER_TEMP "innosetup-installer.exe"
+              Invoke-WebRequest -UseBasicParsing -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile $isTmp
+              if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+              $proc = Start-Process -FilePath $isTmp `
+                -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/DIR=$installDir" `
+                -Wait -PassThru
+              Write-Host "Inno Setup installer exited with code $($proc.ExitCode)"
+              Remove-Item $isTmp -ErrorAction SilentlyContinue
+            } catch { Write-Warning "Direct Inno Setup download/install failed: $_" }
+            $iscc = Find-ISCC
           }
 
           if (-not $iscc) {
