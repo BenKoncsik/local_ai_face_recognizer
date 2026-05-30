@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  This file is auto-generated and committed by the release CI workflow.
+  Do not edit by hand.  See .github/workflows/build-release.yml and
+  scripts/generate_appcast.py.
+
+  Sparkle 2 feed URL embedded in app Info.plist:
+    https://raw.githubusercontent.com/BenKoncsik/local_ai_face_recognizer/main/docs/appcast.xml
+
+  First stable version will replace this placeholder on the next release.
+-->
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Face-Local</title>
+    <link>https://github.com/BenKoncsik/local_ai_face_recognizer/releases</link>
+    <description>Most recent changes with Face-Local.</description>
+    <language>en</language>
+  </channel>
+</rss>

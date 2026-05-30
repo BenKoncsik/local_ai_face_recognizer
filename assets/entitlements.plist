@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Required for PyInstaller frozen apps with hardened runtime:
+
+      Python's ctypes, cffi, and the C extension loader all write executable
+      memory at runtime.  Without this flag the kernel kills the process under
+      the hardened runtime restriction.
+    -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!--
+      Python extension modules (.so files) are not individually code-signed by
+      the developer who built them (wheels ship pre-built .so files signed by
+      their own authors or unsigned).  Library validation would block loading
+      any .so not signed by this developer.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!--
+      Python's dynamic linker uses DYLD_* environment variables internally for
+      some import machinery on older macOS versions.  Kept here defensively;
+      remove if notarization fails with this flag for a specific Python version.
+    -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
