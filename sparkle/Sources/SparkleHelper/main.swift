@@ -2,10 +2,10 @@ import AppKit
 import Sparkle
 
 // Held at module scope so ARC does not release the updater before the run loop exits.
-private var activeUpdater: SPUUpdater?
+var activeUpdater: SPUUpdater?
 
-private final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
-    private let isBackgroundCheck: Bool
+final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
+    let isBackgroundCheck: Bool
 
     init(backgroundCheck: Bool) {
         self.isBackgroundCheck = backgroundCheck
@@ -20,7 +20,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDele
         let userDriver = SPUStandardUserDriver(hostBundle: hostBundle, delegate: nil)
 
         do {
-            let updater = try SPUUpdater(
+            let updater = SPUUpdater(
                 hostBundle: hostBundle,
                 applicationBundle: hostBundle,
                 userDriver: userDriver,
