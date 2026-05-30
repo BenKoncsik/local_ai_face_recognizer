@@ -1205,6 +1205,7 @@ jobs:
           import json
           import os
           import sys
+          import urllib.parse
           import urllib.request
           import zipfile
           from pathlib import Path
@@ -1221,6 +1222,19 @@ jobs:
           release_tag = os.environ["RELEASE_TAG"]
           fallback_tag = f"artifact-release-{package_version}"
 
+          class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+              redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+              if redirected is None:
+                return None
+              old_host = urllib.parse.urlparse(req.full_url).netloc
+              new_host = urllib.parse.urlparse(newurl).netloc
+              if old_host != new_host:
+                redirected.remove_header("Authorization")
+              return redirected
+
+          opener = urllib.request.build_opener(SafeRedirectHandler())
+
           def request_json(url, token):
             req = urllib.request.Request(
               url,
@@ -1230,7 +1244,7 @@ jobs:
                 "X-GitHub-Api-Version": "2022-11-28",
               },
             )
-            with urllib.request.urlopen(req, timeout=120) as response:
+            with opener.open(req, timeout=120) as response:
               return json.load(response)
 
           def download_bytes(url, token, accept="application/octet-stream"):
@@ -1242,7 +1256,7 @@ jobs:
                 "X-GitHub-Api-Version": "2022-11-28",
               },
             )
-            with urllib.request.urlopen(req, timeout=600) as response:
+            with opener.open(req, timeout=600) as response:
               return response.read()
 
           def download_workflow_artifact(name):
