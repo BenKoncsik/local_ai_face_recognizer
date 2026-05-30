@@ -1185,7 +1185,7 @@ jobs:
 
       - name: Download release artifacts
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           PRIVATE_ARTIFACT_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
@@ -1198,98 +1198,152 @@ jobs:
           set -euo pipefail
           mkdir -p release
 
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found. Install GitHub CLI on this runner for artifact downloads." >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import concurrent.futures
+          import fnmatch
+          import io
+          import json
+          import os
+          import sys
+          import urllib.request
+          import zipfile
+          from pathlib import Path
 
-          download_workflow_artifact() {
-            local name="$1"
-            echo "Downloading workflow artifact: ${name}"
-            gh run download "${{ github.run_id }}" \
-              --repo "${{ github.repository }}" \
-              --name "$name" \
-              --dir release
-          }
+          release_dir = Path("release")
+          release_dir.mkdir(exist_ok=True)
 
-          fallback_release_download() {
-            GH_TOKEN="$PRIVATE_ARTIFACT_TOKEN" gh release download "artifact-release-${PACKAGE_VERSION}" \
-              --repo "${{ env.ARTIFACT_REPO }}" \
-              --pattern "$1" \
-              --dir release
-          }
+          repo = os.environ["GITHUB_REPOSITORY"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          github_token = os.environ["GITHUB_TOKEN"]
+          private_token = os.environ.get("PRIVATE_ARTIFACT_TOKEN", "")
+          artifact_repo = os.environ["ARTIFACT_REPO"]
+          package_version = os.environ["PACKAGE_VERSION"]
+          release_tag = os.environ["RELEASE_TAG"]
+          fallback_tag = f"artifact-release-{package_version}"
 
-          optional_fallback_release_download() {
-            fallback_release_download "$1" 2>/dev/null || true
-          }
+          def request_json(url, token):
+            req = urllib.request.Request(
+              url,
+              headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            )
+            with urllib.request.urlopen(req, timeout=120) as response:
+              return json.load(response)
 
-          download_platform() {
-            local label="$1"
-            local artifact_name="$2"
-            shift 2
+          def download_bytes(url, token, accept="application/octet-stream"):
+            req = urllib.request.Request(
+              url,
+              headers={
+                "Accept": accept,
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            )
+            with urllib.request.urlopen(req, timeout=600) as response:
+              return response.read()
 
-            if download_workflow_artifact "$artifact_name"; then
-              echo "${label}: workflow artifact downloaded"
-              return 0
-            fi
+          def download_workflow_artifact(name):
+            print(f"Downloading workflow artifact: {name}", flush=True)
+            url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
+            artifacts = request_json(url, github_token).get("artifacts", [])
+            artifact = next((item for item in artifacts if item.get("name") == name), None)
+            if artifact is None:
+              raise RuntimeError(f"workflow artifact not found: {name}")
 
-            echo "${label}: workflow artifact download failed, trying private artifact repo fallback"
-            for pattern in "$@"; do
-              fallback_release_download "$pattern"
-            done
-          }
+            archive = download_bytes(artifact["archive_download_url"], github_token)
+            with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+              zf.extractall(release_dir)
+            print(f"{name}: workflow artifact downloaded", flush=True)
 
-          download_macos() {
-            if download_workflow_artifact "face-local-macos-${RELEASE_TAG}"; then
-              echo "macOS: workflow artifact downloaded"
-              return 0
-            fi
+          def list_release_assets():
+            if not private_token:
+              raise RuntimeError("PRIVATE_ARTIFACT_TOKEN is empty; cannot use private artifact fallback")
 
-            echo "macOS: workflow artifact download failed, trying private artifact repo fallback"
-            fallback_release_download "Face-Local-macOS-installer-${PACKAGE_VERSION}.dmg"
-            optional_fallback_release_download "Face-Local-macOS-sparkle-${PACKAGE_VERSION}.zip"
-            optional_fallback_release_download "sparkle_meta.json"
-          }
+            release = request_json(
+              f"https://api.github.com/repos/{artifact_repo}/releases/tags/{fallback_tag}",
+              private_token,
+            )
+            return release.get("assets", [])
 
-          pids=()
+          def fallback_release_download(pattern, required=True):
+            assets = list_release_assets()
+            matches = [asset for asset in assets if fnmatch.fnmatch(asset.get("name", ""), pattern)]
+            if not matches and required:
+              raise RuntimeError(f"fallback release asset not found: {pattern}")
+            if not matches:
+              print(f"Optional fallback asset not found: {pattern}", flush=True)
+              return
 
-          if [ "$BUILD_MACOS_RESULT" = "success" ]; then
-            download_macos &
-            pids+=("$!")
-          fi
+            for asset in matches:
+              data = download_bytes(asset["url"], private_token)
+              target = release_dir / asset["name"]
+              target.write_bytes(data)
+              print(f"Downloaded fallback asset: {asset['name']}", flush=True)
 
-          if [ "$BUILD_WINDOWS_RESULT" = "success" ]; then
-            download_platform \
-              "Windows" \
-              "face-local-windows-${RELEASE_TAG}" \
-              "Face-Local-windows-*-${PACKAGE_VERSION}.*" &
-            pids+=("$!")
-          fi
+          def download_platform(label, artifact_name, required_patterns, optional_patterns=()):
+            try:
+              download_workflow_artifact(artifact_name)
+              return
+            except Exception as exc:
+              print(f"{label}: workflow artifact download failed: {exc}", flush=True)
+              print(f"{label}: trying private artifact repo fallback", flush=True)
 
-          if [ "$BUILD_LINUX_ARM64_RESULT" = "success" ]; then
-            download_platform \
-              "Linux ARM64" \
-              "face-local-linux-arm64-${RELEASE_TAG}" \
-              "Face-Local-linux-arm64-*-${PACKAGE_VERSION}.*" &
-            pids+=("$!")
-          fi
+            for pattern in required_patterns:
+              fallback_release_download(pattern, required=True)
+            for pattern in optional_patterns:
+              fallback_release_download(pattern, required=False)
 
-          if [ "$BUILD_LINUX_X64_RESULT" = "success" ]; then
-            download_platform \
-              "Linux x64" \
-              "face-local-linux-x64-${RELEASE_TAG}" \
-              "Face-Local-linux-x64-*-${PACKAGE_VERSION}.*" &
-            pids+=("$!")
-          fi
+          platforms = []
+          if os.environ["BUILD_MACOS_RESULT"] == "success":
+            platforms.append((
+              "macOS",
+              f"face-local-macos-{release_tag}",
+              [f"Face-Local-macOS-installer-{package_version}.dmg"],
+              [f"Face-Local-macOS-sparkle-{package_version}.zip", "sparkle_meta.json"],
+            ))
+          if os.environ["BUILD_WINDOWS_RESULT"] == "success":
+            platforms.append((
+              "Windows",
+              f"face-local-windows-{release_tag}",
+              [f"Face-Local-windows-*-{package_version}.*"],
+              [],
+            ))
+          if os.environ["BUILD_LINUX_ARM64_RESULT"] == "success":
+            platforms.append((
+              "Linux ARM64",
+              f"face-local-linux-arm64-{release_tag}",
+              [f"Face-Local-linux-arm64-*-{package_version}.*"],
+              [],
+            ))
+          if os.environ["BUILD_LINUX_X64_RESULT"] == "success":
+            platforms.append((
+              "Linux x64",
+              f"face-local-linux-x64-{release_tag}",
+              [f"Face-Local-linux-x64-*-{package_version}.*"],
+              [],
+            ))
 
-          failed=0
-          for pid in "${pids[@]}"; do
-            if ! wait "$pid"; then
-              failed=1
-            fi
-          done
+          failures = []
+          with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(platforms))) as executor:
+            future_to_label = {
+              executor.submit(download_platform, label, artifact_name, required, optional): label
+              for label, artifact_name, required, optional in platforms
+            }
+            for future in concurrent.futures.as_completed(future_to_label):
+              label = future_to_label[future]
+              try:
+                future.result()
+              except Exception as exc:
+                failures.append(f"{label}: {exc}")
 
-          exit "$failed"
+          if failures:
+            for failure in failures:
+              print(failure, file=sys.stderr)
+            raise SystemExit(1)
+          PY
 
       - name: Verify release assets
         shell: bash
