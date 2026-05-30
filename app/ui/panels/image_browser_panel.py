@@ -603,6 +603,15 @@ class _DrawableImageLabel(QLabel):
         """Commit the current bbox and exit interactive-edit mode."""
         self._exit_interactive_edit(commit=True, silent=False)
 
+    def dismiss_interactive_edit(self) -> None:
+        """Silently exit interactive-edit mode without emitting any signal.
+
+        Use this when the bbox was already persisted by intermediate commits
+        and you just want to clear the imode UI state without triggering any
+        save or restore logic.
+        """
+        self._exit_interactive_edit(commit=False, silent=True)
+
     def _exit_interactive_edit(
         self, *, commit: bool, silent: bool
     ) -> None:
@@ -2528,12 +2537,21 @@ class ImageBrowserPanel(QWidget):
 
         clicked_id = self._hit_test(orig_x, orig_y)
         if clicked_id is None:
+            log.debug(
+                "Face selection: click at image=(%d,%d) — no face hit, clearing selection",
+                orig_x, orig_y,
+            )
             self._hide_inline_editor()
             self._selected_face_id = None
             self._redraw_faces()
             self._clear_face_panel()
             return
 
+        log.debug(
+            "Face selection: click at image=(%d,%d) → face_id=%d "
+            "(prev_selected=%s image_id=%s)",
+            orig_x, orig_y, clicked_id, self._selected_face_id, self._current_image_id,
+        )
         if self._selected_face_id != clicked_id:
             self._selected_face_id = clicked_id
             self._redraw_faces()
@@ -2710,6 +2728,10 @@ class ImageBrowserPanel(QWidget):
         face_id = self._interactive_edit_face_id
         if face_id is None:
             return
+        log.debug(
+            "BBox intermediate commit: face_id=%d new_bbox=(%d,%d,%d,%d)",
+            face_id, ix, iy, iw, ih,
+        )
 
         # Find old bbox for undo record
         entry = next((f for f in self._face_data if f[0] == face_id), None)
@@ -2753,6 +2775,10 @@ class ImageBrowserPanel(QWidget):
         face_id = self._interactive_edit_face_id
         if face_id is None:
             return
+        log.info(
+            "BBox finalized: face_id=%d final_bbox=(%d,%d,%d,%d)",
+            face_id, ix, iy, iw, ih,
+        )
 
         # Grab old bbox before clearing state
         entry = next((f for f in self._face_data if f[0] == face_id), None)
@@ -2910,6 +2936,12 @@ class ImageBrowserPanel(QWidget):
     def _update_face_bbox(
         self, face_id: int, x: int, y: int, w: int, h: int
     ) -> None:
+        log.info(
+            "BBox save: face_id=%d bbox=(%d,%d,%d,%d) "
+            "caller_edit_face=%s selected=%s",
+            face_id, x, y, w, h,
+            self._interactive_edit_face_id, self._selected_face_id,
+        )
         old_crop_path: Optional[str] = None
         new_crop_path: Optional[str] = None
         with session_scope() as session:
@@ -3053,13 +3085,14 @@ class ImageBrowserPanel(QWidget):
         if self._orig_img_bgr is None:
             return
         log.debug(
-            "Render image-browser preview: image_id=%s selected_FaceId=%s faces=%s "
-            "preview_source=%r deoldified_color=%s",
+            "Overlay re-render: image_id=%s selected_face_id=%s "
+            "faces=%s exclude_edit_id=%s imode=%s imode_face=%s",
             self._current_image_id,
             self._selected_face_id,
-            [fd[0] for fd in self._face_data],
-            self._deol_pair_color_path if self._deol_viewing_color else self._current_path,
-            self._deol_viewing_color,
+            [(fd[0], fd[5]) for fd in self._face_data],
+            exclude_edit_id,
+            self._image_label._imode,
+            self._interactive_edit_face_id,
         )
         render_faces = (
             [f for f in self._face_data if f[0] != exclude_edit_id]
@@ -3200,7 +3233,8 @@ class ImageBrowserPanel(QWidget):
         if face_id is None:
             return
         log.info(
-            "Inline assign: face_id=%d → person_id=%d", face_id, person_id
+            "Face assignment: face_id=%d → person_id=%d (inline editor)",
+            face_id, person_id,
         )
         self._inline_editor.reset_search()
         self._hide_inline_editor()
@@ -3217,16 +3251,35 @@ class ImageBrowserPanel(QWidget):
         if face_id is None:
             return
         self._hide_inline_editor()
+
+        # Safety: exit any stale interactive edit state.  Normally the inline
+        # editor can only be opened when _imode is False, but defensive cleanup
+        # prevents _imode from leaking into the post-creation state.
+        if self._interactive_edit_face_id is not None:
+            log.warning(
+                "New person (inline): stale interactive-edit detected for "
+                "face_id=%d — dismissing silently",
+                self._interactive_edit_face_id,
+            )
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._draw_hint.setVisible(False)
+            self._image_label.dismiss_interactive_edit()
+
         with session_scope() as session:
             person = Person(name=name, is_auto_named=False)
             session.add(person)
             session.flush()
             person_id = person.id
+            log.info(
+                "New person creation: face_id=%d new_person='%s' person_id=%d",
+                face_id, name, person_id,
+            )
             IdentityService(session).reassign_face(face_id, person_id)
-        log.info(
-            "Inline create+assign: face_id=%d new person='%s' person_id=%d",
-            face_id, name, person_id,
-        )
+            log.info(
+                "Face assignment: face_id=%d → person_id=%d (new person via inline)",
+                face_id, person_id,
+            )
         self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
@@ -3822,8 +3875,23 @@ class ImageBrowserPanel(QWidget):
         person_id = self._person_search.current_person_id()
         if person_id is None:
             return
+
+        # Same defensive cleanup as _on_create_and_assign: the panel Assign
+        # button can be pressed while the image label is in interactive-edit
+        # mode.  Dismiss silently so the next face click works normally.
+        if self._interactive_edit_face_id is not None:
+            log.warning(
+                "Assign existing: stale interactive-edit active for face_id=%d "
+                "— dismissing before assignment",
+                self._interactive_edit_face_id,
+            )
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._draw_hint.setVisible(False)
+            self._image_label.dismiss_interactive_edit()
+
         log.info(
-            "Assign existing: face_id=%d → person_id=%d",
+            "Face assignment: face_id=%d → person_id=%d (panel assign button)",
             self._selected_face_id, person_id,
         )
         with session_scope() as session:
@@ -3843,16 +3911,40 @@ class ImageBrowserPanel(QWidget):
                 self, t("ibp_empty_name_title"), t("ibp_empty_name_msg")
             )
             return
+
+        # CRITICAL: the panel "Create" button can be pressed while the image
+        # label is still in interactive-edit mode (_imode=True), because the
+        # button is a separate widget outside the label.  If we don't clean up
+        # here, _image_label._imode stays True after person creation, and the
+        # next click on ANY face will be silently consumed by the stale edit-
+        # exit handler instead of selecting that face.  The intermediate bbox
+        # commits already persisted the latest position, so we just dismiss.
+        if self._interactive_edit_face_id is not None:
+            log.warning(
+                "New person (panel): stale interactive-edit active for face_id=%d "
+                "while creating person — dismissing interactive edit",
+                self._interactive_edit_face_id,
+            )
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._draw_hint.setVisible(False)
+            self._image_label.dismiss_interactive_edit()
+
+        face_id = self._selected_face_id
         with session_scope() as session:
             person = Person(name=name, is_auto_named=False)
             session.add(person)
             session.flush()
             person_id = person.id
-            IdentityService(session).reassign_face(self._selected_face_id, person_id)
-        log.info(
-            "Create+assign: face_id=%d new person='%s' person_id=%d",
-            self._selected_face_id, name, person_id,
-        )
+            log.info(
+                "New person creation: face_id=%d new_person='%s' person_id=%d",
+                face_id, name, person_id,
+            )
+            IdentityService(session).reassign_face(face_id, person_id)
+            log.info(
+                "Face assignment: face_id=%d → person_id=%d (new person via panel)",
+                face_id, person_id,
+            )
         self._remember_recent_person(person_id)
         self._new_name_edit.clear()
         self._reload_current_face_data()
