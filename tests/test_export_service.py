@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 from app.db.database import init_db, session_scope
-from app.db.models import Face, Image, Person
+from app.db.models import Face, Image, Person, Place
 from app.services.export_service import ExportService, _face_bbox_for_export
+from app.utils.exif import _dms_to_decimal
 from app.utils.image_utils import save_image_bgr
 
 
@@ -258,3 +259,161 @@ def test_face_bbox_for_export_accepts_normalized_legacy_boxes():
         "width": 25.0,
         "height": 10.0,
     }
+
+
+def test_exif_gps_dms_conversion_handles_direction_refs():
+    values = ((46, 1), (15, 1), (108, 10))
+
+    assert _dms_to_decimal(values, "N") == pytest.approx(46.253)
+    assert _dms_to_decimal(values, "S") == pytest.approx(-46.253)
+
+
+def test_export_html_writes_map_page_and_utf8_data(db, tmp_path):
+    photos = tmp_path / "1984 Szemes"
+    photos.mkdir()
+    image_path = photos / "Őszi kép.jpg"
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+    image[:, :] = (90, 80, 70)
+    assert save_image_bgr(image_path, image)
+
+    with session_scope() as session:
+        place = Place(name="Balatonszemes", latitude=46.808, longitude=17.77)
+        person = Person(name="Panni", is_auto_named=False)
+        session.add_all([place, person])
+        session.flush()
+
+        img = Image(
+            file_path=str(image_path),
+            file_hash="hash-map",
+            file_mtime=0.0,
+            width=320,
+            height=240,
+            photo_date="1984.07.12",
+            image_latitude=46.253,
+            image_longitude=20.148,
+            place_id=place.id,
+            detection_done=True,
+        )
+        session.add(img)
+        session.flush()
+        session.add(
+            Face(
+                image_id=img.id,
+                person_id=person.id,
+                bbox_x=20,
+                bbox_y=30,
+                bbox_w=50,
+                bbox_h=60,
+                confidence=0.9,
+                detector_backend="cpu",
+            )
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    assert (out / "map.html").exists()
+    assert (out / "map.css").exists()
+    assert (out / "map.js").exists()
+    assert (out / "map-data.json").exists()
+    assert (out / "map-data.js").exists()
+    assert 'href="map.html">Térkép</a>' in (out / "index.html").read_text(encoding="utf-8")
+
+    data_bytes = (out / "map-data.json").read_bytes()
+    data = json.loads(data_bytes.decode("utf-8"))
+    assert data == [
+        {
+            "imageId": 1,
+            "fileName": "Őszi kép.jpg",
+            "relativePath": next(iter(_read_json_const(out / "index.html", "IMAGES").values()))["src"],
+            "thumbnailPath": next(iter(_read_json_const(out / "index.html", "IMAGES").values()))["src"],
+            "detailPage": "index.html#image=" + next(iter(_read_json_const(out / "index.html", "IMAGES").keys())),
+            "latitude": 46.253,
+            "longitude": 20.148,
+            "dateTaken": "1984.07.12",
+            "people": ["Panni"],
+            "placeName": "Balatonszemes",
+            "folder": "1984 Szemes",
+        }
+    ]
+    assert "Őszi kép.jpg" in data_bytes.decode("utf-8")
+
+
+def test_export_html_map_skips_missing_bad_and_zero_gps(db, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    good_path = photos / "good.jpg"
+    zero_path = photos / "zero.jpg"
+    bad_path = photos / "bad.jpg"
+    image = np.zeros((80, 120, 3), dtype=np.uint8)
+    assert save_image_bgr(good_path, image)
+    assert save_image_bgr(zero_path, image)
+    assert save_image_bgr(bad_path, image)
+
+    with session_scope() as session:
+        session.add_all(
+            [
+                Image(
+                    file_path=str(good_path),
+                    file_hash="good",
+                    file_mtime=0.0,
+                    width=120,
+                    height=80,
+                    exif_latitude=47.5,
+                    exif_longitude=19.0,
+                    detection_done=True,
+                ),
+                Image(
+                    file_path=str(zero_path),
+                    file_hash="zero",
+                    file_mtime=0.0,
+                    width=120,
+                    height=80,
+                    exif_latitude=0.0,
+                    exif_longitude=0.0,
+                    detection_done=True,
+                ),
+                Image(
+                    file_path=str(bad_path),
+                    file_hash="bad",
+                    file_mtime=0.0,
+                    width=120,
+                    height=80,
+                    exif_latitude=95.0,
+                    exif_longitude=19.0,
+                    detection_done=True,
+                ),
+            ]
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    data = json.loads((out / "map-data.json").read_text(encoding="utf-8"))
+    assert [record["fileName"] for record in data] == ["good.jpg"]
+
+
+def test_export_html_creates_empty_map_page_without_gps(db, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    image_path = photos / "no_gps.jpg"
+    image = np.zeros((80, 120, 3), dtype=np.uint8)
+    assert save_image_bgr(image_path, image)
+
+    with session_scope() as session:
+        session.add(
+            Image(
+                file_path=str(image_path),
+                file_hash="no-gps",
+                file_mtime=0.0,
+                width=120,
+                height=80,
+                detection_done=True,
+            )
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    assert json.loads((out / "map-data.json").read_text(encoding="utf-8")) == []
+    assert "Nincs GPS-koordinátával rendelkező kép" in (out / "map.js").read_text(encoding="utf-8")

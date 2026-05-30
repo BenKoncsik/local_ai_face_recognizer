@@ -13,6 +13,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -202,6 +203,7 @@ class ExportService:
         # image_path -> list of (person, face) records. Face bounding boxes are
         # exported as percentages so CSS overlays stay aligned after resizing.
         image_faces: Dict[str, List[Tuple[Person, Face]]] = {}
+        image_by_path: Dict[str, Image] = {}
         faceless_image_paths: set[str] = set()
         # person_name → list of thumb filenames
         person_thumbs: Dict[str, List[str]] = {}
@@ -216,6 +218,7 @@ class ExportService:
                 if face.image:
                     ip = face.image.file_path
                     image_faces.setdefault(ip, []).append((person, face))
+                    image_by_path[ip] = face.image
                 if face.crop_path and Path(face.crop_path).exists():
                     dst_thumb = thumb_dir / f"face_{face.id}.jpg"
                     shutil.copy2(face.crop_path, dst_thumb)
@@ -234,10 +237,12 @@ class ExportService:
                 person_images.setdefault(no_face_group, [])
                 for image in faceless_images:
                     image_faces.setdefault(image.file_path, [])
+                    image_by_path[image.file_path] = image
                     faceless_image_paths.add(image.file_path)
 
         # --- export normalized originals and HTML overlay metadata ---
         image_records: Dict[str, dict] = {}
+        map_records: List[dict] = []
         image_order: List[str] = []
         for img_path, face_list in image_faces.items():
             img = load_image_bgr(img_path)
@@ -268,6 +273,7 @@ class ExportService:
                 _append_unique(person_images.setdefault("Arc nélküli képek", []), dst_name)
 
             source = Path(img_path)
+            db_image = image_by_path.get(img_path)
             image_records[dst_name] = {
                 "id": dst_name,
                 "src": f"images/{dst_name}",
@@ -277,6 +283,9 @@ class ExportService:
                 "height": img_h,
                 "faces": face_records,
             }
+            map_record = _build_map_export_record(db_image, dst_name, source, face_records)
+            if map_record is not None:
+                map_records.append(map_record)
             image_order.append(dst_name)
 
         # --- build JS data ---
@@ -299,6 +308,7 @@ class ExportService:
             .replace("__IMAGE_ORDER_JSON__", _json_for_script(image_order))
         )
         (out / "index.html").write_text(html, encoding="utf-8")
+        _write_map_export_files(out, map_records)
 
         log.info("HTML export: %d person(s) → %s", len(persons), out)
         return out
@@ -550,6 +560,78 @@ def _append_unique(values: List[str], value: str) -> None:
         values.append(value)
 
 
+def _build_map_export_record(
+    image: Optional[Image],
+    exported_name: str,
+    source_path: Path,
+    face_records: List[dict],
+) -> Optional[dict]:
+    if image is None:
+        return None
+    coords = _effective_image_gps(image)
+    if coords is None:
+        return None
+    latitude, longitude = coords
+    people = sorted({str(face.get("name", "")) for face in face_records if face.get("name")})
+    place_name = image.place.name if image.place else ""
+    folder = source_path.parent.name
+    return {
+        "imageId": image.id,
+        "fileName": source_path.name,
+        "relativePath": f"images/{exported_name}",
+        "thumbnailPath": f"images/{exported_name}",
+        "detailPage": f"index.html#image={exported_name}",
+        "latitude": round(latitude, 8),
+        "longitude": round(longitude, 8),
+        "dateTaken": image.photo_date or "",
+        "people": people,
+        "placeName": place_name or "",
+        "folder": folder,
+    }
+
+
+def _effective_image_gps(image: Image) -> Optional[Tuple[float, float]]:
+    candidates = (
+        (image.image_latitude, image.image_longitude),
+        (image.exif_latitude, image.exif_longitude),
+        (
+            image.place.latitude if image.place else None,
+            image.place.longitude if image.place else None,
+        ),
+    )
+    for latitude, longitude in candidates:
+        if _valid_gps_pair(latitude, longitude):
+            return float(latitude), float(longitude)
+    return None
+
+
+def _valid_gps_pair(latitude: Optional[float], longitude: Optional[float]) -> bool:
+    if latitude is None or longitude is None:
+        return False
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        return False
+    if lat == 0.0 and lon == 0.0:
+        return False
+    return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+
+
+def _write_map_export_files(out: Path, records: List[dict]) -> None:
+    data_json = json.dumps(records, ensure_ascii=False, indent=2)
+    (out / "map-data.json").write_text(data_json + "\n", encoding="utf-8")
+    (out / "map-data.js").write_text(
+        "window.MAP_EXPORT_DATA = " + _json_for_script(records, indent=2) + ";\n",
+        encoding="utf-8",
+    )
+    (out / "map.html").write_text(_MAP_HTML_TEMPLATE, encoding="utf-8")
+    (out / "map.css").write_text(_MAP_CSS, encoding="utf-8")
+    (out / "map.js").write_text(_MAP_JS, encoding="utf-8")
+
+
 def _json_for_script(value, *, indent: Optional[int] = None) -> str:
     """Serialize JSON safely for an inline script tag."""
     return (
@@ -577,6 +659,9 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   header{background:#1a1a1a;padding:16px 24px;border-bottom:1px solid #333;
          display:flex;align-items:center;gap:16px;flex-wrap:wrap}
   header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
+  .nav-link{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;
+            border-radius:6px;padding:7px 10px;background:#1d2b45;white-space:nowrap}
+  .nav-link:hover,.nav-link:focus{border-color:#88aaff;background:#26385a;outline:none}
   #search{flex:1;min-width:180px;padding:8px 12px;background:#222;
           border:1px solid #444;border-radius:6px;color:#fff;font-size:1rem}
   #search:focus{outline:none;border-color:#88aaff}
@@ -642,6 +727,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
 <header>
   <h1>Face Gallery</h1>
+  <a class="nav-link" href="map.html">Térkép</a>
   <input id="search" type="text" placeholder="Keresés / Search…" oninput="filter()">
   <span id="count"></span>
 </header>
@@ -778,6 +864,13 @@ function showRelativeImage(delta){
   openLb(IMAGE_ORDER[nextIdx]);
 }
 
+function openImageFromHash(){
+  const hash=window.location.hash.startsWith('#')?window.location.hash.slice(1):'';
+  const params=new URLSearchParams(hash);
+  const imageId=params.get('image');
+  if(imageId&&IMAGES[imageId])openLb(imageId);
+}
+
 document.getElementById('lb').addEventListener('click',function(e){
   if(e.target===this)closeLb();
 });
@@ -881,9 +974,311 @@ function updateCount(){
 }
 
 buildCards();
+openImageFromHash();
+window.addEventListener('hashchange',openImageFromHash);
 </script>
 </body>
 </html>
+"""
+
+
+_MAP_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Gallery - Térkép</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+<link rel="stylesheet" href="map.css">
+</head>
+<body>
+<header>
+  <h1>Face Gallery</h1>
+  <nav>
+    <a href="index.html">Galéria</a>
+    <a aria-current="page" href="map.html">Térkép</a>
+  </nav>
+  <span id="map-count"></span>
+</header>
+<main>
+  <aside id="filters" aria-label="Térkép szűrők">
+    <label>Személy
+      <select id="person-filter"><option value="">Minden személy</option></select>
+    </label>
+    <label>Év
+      <select id="year-filter"><option value="">Minden év</option></select>
+    </label>
+    <label>Mappa
+      <select id="folder-filter"><option value="">Minden mappa</option></select>
+    </label>
+    <div id="status"></div>
+    <div id="visible-list"></div>
+  </aside>
+  <section id="map-wrap">
+    <div id="map" role="region" aria-label="GPS térkép"></div>
+    <div id="fallback-list"></div>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="map-data.js"></script>
+<script src="map.js"></script>
+</body>
+</html>
+"""
+
+
+_MAP_CSS = """*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;background:#111;color:#ddd;font-family:system-ui,sans-serif}
+button,input,select{font:inherit}
+header{background:#1a1a1a;padding:14px 20px;border-bottom:1px solid #333;
+       display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
+nav{display:flex;gap:8px;flex-wrap:wrap}
+nav a{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;border-radius:6px;
+      padding:7px 10px;background:#1d2b45;white-space:nowrap}
+nav a:hover,nav a:focus,nav a[aria-current="page"]{border-color:#88aaff;background:#26385a;outline:none}
+#map-count{margin-left:auto;color:#aaa;font-size:.9rem}
+main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 62px)}
+#filters{border-right:1px solid #333;background:#171717;padding:14px;display:flex;
+         flex-direction:column;gap:12px;min-width:0}
+label{display:flex;flex-direction:column;gap:5px;color:#aaa;font-size:.78rem;font-weight:700}
+select{width:100%;padding:8px 10px;background:#222;border:1px solid #444;border-radius:6px;
+       color:#fff;min-width:0}
+select:focus{outline:none;border-color:#88aaff}
+#status{font-size:.85rem;color:#aaa;line-height:1.4}
+#visible-list{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:2px}
+.list-item{display:grid;grid-template-columns:54px 1fr;gap:8px;color:#ddd;text-decoration:none;
+           border:1px solid #333;border-radius:6px;padding:6px;background:#1e1e1e;min-width:0}
+.list-item:hover,.list-item:focus{border-color:#88aaff;outline:none}
+.list-item img{width:54px;height:42px;object-fit:cover;border-radius:4px;background:#050505}
+.list-title{font-size:.82rem;font-weight:700;overflow-wrap:anywhere;line-height:1.25}
+.list-meta{font-size:.74rem;color:#999;overflow-wrap:anywhere;line-height:1.25;margin-top:2px}
+#map-wrap{position:relative;min-width:0;background:#0d0d0d}
+#map{height:calc(100vh - 62px);min-height:520px;width:100%}
+#fallback-list{display:none;padding:16px;max-width:980px}
+.fallback-card{display:grid;grid-template-columns:92px 1fr;gap:12px;margin-bottom:10px;
+               border:1px solid #333;border-radius:6px;background:#1b1b1b;padding:10px;color:#ddd;
+               text-decoration:none}
+.fallback-card:hover,.fallback-card:focus{border-color:#88aaff;outline:none}
+.fallback-card img{width:92px;height:68px;object-fit:cover;border-radius:4px;background:#050505}
+.popup{width:min(310px,76vw)}
+.popup-grid{display:grid;grid-template-columns:72px 1fr;gap:8px;margin:6px 0;color:#222}
+.popup-grid img{width:72px;height:58px;object-fit:cover;border-radius:4px;background:#eee}
+.popup-title{font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+.popup-meta{font-size:.82rem;color:#444;line-height:1.3;overflow-wrap:anywhere;margin-top:3px}
+.popup a{color:#1d5fd1}
+.leaflet-popup-content{margin:10px 12px}
+.leaflet-container{background:#151515}
+.map-unavailable #map{display:none}
+.map-unavailable #fallback-list{display:block}
+@media (max-width:760px){
+  header{padding:12px}
+  #map-count{margin-left:0;width:100%}
+  main{display:flex;flex-direction:column}
+  #filters{border-right:0;border-bottom:1px solid #333;display:grid;grid-template-columns:1fr;
+           max-height:none}
+  #visible-list{max-height:160px}
+  #map{height:62vh;min-height:360px}
+}
+"""
+
+
+_MAP_JS = """const records = Array.isArray(window.MAP_EXPORT_DATA) ? window.MAP_EXPORT_DATA : [];
+let map = null;
+let markerLayer = null;
+let activeRecords = [];
+
+const els = {
+  person: document.getElementById('person-filter'),
+  year: document.getElementById('year-filter'),
+  folder: document.getElementById('folder-filter'),
+  count: document.getElementById('map-count'),
+  status: document.getElementById('status'),
+  visibleList: document.getElementById('visible-list'),
+  fallback: document.getElementById('fallback-list'),
+  wrap: document.getElementById('map-wrap')
+};
+
+function text(value){
+  return value == null ? '' : String(value);
+}
+
+function option(select, value, label){
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = label;
+  select.appendChild(opt);
+}
+
+function yearOf(record){
+  const match = text(record.dateTaken).match(/\\b(\\d{4})\\b/);
+  return match ? match[1] : '';
+}
+
+function fillFilters(){
+  const people = new Set();
+  const years = new Set();
+  const folders = new Set();
+  records.forEach(record => {
+    (record.people || []).forEach(name => { if(name) people.add(name); });
+    const year = yearOf(record);
+    if(year) years.add(year);
+    if(record.folder) folders.add(record.folder);
+  });
+  [...people].sort((a,b)=>a.localeCompare(b,'hu-HU')).forEach(name => option(els.person, name, name));
+  [...years].sort().forEach(year => option(els.year, year, year));
+  [...folders].sort((a,b)=>a.localeCompare(b,'hu-HU')).forEach(folder => option(els.folder, folder, folder));
+}
+
+function filteredRecords(){
+  const person = els.person.value;
+  const year = els.year.value;
+  const folder = els.folder.value;
+  return records.filter(record => {
+    if(person && !(record.people || []).includes(person)) return false;
+    if(year && yearOf(record) !== year) return false;
+    if(folder && record.folder !== folder) return false;
+    return true;
+  });
+}
+
+function groupByCoordinate(items){
+  const groups = new Map();
+  items.forEach(record => {
+    const lat = Number(record.latitude);
+    const lon = Number(record.longitude);
+    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    const key = lat.toFixed(6) + ',' + lon.toFixed(6);
+    if(!groups.has(key)) groups.set(key, {lat, lon, items: []});
+    groups.get(key).items.push(record);
+  });
+  return [...groups.values()];
+}
+
+function popupHtml(items){
+  const rows = items.slice(0, 12).map(record => {
+    const people = (record.people || []).join(', ');
+    const meta = [record.dateTaken, people, record.placeName, record.folder].filter(Boolean).join(' · ');
+    const href = record.detailPage || record.relativePath || '#';
+    const image = record.thumbnailPath || record.relativePath || '';
+    return '<div class="popup-grid">' +
+      (image ? '<img src="' + escapeAttr(image) + '" alt="">' : '<span></span>') +
+      '<div><div class="popup-title">' + escapeHtml(record.fileName || 'Kép') + '</div>' +
+      (meta ? '<div class="popup-meta">' + escapeHtml(meta) + '</div>' : '') +
+      '<div class="popup-meta">' + Number(record.latitude).toFixed(6) + ', ' + Number(record.longitude).toFixed(6) + '</div>' +
+      '<a href="' + escapeAttr(href) + '">Kép megnyitása</a></div></div>';
+  }).join('');
+  const more = items.length > 12 ? '<div class="popup-meta">+' + (items.length - 12) + ' további kép ezen a ponton</div>' : '';
+  return '<div class="popup">' + rows + more + '</div>';
+}
+
+function escapeHtml(value){
+  return text(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[ch]));
+}
+
+function escapeAttr(value){
+  return escapeHtml(value);
+}
+
+function initMap(){
+  if(!window.L){
+    els.wrap.classList.add('map-unavailable');
+    els.status.textContent = 'A térképkönyvtár nem töltődött be. A GPS-es képek listában láthatók.';
+    return;
+  }
+  map = L.map('map', {scrollWheelZoom: true});
+  const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  });
+  tiles.on('tileerror', () => {
+    els.status.textContent = 'A térképcsempék nem tölthetők be, de a markerek és a lista elérhetők.';
+  });
+  tiles.addTo(map);
+  markerLayer = L.markerClusterGroup ? L.markerClusterGroup({chunkedLoading: true}) : L.layerGroup();
+  markerLayer.addTo(map);
+}
+
+function renderMarkers(items){
+  activeRecords = items;
+  if(markerLayer) markerLayer.clearLayers();
+  const groups = groupByCoordinate(items);
+  if(map && markerLayer){
+    const bounds = [];
+    groups.forEach(group => {
+      const marker = L.marker([group.lat, group.lon], {title: group.items[0].fileName || ''});
+      marker.on('click', () => marker.bindPopup(popupHtml(group.items), {maxWidth: 340}).openPopup());
+      marker.on('dblclick', () => {
+        const first = group.items[0];
+        if(first && first.detailPage) window.location.href = first.detailPage;
+      });
+      markerLayer.addLayer(marker);
+      bounds.push([group.lat, group.lon]);
+    });
+    if(bounds.length) map.fitBounds(bounds, {padding: [28, 28], maxZoom: 13});
+    else map.setView([47.1625, 19.5033], 6);
+  }
+  renderLists(items);
+  els.count.textContent = items.length + ' / ' + records.length + ' GPS-es kép';
+  if(!records.length) els.status.textContent = 'Nincs GPS-koordinátával rendelkező kép az exportban.';
+  else if(!items.length) els.status.textContent = 'A szűrés nem adott találatot.';
+  else els.status.textContent = groups.length + ' térképpont, ' + items.length + ' kép.';
+}
+
+function renderLists(items){
+  els.visibleList.replaceChildren();
+  els.fallback.replaceChildren();
+  items.slice(0, 250).forEach(record => {
+    els.visibleList.appendChild(listItem(record, 'list-item'));
+    els.fallback.appendChild(listItem(record, 'fallback-card'));
+  });
+  if(items.length > 250){
+    const note = document.createElement('div');
+    note.className = 'list-meta';
+    note.textContent = 'A lista az első 250 képet mutatja. Szűkíts a szűrőkkel.';
+    els.visibleList.appendChild(note);
+  }
+}
+
+function listItem(record, className){
+  const link = document.createElement('a');
+  link.className = className;
+  link.href = record.detailPage || record.relativePath || '#';
+  const img = document.createElement('img');
+  img.src = record.thumbnailPath || record.relativePath || '';
+  img.alt = '';
+  img.onerror = () => { img.style.visibility = 'hidden'; };
+  const body = document.createElement('div');
+  const title = document.createElement('div');
+  title.className = 'list-title';
+  title.textContent = record.fileName || 'Kép';
+  const meta = document.createElement('div');
+  meta.className = 'list-meta';
+  meta.textContent = [record.dateTaken, (record.people || []).join(', '), record.placeName, record.folder]
+    .filter(Boolean).join(' · ');
+  const gps = document.createElement('div');
+  gps.className = 'list-meta';
+  gps.textContent = Number(record.latitude).toFixed(6) + ', ' + Number(record.longitude).toFixed(6);
+  body.append(title, meta, gps);
+  link.append(img, body);
+  return link;
+}
+
+function applyFilters(){
+  renderMarkers(filteredRecords());
+}
+
+fillFilters();
+initMap();
+['change', 'input'].forEach(evt => {
+  els.person.addEventListener(evt, applyFilters);
+  els.year.addEventListener(evt, applyFilters);
+  els.folder.addEventListener(evt, applyFilters);
+});
+applyFilters();
 """
 
 
