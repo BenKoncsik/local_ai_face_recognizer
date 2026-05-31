@@ -541,6 +541,92 @@ class FaceCorrection(Base):
 
 
 # ---------------------------------------------------------------------------
+# MergeSuggestion
+# ---------------------------------------------------------------------------
+
+# Lifecycle states for a merge suggestion.
+MERGE_STATUS_PENDING = "pending"      # awaiting a user decision
+MERGE_STATUS_ACCEPTED = "accepted"    # user approved → persons were merged
+MERGE_STATUS_REJECTED = "rejected"    # user rejected this particular suggestion
+MERGE_STATUS_DEFERRED = "deferred"    # "decide later" — hidden until re-surfaced
+MERGE_STATUS_DISMISSED = "dismissed"  # "never suggest this pair again"
+
+MERGE_OPEN_STATUSES = (MERGE_STATUS_PENDING, MERGE_STATUS_DEFERRED)
+MERGE_SUPPRESSED_STATUSES = (MERGE_STATUS_REJECTED, MERGE_STATUS_DISMISSED)
+
+
+class MergeSuggestion(Base):
+    """A background-computed proposal that two persons may be the same identity.
+
+    Suggestions are *never* applied automatically — they are persisted so the
+    UI can display them incrementally while the background job is still running
+    and across application restarts.  Only an explicit user "accept" performs
+    the actual :class:`Person` merge.
+
+    Pairs are stored with ``source_person_id < target_person_id`` (normalised
+    order) and a unique constraint so concurrent worker chunks cannot create
+    duplicate rows for the same pair.
+    """
+
+    __tablename__ = "merge_suggestions"
+    __table_args__ = (
+        UniqueConstraint("source_person_id", "target_person_id", name="ux_merge_pair"),
+        Index("ix_merge_status", "status"),
+        Index("ix_merge_source", "source_person_id"),
+        Index("ix_merge_target", "target_person_id"),
+        CheckConstraint(
+            "source_person_id != target_person_id", name="ck_merge_not_self"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Normalised pair (source_person_id < target_person_id).  ON DELETE CASCADE
+    # so deleting/merging a person removes its stale suggestions automatically.
+    source_person_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
+    )
+    target_person_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Combined confidence [0.0 – 1.0] used for ranking/display.
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Component scores (NULL when that signal was unavailable).
+    face_similarity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    name_similarity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=MERGE_STATUS_PENDING, index=True
+    )
+
+    # Identifier of the background job that produced/last-refreshed this row.
+    # Lets the UI tell stale (old-job) suggestions from current ones.
+    job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    # When the user last acted on the suggestion (accept/reject/defer/dismiss).
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    source_person: Mapped["Person"] = relationship(
+        "Person", foreign_keys=[source_person_id]
+    )
+    target_person: Mapped["Person"] = relationship(
+        "Person", foreign_keys=[target_person_id]
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<MergeSuggestion src={self.source_person_id} "
+            f"tgt={self.target_person_id} conf={self.confidence:.2f} "
+            f"status={self.status!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RemoteImage
 # ---------------------------------------------------------------------------
 

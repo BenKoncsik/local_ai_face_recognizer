@@ -19,10 +19,11 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QPoint, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -36,9 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config import SuggestionConfig
+from app.config import AppConfig
 from app.db.database import session_scope
-from app.services.suggestion_service import Suggestion, SuggestionService
+from app.services.merge_suggestion_service import (
+    MergeSuggestionDTO,
+    MergeSuggestionService,
+)
+from app.services.suggestion_service import Suggestion
 from app.ui.dialogs.suggestion_viewer import (
     CompareDialog,
     FaceGalleryDialog,
@@ -189,19 +194,26 @@ _ROW_STYLE_FOCUSED = (
 class _SuggestionRow(QFrame):
     """One suggestion: unknown face → suggested named face, with actions.
 
-    Signals:
-        approved:  ``(candidate_person_id, target_person_id)``
-        rejected:  ``(candidate_person_id, target_person_id)``
-        focused:   emitted when any part of this row is interacted with
+    Signals (all carry the persisted ``suggestion_id``):
+        approved / rejected / deferred / dismissed: ``(suggestion_id: int)``
+        focused: emitted when any part of this row is interacted with
     """
 
-    approved = Signal(int, int)
-    rejected = Signal(int, int)
-    focused  = Signal()
+    approved  = Signal(int)
+    rejected  = Signal(int)
+    deferred  = Signal(int)
+    dismissed = Signal(int)
+    focused   = Signal()
 
-    def __init__(self, suggestion: Suggestion, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        suggestion: Suggestion,
+        suggestion_id: int,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self._s = suggestion
+        self._sid = suggestion_id
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(_ROW_STYLE_NORMAL)
 
@@ -276,6 +288,16 @@ class _SuggestionRow(QFrame):
         reject_btn.clicked.connect(self._trigger_reject)
         main_row.addWidget(reject_btn)
 
+        defer_btn = QPushButton(t("suggestions_defer"))
+        defer_btn.setStyleSheet("QPushButton { color: #e0c080; }")
+        defer_btn.clicked.connect(self._trigger_defer)
+        main_row.addWidget(defer_btn)
+
+        dismiss_btn = QPushButton(t("suggestions_dismiss"))
+        dismiss_btn.setStyleSheet("QPushButton { color: #aa6688; }")
+        dismiss_btn.clicked.connect(self._trigger_dismiss)
+        main_row.addWidget(dismiss_btn)
+
         root.addLayout(main_row)
 
     # ------------------------------------------------------------------
@@ -332,11 +354,27 @@ class _SuggestionRow(QFrame):
 
     def _trigger_approve(self) -> None:
         self.focused.emit()
-        self.approved.emit(self._s.candidate_person_id, self._s.target_person_id)
+        self.approved.emit(self._sid)
 
     def _trigger_reject(self) -> None:
         self.focused.emit()
-        self.rejected.emit(self._s.candidate_person_id, self._s.target_person_id)
+        self.rejected.emit(self._sid)
+
+    def _trigger_defer(self) -> None:
+        self.focused.emit()
+        self.deferred.emit(self._sid)
+
+    def _trigger_dismiss(self) -> None:
+        self.focused.emit()
+        self.dismissed.emit(self._sid)
+
+    def trigger_defer(self) -> None:
+        """Programmatic defer (e.g. from keyboard shortcut)."""
+        self._trigger_defer()
+
+    def trigger_dismiss(self) -> None:
+        """Programmatic dismiss (e.g. from keyboard shortcut)."""
+        self._trigger_dismiss()
 
     def _trigger_compare(self) -> None:
         self.focused.emit()
@@ -373,16 +411,25 @@ class SuggestionDialog(QDialog):
     data_changed = Signal()
 
     def __init__(
-        self, config: SuggestionConfig, parent: Optional[QWidget] = None
+        self, config, parent: Optional[QWidget] = None
     ) -> None:
         super().__init__(parent)
-        self._config = config
+        # Accept either a full AppConfig or a bare SuggestionConfig (back-compat).
+        self._app_config = config if isinstance(config, AppConfig) else None
+        self._matching = (
+            self._app_config.matching if self._app_config is not None
+            else getattr(config, "matching", None)
+        )
+        if self._matching is None:
+            from app.config import MatchingConfig
+            self._matching = MatchingConfig()
         self._suggestions: List[Suggestion] = []
+        self._suggestion_ids: List[int] = []
         self._rows: List[_SuggestionRow] = []
         self._focus_idx: int = -1
 
         self.setWindowTitle(t("suggestions_title"))
-        self.setMinimumSize(820, 560)
+        self.setMinimumSize(900, 560)
         self._build_ui()
         self._reload()
 
@@ -405,9 +452,13 @@ class SuggestionDialog(QDialog):
         self._threshold_spin.setRange(0.0, 1.0)
         self._threshold_spin.setSingleStep(0.05)
         self._threshold_spin.setDecimals(2)
-        self._threshold_spin.setValue(float(self._config.similarity_threshold))
+        self._threshold_spin.setValue(float(self._matching.min_confidence))
         self._threshold_spin.valueChanged.connect(lambda *_: self._reload())
         controls.addWidget(self._threshold_spin)
+
+        self._show_deferred = QCheckBox(t("suggestions_show_deferred"))
+        self._show_deferred.toggled.connect(lambda *_: self._reload())
+        controls.addWidget(self._show_deferred)
 
         controls.addStretch()
 
@@ -447,18 +498,53 @@ class SuggestionDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _reload(self) -> None:
-        """Regenerate suggestions at the current threshold and rebuild rows."""
+        """Load persisted background suggestions and rebuild rows.
+
+        Reading from the persisted :class:`MergeSuggestion` store is a cheap,
+        indexed query — the heavy matching happens in the background worker, so
+        opening this dialog never blocks the UI with a full archive scan.
+        """
         threshold = self._threshold_spin.value()
+        include_deferred = self._show_deferred.isChecked()
+        self._suggestions = []
+        self._suggestion_ids = []
         try:
             with session_scope() as session:
-                self._suggestions = SuggestionService(
-                    session, self._config
-                ).generate_suggestions(threshold=threshold)
+                dtos = MergeSuggestionService(session, self._matching).list_open(
+                    include_deferred=include_deferred
+                )
         except Exception as exc:  # noqa: BLE001
-            log.exception("Failed to generate suggestions")
+            log.exception("Failed to load suggestions")
             QMessageBox.critical(self, t("error"), str(exc))
-            self._suggestions = []
+            dtos = []
+
+        for dto in dtos:
+            if dto.confidence < threshold:
+                continue
+            self._suggestions.append(self._to_display(dto))
+            self._suggestion_ids.append(dto.suggestion_id)
         self._rebuild_rows()
+
+    @staticmethod
+    def _to_display(dto: MergeSuggestionDTO) -> Suggestion:
+        """Adapt a persisted DTO to the row's display struct."""
+        return Suggestion(
+            candidate_person_id=dto.candidate_person_id,
+            candidate_name=dto.candidate_name,
+            candidate_face_id=0,
+            candidate_crop_path=dto.candidate_crop_path,
+            candidate_face_count=dto.candidate_face_count,
+            target_person_id=dto.target_person_id,
+            target_name=dto.target_name,
+            target_face_id=0,
+            target_crop_path=dto.target_crop_path,
+            target_face_count=dto.target_face_count,
+            similarity=dto.confidence,
+            candidate_image_path=dto.candidate_image_path,
+            candidate_bbox=dto.candidate_bbox,
+            target_image_path=dto.target_image_path,
+            target_bbox=dto.target_bbox,
+        )
 
     def _rebuild_rows(self) -> None:
         # Remove existing rows, keeping the trailing stretch item.
@@ -472,9 +558,11 @@ class SuggestionDialog(QDialog):
         self._focus_idx = -1
 
         for i, suggestion in enumerate(self._suggestions):
-            row = _SuggestionRow(suggestion)
+            row = _SuggestionRow(suggestion, self._suggestion_ids[i])
             row.approved.connect(self._on_approve)
             row.rejected.connect(self._on_reject)
+            row.deferred.connect(self._on_defer)
+            row.dismissed.connect(self._on_dismiss)
             row.focused.connect(lambda idx=i: self._set_focus(idx))
             self._rows.append(row)
             self._list_layout.insertWidget(self._list_layout.count() - 1, row)
@@ -519,6 +607,12 @@ class SuggestionDialog(QDialog):
         elif key in (Qt.Key_Delete, Qt.Key_Backspace):
             focused.trigger_reject()
             event.accept()
+        elif key == Qt.Key_L:
+            focused.trigger_defer()
+            event.accept()
+        elif key == Qt.Key_X:
+            focused.trigger_dismiss()
+            event.accept()
         elif key == Qt.Key_Space:
             focused.trigger_compare()
             event.accept()
@@ -541,9 +635,17 @@ class SuggestionDialog(QDialog):
     # Actions
     # ------------------------------------------------------------------
 
-    @Slot(int, int)
-    def _on_approve(self, candidate_id: int, target_id: int) -> None:
-        cand_name, target_name = self._pair_names(candidate_id, target_id)
+    def _display_for(self, suggestion_id: int) -> Optional[Suggestion]:
+        for sid, s in zip(self._suggestion_ids, self._suggestions):
+            if sid == suggestion_id:
+                return s
+        return None
+
+    @Slot(int)
+    def _on_approve(self, suggestion_id: int) -> None:
+        s = self._display_for(suggestion_id)
+        cand_name = s.candidate_name if s else str(suggestion_id)
+        target_name = s.target_name if s else ""
         reply = QMessageBox.question(
             self,
             t("suggestions_approve"),
@@ -552,45 +654,47 @@ class SuggestionDialog(QDialog):
         )
         if reply != QMessageBox.Yes:
             return
+        if self._run_decision(lambda svc: svc.accept(suggestion_id), "approval"):
+            log.info("Merge suggestion %d approved", suggestion_id)
+            self.data_changed.emit()
+            self._reload()
 
+    @Slot(int)
+    def _on_reject(self, suggestion_id: int) -> None:
+        if self._run_decision(lambda svc: svc.reject(suggestion_id), "rejection"):
+            log.info("Merge suggestion %d rejected", suggestion_id)
+            self._reload()
+
+    @Slot(int)
+    def _on_defer(self, suggestion_id: int) -> None:
+        if self._run_decision(lambda svc: svc.defer(suggestion_id), "defer"):
+            log.info("Merge suggestion %d deferred", suggestion_id)
+            self._reload()
+
+    @Slot(int)
+    def _on_dismiss(self, suggestion_id: int) -> None:
+        s = self._display_for(suggestion_id)
+        if s is not None:
+            reply = QMessageBox.question(
+                self,
+                t("suggestions_dismiss"),
+                t("suggestions_dismiss_confirm",
+                  cand=s.candidate_name, target=s.target_name),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        if self._run_decision(lambda svc: svc.dismiss(suggestion_id), "dismiss"):
+            log.info("Merge suggestion %d dismissed", suggestion_id)
+            self._reload()
+
+    def _run_decision(self, action, label: str) -> bool:
+        """Execute *action(service)* inside a session; report failures."""
         try:
             with session_scope() as session:
-                SuggestionService(session, self._config).approve(
-                    candidate_id, target_id
-                )
+                action(MergeSuggestionService(session, self._matching))
+            return True
         except Exception as exc:  # noqa: BLE001
-            log.exception("Suggestion approval failed")
+            log.exception("Suggestion %s failed", label)
             QMessageBox.warning(self, t("error"), str(exc))
-            return
-
-        log.info("Suggestion approved: person %d → %d", candidate_id, target_id)
-        self.data_changed.emit()
-        self._reload()
-
-    @Slot(int, int)
-    def _on_reject(self, candidate_id: int, target_id: int) -> None:
-        try:
-            with session_scope() as session:
-                SuggestionService(session, self._config).reject(
-                    candidate_id, target_id
-                )
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Recording suggestion rejection failed")
-            QMessageBox.warning(self, t("error"), str(exc))
-            return
-
-        log.info("Suggestion rejected: person %d ✗ %d", candidate_id, target_id)
-        self._reload()
-
-    def _pair_names(self, candidate_id: int, target_id: int) -> tuple[str, str]:
-        cand = next(
-            (s.candidate_name for s in self._suggestions
-             if s.candidate_person_id == candidate_id),
-            str(candidate_id),
-        )
-        target = next(
-            (s.target_name for s in self._suggestions
-             if s.target_person_id == target_id),
-            str(target_id),
-        )
-        return cand, target
+            return False

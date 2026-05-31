@@ -1066,8 +1066,28 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "suggestions_no_faces":         {"en": "No faces found.", "hu": "Nincs arc."},
     "suggestions_click_full_image": {"en": "Click to open full image",
                                      "hu": "Kattints a teljes kép megnyitásához"},
-    "suggestions_keyboard_hint":    {"en": "↑↓ navigate · Enter approve · Del reject · Space compare",
-                                     "hu": "↑↓ navigálás · Enter jóváhagyás · Del elutasítás · Szóköz összehasonlítás"},
+    "suggestions_keyboard_hint":    {"en": "↑↓ navigate · Enter approve · Del reject · L later · X never · Space compare",
+                                     "hu": "↑↓ navigálás · Enter jóváhagyás · Del elutasítás · L később · X soha · Szóköz összehasonlítás"},
+
+    # ── Background merge-matching ──────────────────────────────────────────
+    "suggestions_defer":   {"en": "Later", "hu": "Később"},
+    "suggestions_dismiss": {"en": "Never", "hu": "Soha"},
+    "suggestions_confidence": {"en": "{pct}% confidence", "hu": "{pct}% bizonyosság"},
+    "suggestions_show_deferred": {"en": "Show postponed",
+                                  "hu": "Halasztottak mutatása"},
+    "suggestions_dismiss_confirm": {
+        "en": "Never suggest merging '{cand}' with '{target}' again?",
+        "hu": "Soha többé ne ajánlja '{cand}' és '{target}' összevonását?"},
+    "match_chip_idle":    {"en": "Matching: idle", "hu": "Egyeztetés: tétlen"},
+    "match_chip_running": {"en": "Matching {label}: {pct}% ({found} found)",
+                          "hu": "Egyeztetés {label}: {pct}% ({found} találat)"},
+    "match_chip_paused":  {"en": "Matching paused", "hu": "Egyeztetés szüneteltetve"},
+    "match_chip_done":    {"en": "Matching: {n} suggestion(s)",
+                          "hu": "Egyeztetés: {n} ajánlat"},
+    "match_chip_failed":  {"en": "Matching failed", "hu": "Egyeztetés hibás"},
+    "match_chip_cancelled": {"en": "Matching cancelled", "hu": "Egyeztetés megszakítva"},
+    "match_chip_tip":     {"en": "Background name-matching status — click to review suggestions",
+                          "hu": "Háttér névegyeztetés állapota — kattints az ajánlatokhoz"},
 
     # ── Google Drive cache (settings read-only display) ────────────────────
     "gdrive_cache_group":      {"en": "Google Drive Cache",

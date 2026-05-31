@@ -57,6 +57,10 @@ def init_db(db_path: Path | str) -> Engine:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        # Wait up to 5s for a competing writer instead of failing immediately
+        # with "database is locked" — background match jobs write concurrently
+        # with foreground manual edits under WAL (single-writer).
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
     # Create all tables that don't exist yet (idempotent)

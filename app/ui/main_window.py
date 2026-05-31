@@ -57,6 +57,8 @@ from app.ui.panels.log_panel import LogPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
 from app.workers.pipeline_worker import PipelineWorker
+from app.workers.match_job_worker import MatchJobWorker
+from app.jobs.job_types import JobState
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +87,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._config = config
         self._worker: Optional[PipelineWorker] = None
+        self._match_worker: Optional[MatchJobWorker] = None
         self._current_person_id: Optional[int] = None
         self._current_face_id: Optional[int] = None
         self._pending_suggestion_count: int = 0
+        self._open_suggestion_count: int = 0
         self._db_path: str = str(config.db_path_resolved)
         self._pending_release = None
 
@@ -117,6 +121,7 @@ class MainWindow(QMainWindow):
         self._update_ready.connect(self._on_update_found)
         self._start_update_check()
         self._setup_shortcuts()
+        self._start_match_worker()
 
     # ------------------------------------------------------------------
     # Keyboard shortcuts
@@ -378,8 +383,102 @@ class MainWindow(QMainWindow):
         self._gdrive_chip_btn.clicked.connect(self._on_gdrive_chip_clicked)
         status.addPermanentWidget(self._gdrive_chip_btn)
 
+        # Background name-matching status chip (left of the message label).
+        self._match_chip_btn = QPushButton()
+        self._match_chip_btn.setFlat(True)
+        self._match_chip_btn.setVisible(False)
+        self._match_chip_btn.setStyleSheet(
+            "QPushButton { color: #A6E3A1; font-size: 11px; padding: 1px 6px; "
+            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
+            "QPushButton:hover { background: #313244; }"
+        )
+        self._match_chip_btn.setToolTip(t("match_chip_tip"))
+        self._match_chip_btn.clicked.connect(self._on_show_suggestions)
+        status.addPermanentWidget(self._match_chip_btn)
+
         self._status_label = QLabel()
         status.addWidget(self._status_label)
+
+    # ------------------------------------------------------------------
+    # Background name-matching worker
+    # ------------------------------------------------------------------
+
+    def _start_match_worker(self) -> None:
+        """Create and start the background merge-suggestion worker."""
+        self._match_worker = MatchJobWorker(self._config, parent=self)
+        self._match_worker.status_changed.connect(self._on_match_status)
+        self._match_worker.suggestions_found.connect(self._on_match_suggestions_found)
+        self._match_worker.idle.connect(self._on_match_idle)
+        self._match_worker.start()
+        # Prime the badge with whatever is already persisted from a prior run.
+        try:
+            with session_scope() as session:
+                from app.services.merge_suggestion_service import MergeSuggestionService
+                self._open_suggestion_count = MergeSuggestionService(
+                    session, self._config.matching
+                ).count_open()
+        except Exception:  # noqa: BLE001
+            self._open_suggestion_count = 0
+        self._refresh_match_chip()
+
+    def _enqueue_full_match(self) -> None:
+        if self._match_worker is not None:
+            self._match_worker.enqueue_full_scan()
+
+    def _enqueue_scoped_match(self, person_ids) -> None:
+        """High-priority match for the persons in the current view."""
+        if self._match_worker is None:
+            return
+        auto_ids = []
+        try:
+            with session_scope() as session:
+                for pid in person_ids:
+                    p = session.get(Person, pid)
+                    if p is not None and p.is_auto_named:
+                        auto_ids.append(pid)
+        except Exception:  # noqa: BLE001
+            return
+        if auto_ids:
+            self._match_worker.enqueue_scoped(auto_ids, label=t("suggestions_candidate"))
+
+    @Slot(object)
+    def _on_match_status(self, status) -> None:
+        self._match_chip_btn.setVisible(True)
+        if status.state == JobState.RUNNING:
+            self._match_chip_btn.setText(
+                t("match_chip_running", label=status.label,
+                  pct=status.percent(), found=status.found)
+            )
+        elif status.state == JobState.PAUSED:
+            self._match_chip_btn.setText(t("match_chip_paused"))
+        elif status.state == JobState.FAILED:
+            self._match_chip_btn.setText(t("match_chip_failed"))
+        elif status.state == JobState.CANCELLED:
+            self._match_chip_btn.setText(t("match_chip_cancelled"))
+        elif status.state == JobState.DONE:
+            self._refresh_match_chip()
+
+    @Slot(int)
+    def _on_match_suggestions_found(self, open_count: int) -> None:
+        self._open_suggestion_count = open_count
+        self._refresh_match_chip()
+
+    @Slot()
+    def _on_match_idle(self) -> None:
+        self._refresh_match_chip()
+
+    def _refresh_match_chip(self) -> None:
+        self._match_chip_btn.setVisible(self._open_suggestion_count > 0)
+        self._match_chip_btn.setText(
+            t("match_chip_done", n=self._open_suggestion_count)
+        )
+
+    def _shutdown_match_worker(self) -> None:
+        """Graceful stop of the background worker (no half-written state)."""
+        if self._match_worker is not None:
+            self._match_worker.shutdown()
+            self._match_worker.wait(3000)
+            self._match_worker = None
 
     # ------------------------------------------------------------------
     # Retranslate — call after language change
@@ -683,12 +782,22 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_show_suggestions(self) -> None:
-        dlg = SuggestionDialog(self._config.suggestions, parent=self)
+        dlg = SuggestionDialog(self._config, parent=self)
         dlg.data_changed.connect(self._refresh_persons)
         dlg.data_changed.connect(self._image_browser._reload_current_face_data)
         dlg.exec()
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
+        # The user may have resolved suggestions — refresh the status badge.
+        try:
+            with session_scope() as session:
+                from app.services.merge_suggestion_service import MergeSuggestionService
+                self._open_suggestion_count = MergeSuggestionService(
+                    session, self._config.matching
+                ).count_open()
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_match_chip()
 
     @Slot()
     def _on_find_overlapping_unknown_faces(self) -> None:
@@ -1173,6 +1282,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("warning"), summary)
             return
 
+        # Kick off a background full archive match so suggestions appear
+        # incrementally without blocking the UI.
+        self._enqueue_full_match()
+
         if self._pending_suggestion_count > 0:
             reply = QMessageBox.question(
                 self,
@@ -1224,6 +1337,9 @@ class MainWindow(QMainWindow):
         self._remove_face_btn.setEnabled(False)
         self._reassign_btn.setEnabled(False)
         self._person_info_btn.setEnabled(not is_protected)
+
+        # Prioritise matching the currently viewed (unknown) person.
+        self._enqueue_scoped_match([person_id])
 
     @Slot(int)
     def _on_face_selected(self, face_id: int) -> None:
@@ -1965,4 +2081,5 @@ class MainWindow(QMainWindow):
             self._status_label.setText(t("gdrive_closing_wait"))
             self._start_drive_close(after_quit=True)
             return
+        self._shutdown_match_worker()
         event.accept()
