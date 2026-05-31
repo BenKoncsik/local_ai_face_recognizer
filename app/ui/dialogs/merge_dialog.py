@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -60,6 +61,10 @@ class MergeDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._selector.focus_search)
 
     def target_person_id(self) -> Optional[int]:
         """Return the selected target person ID, or ``None`` if empty."""

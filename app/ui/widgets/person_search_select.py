@@ -148,6 +148,9 @@ class PersonSearchSelect(QWidget):
         """Clear the search text and show the full (unfiltered) person list."""
         self._search.clear()  # triggers textChanged → _on_text_changed → _refresh_list
 
+    def focus_search(self) -> None:
+        """Set keyboard focus to the search input."""
+        self._search.setFocus()
 
     def retranslate(self) -> None:
         self._search.setPlaceholderText(t("pss_search_placeholder"))
@@ -212,17 +215,22 @@ class PersonSearchSelect(QWidget):
                     self._commit_current()
                     return True
                 if key == Qt.Key_Escape:
-                    self._search.clear()
-                    return True
+                    if self._search.text():
+                        self._search.clear()
+                        return True
+                    return False  # propagate so parent dialog/popup can close
 
             if watched is self._list:
                 if key == Qt.Key_Return or key == Qt.Key_Enter:
                     self._commit_current()
                     return True
                 if key == Qt.Key_Escape:
-                    self._search.clear()
+                    if self._search.text():
+                        self._search.clear()
+                        self._search.setFocus()
+                        return True
                     self._search.setFocus()
-                    return True
+                    return False  # propagate so parent dialog/popup can close
                 # Let Up/Down pass through to QListWidget's own handler
                 if key in (Qt.Key_Up, Qt.Key_Down):
                     return False

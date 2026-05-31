@@ -4,7 +4,10 @@ import pytest
 
 from app.db.database import init_db, session_scope
 from app.db.models import Face, Image, Person
-from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
+from app.services.duplicate_unknown_face_finder import (
+    DuplicateUnknownFaceFinder,
+    is_placeholder_name,
+)
 
 
 @pytest.fixture()
@@ -145,3 +148,92 @@ def test_delete_unknown_faces_deletes_only_still_unknown_records(tmp_db):
     with session_scope() as session:
         assert session.get(Face, unknown.id) is None
         assert session.get(Face, known.id) is not None
+
+
+# ── is_placeholder_name ───────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name", [
+    None, "", "  ", "?", "??", "???",
+    "Unknown", "unknown", "UNKNOWN",
+    "Unknown 96", "Unknown_96", "unknown 1", "Unknown_003",
+    "Ismeretlen", "ismeretlen", "Ismeretlen 5", "ismeretlen_2",
+])
+def test_is_placeholder_name_true(name):
+    assert is_placeholder_name(name) is True
+
+
+@pytest.mark.parametrize("name", [
+    "Alice", "Bob Smith", "Kovács Béla", "John", "Anna-Mária",
+])
+def test_is_placeholder_name_false(name):
+    assert is_placeholder_name(name) is False
+
+
+# ── Auto-named person treated as unknown ─────────────────────────────────────
+
+def test_auto_named_person_overlapping_known_is_listed(tmp_db):
+    """Faces assigned to auto-named persons (e.g. 'Unknown 96') must be found."""
+    with session_scope() as session:
+        image = _add_image(session)
+        alice = _add_person(session, "Alice")
+        auto = _add_person(session, "Unknown 96", auto=True)
+        known = _add_face(session, image, (10, 10, 100, 100), alice)
+        auto_face = _add_face(session, image, (20, 20, 90, 90), auto)
+
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session, iou_threshold=0.30)
+        matches = finder.find()
+
+    assert len(matches) == 1
+    assert matches[0].unknown_face_id == auto_face.id
+    assert matches[0].known_face_id == known.id
+    assert matches[0].known_person_name == "Alice"
+
+
+def test_auto_named_person_can_be_deleted(tmp_db):
+    """delete_unknown_faces must accept auto-named placeholder faces."""
+    with session_scope() as session:
+        image = _add_image(session)
+        auto = _add_person(session, "Unknown 96", auto=True)
+        auto_face = _add_face(session, image, (20, 20, 90, 90), auto)
+
+    with session_scope() as session:
+        result = DuplicateUnknownFaceFinder(session).delete_unknown_faces([auto_face.id])
+
+    assert result.deleted == 1
+    assert result.missing_or_changed == ()
+
+    with session_scope() as session:
+        assert session.get(Face, auto_face.id) is None
+
+
+# ── Same-person duplicate detection ──────────────────────────────────────────
+
+def test_same_person_overlapping_duplicates_are_listed(tmp_db):
+    """Two overlapping faces assigned to the same person should be flagged."""
+    with session_scope() as session:
+        image = _add_image(session)
+        alice = _add_person(session, "Alice")
+        face_a = _add_face(session, image, (10, 10, 100, 100), alice)
+        face_b = _add_face(session, image, (20, 20, 90, 90), alice)
+
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session, iou_threshold=0.30)
+        matches = finder.find()
+
+    assert len(matches) == 1
+    ids = {matches[0].unknown_face_id, matches[0].known_face_id}
+    assert ids == {face_a.id, face_b.id}
+
+
+def test_same_person_non_overlapping_not_listed(tmp_db):
+    with session_scope() as session:
+        image = _add_image(session)
+        alice = _add_person(session, "Alice")
+        _add_face(session, image, (10, 10, 100, 100), alice)
+        _add_face(session, image, (300, 300, 100, 100), alice)
+
+    with session_scope() as session:
+        matches = DuplicateUnknownFaceFinder(session, iou_threshold=0.30).find()
+
+    assert matches == []

@@ -450,6 +450,10 @@ class _InlineFaceEditor(QFrame):
         """Clear the person search filter after a successful assignment."""
         self._person_search.reset_filter()
 
+    def focus_search(self) -> None:
+        """Set keyboard focus to the person search input."""
+        self._person_search.focus_search()
+
     def _on_assign(self, _person_id: int = 0) -> None:
         pid = self._person_search.current_person_id()
         if pid is not None:
@@ -3223,6 +3227,8 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.show()
         self._inline_editor.raise_()
         self._inline_editor_face_id = face_id
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._inline_editor.focus_search)
 
     def _hide_inline_editor(self) -> None:
         self._inline_editor.hide()

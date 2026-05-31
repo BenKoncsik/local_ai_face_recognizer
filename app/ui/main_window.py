@@ -817,7 +817,7 @@ class MainWindow(QMainWindow):
             return
 
         log.info(
-            "Átfedő kérdőjeles keretek keresése: %d kép vizsgálva, %d találat.",
+            "Átfedő arckeretek keresése: %d kép vizsgálva, %d találat.",
             images_examined,
             len(matches),
         )
@@ -872,7 +872,7 @@ class MainWindow(QMainWindow):
             return
 
         log.info(
-            "Átfedő kérdőjeles keretek törlése: kijelölt=%d, törölt=%d, kihagyott=%d.",
+            "Átfedő arckeretek törlése: kijelölt=%d, törölt=%d, kihagyott=%d.",
             result.requested,
             result.deleted,
             len(result.missing_or_changed),

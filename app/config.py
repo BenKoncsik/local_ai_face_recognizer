@@ -100,6 +100,53 @@ class ClusteringConfig:
 
 
 @dataclass
+class IntraImageConsistencyConfig:
+    """Parameters for the same-image identity consistency pass.
+
+    After clustering, two faces of the *same* person on the *same* photo can
+    end up under different identities (e.g. one matched ``Unknown 98`` at
+    cosine distance 0.44 while a sibling face fell just past the threshold and
+    spawned ``Unknown 155``).  This pass re-unifies faces on one image when
+    their embeddings are mutually near-identical, healing that fragmentation
+    without re-embedding.
+    """
+
+    # When False the pipeline skips the pass entirely.
+    enabled: bool = True
+
+    # Minimum cosine similarity between two faces *on the same image* for them
+    # to be treated as the same identity.  Deliberately stricter than the
+    # clustering boundary (epsilon=0.4 → 0.60 similarity) so that two genuinely
+    # different people who merely co-occur are never merged.
+    merge_similarity: float = 0.62
+
+    # Do not act on images with more faces than this (group photos blow up the
+    # O(n²) pairwise comparison and rarely suffer the boundary-split bug).
+    max_faces_per_image: int = 40
+
+
+@dataclass
+class IdentityRepairConfig:
+    """Parameters for the global Identity Repair Scan.
+
+    Walks every auto-named ("Unknown N") person and proposes merges between
+    those whose embedding centroids are highly similar, consolidating identity
+    fragments that accumulated across many incremental pipeline runs.
+    """
+
+    # Minimum centroid cosine similarity for two Unknown persons to be proposed
+    # as the same identity.  Stricter than clustering to keep suggestions safe.
+    merge_similarity: float = 0.66
+
+    # Also require the closest *individual* face pair between the two persons to
+    # reach this similarity (guards against centroid blur on mixed clusters).
+    min_pair_similarity: float = 0.60
+
+    # Maximum merge candidates returned per person.
+    max_candidates_per_person: int = 5
+
+
+@dataclass
 class RecognitionConfig:
     """Parameters for learned person recognition.
 
@@ -233,6 +280,10 @@ class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    intra_image: IntraImageConsistencyConfig = field(
+        default_factory=IntraImageConsistencyConfig
+    )
+    identity_repair: IdentityRepairConfig = field(default_factory=IdentityRepairConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
@@ -355,6 +406,31 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             create_unknown_min_cluster_size=clu.get(
                 "create_unknown_min_cluster_size",
                 cfg.clustering.create_unknown_min_cluster_size,
+            ),
+        )
+
+        iic = raw.get("intra_image", {})
+        cfg.intra_image = IntraImageConsistencyConfig(
+            enabled=iic.get("enabled", cfg.intra_image.enabled),
+            merge_similarity=iic.get(
+                "merge_similarity", cfg.intra_image.merge_similarity
+            ),
+            max_faces_per_image=iic.get(
+                "max_faces_per_image", cfg.intra_image.max_faces_per_image
+            ),
+        )
+
+        rep = raw.get("identity_repair", {})
+        cfg.identity_repair = IdentityRepairConfig(
+            merge_similarity=rep.get(
+                "merge_similarity", cfg.identity_repair.merge_similarity
+            ),
+            min_pair_similarity=rep.get(
+                "min_pair_similarity", cfg.identity_repair.min_pair_similarity
+            ),
+            max_candidates_per_person=rep.get(
+                "max_candidates_per_person",
+                cfg.identity_repair.max_candidates_per_person,
             ),
         )
 
