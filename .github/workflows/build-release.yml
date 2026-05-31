@@ -1477,7 +1477,20 @@ jobs:
           fi
 
           git commit -m "chore: update appcast.xml for ${{ needs.prepare.outputs.tag }} [skip ci]"
-          git push origin HEAD:main
+
+          # Retry push with rebase in case another commit landed on main while this job ran.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Push failed after 3 attempts" >&2
+              exit 1
+            fi
+            echo "Push rejected (attempt $attempt) — rebasing onto origin/main and retrying..."
+            git fetch origin main
+            git rebase origin/main
+          done
 
       - name: Upload assets to GitHub release
         env:
