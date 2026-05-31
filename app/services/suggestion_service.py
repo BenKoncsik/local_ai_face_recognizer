@@ -20,8 +20,8 @@ Design
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -43,6 +43,8 @@ class PersonProfile:
     face_count: int
     rep_face_id: int
     rep_crop_path: Optional[str]
+    rep_image_path: Optional[str] = None
+    rep_bbox: Optional[Tuple[int, int, int, int]] = None
 
 
 @dataclass
@@ -64,6 +66,11 @@ class Suggestion:
     target_crop_path: Optional[str]
     target_face_count: int
     similarity: float
+    # Source image and bbox for the representative face (used by the full-image viewer)
+    candidate_image_path: Optional[str] = None
+    candidate_bbox: Optional[Tuple[int, int, int, int]] = None
+    target_image_path: Optional[str] = None
+    target_bbox: Optional[Tuple[int, int, int, int]] = None
 
 
 class SuggestionService:
@@ -175,6 +182,10 @@ class SuggestionService:
                         target_crop_path=prof.rep_crop_path,
                         target_face_count=prof.face_count,
                         similarity=similarity,
+                        candidate_image_path=cand.rep_image_path,
+                        candidate_bbox=cand.rep_bbox,
+                        target_image_path=prof.rep_image_path,
+                        target_bbox=prof.rep_bbox,
                     )
                 )
 
@@ -259,6 +270,11 @@ class SuggestionService:
 
             embeddings = [f.get_embedding() for f in usable]
             representative = self._pick_representative(person, usable)
+            rep_image_path = representative.image.file_path if representative.image else None
+            rep_bbox = (
+                representative.bbox_x, representative.bbox_y,
+                representative.bbox_w, representative.bbox_h,
+            )
             profiles[person.id] = PersonProfile(
                 person_id=person.id,
                 name=person.name,
@@ -266,6 +282,8 @@ class SuggestionService:
                 face_count=len(usable),
                 rep_face_id=representative.id,
                 rep_crop_path=representative.crop_path,
+                rep_image_path=rep_image_path,
+                rep_bbox=rep_bbox,
             )
 
         return profiles

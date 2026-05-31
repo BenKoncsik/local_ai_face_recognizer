@@ -45,6 +45,9 @@ google-auth-oauthlib>=1.0
 google-api-python-client>=2.0
 keyring>=24.0      # OS keychain (macOS Keychain / Windows Credential Manager / Secret Service)
 
+# ── Spreadsheet export ────────────────────────────────────────────────────────
+openpyxl>=3.1
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=7.4
 pytest-qt>=4.2

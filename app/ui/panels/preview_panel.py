@@ -30,6 +30,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -670,11 +672,13 @@ class PreviewPanel(QWidget):
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None
 
-        # Overlay state (fixed defaults — no UI controls in this panel)
+        # Overlay state
         self._show_bboxes: bool = True
         self._bbox_opacity: float = 0.7
+        self._prev_bbox_opacity: float = 0.7
         self._show_labels: bool = True
         self._label_opacity: float = 0.4
+        self._prev_label_opacity: float = 0.4
 
         self._build_ui()
 
@@ -716,9 +720,70 @@ class PreviewPanel(QWidget):
         self._path_label.setStyleSheet("QLabel { color: #aaa; font-size: 10px; }")
         layout.addWidget(self._path_label)
 
-        # ── Nav buttons ───────────────────────────────────────────────────
+        # ── Nav buttons + overlay controls ────────────────────────────────
         nav_row = QHBoxLayout()
         nav_row.setSpacing(4)
+
+        _ov_chk_style = (
+            "QCheckBox { color: #cdd6f4; font-size: 11px; spacing: 3px; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; }"
+        )
+        _ov_sld_style = (
+            "QSlider::groove:horizontal { height: 4px; background: #45475a; border-radius: 2px; }"
+            "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
+            " background: #89b4fa; border-radius: 5px; }"
+            "QSlider::sub-page:horizontal { background: #89b4fa; border-radius: 2px; }"
+            "QSlider:disabled { opacity: 0.4; }"
+        )
+        _ov_pct_style = "QLabel { color: #888; font-size: 11px; min-width: 30px; }"
+
+        self._bbox_check = QCheckBox(t("overlay_bboxes"))
+        self._bbox_check.setChecked(True)
+        self._bbox_check.setToolTip(t("overlay_bbox_tip"))
+        self._bbox_check.setStyleSheet(_ov_chk_style)
+        nav_row.addWidget(self._bbox_check)
+
+        self._bbox_slider = QSlider(Qt.Horizontal)
+        self._bbox_slider.setRange(0, 100)
+        self._bbox_slider.setValue(70)
+        self._bbox_slider.setToolTip(t("overlay_bbox_tip"))
+        self._bbox_slider.setMinimumWidth(50)
+        self._bbox_slider.setMaximumWidth(90)
+        self._bbox_slider.setStyleSheet(_ov_sld_style)
+        nav_row.addWidget(self._bbox_slider)
+
+        self._bbox_pct_label = QLabel("70%")
+        self._bbox_pct_label.setStyleSheet(_ov_pct_style)
+        self._bbox_pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        nav_row.addWidget(self._bbox_pct_label)
+
+        nav_row.addSpacing(8)
+
+        self._label_check = QCheckBox(t("overlay_labels"))
+        self._label_check.setChecked(True)
+        self._label_check.setToolTip(t("overlay_label_tip"))
+        self._label_check.setStyleSheet(_ov_chk_style)
+        nav_row.addWidget(self._label_check)
+
+        self._label_slider = QSlider(Qt.Horizontal)
+        self._label_slider.setRange(0, 100)
+        self._label_slider.setValue(40)
+        self._label_slider.setToolTip(t("overlay_label_tip"))
+        self._label_slider.setMinimumWidth(50)
+        self._label_slider.setMaximumWidth(90)
+        self._label_slider.setStyleSheet(_ov_sld_style)
+        nav_row.addWidget(self._label_slider)
+
+        self._label_pct_label = QLabel("40%")
+        self._label_pct_label.setStyleSheet(_ov_pct_style)
+        self._label_pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        nav_row.addWidget(self._label_pct_label)
+
+        self._bbox_check.toggled.connect(self._on_ov_bbox_check)
+        self._bbox_slider.valueChanged.connect(self._on_ov_bbox_slider)
+        self._label_check.toggled.connect(self._on_ov_label_check)
+        self._label_slider.valueChanged.connect(self._on_ov_label_slider)
+
         nav_row.addStretch()
 
         self._prev_btn = QPushButton(t("prev_image"))
@@ -787,6 +852,38 @@ class PreviewPanel(QWidget):
         _add(self._delete_btn)
 
         layout.addLayout(btn_row)
+
+    # ── Overlay control handlers ──────────────────────────────────────────
+
+    def _on_ov_bbox_check(self, checked: bool) -> None:
+        self._show_bboxes = checked
+        self._bbox_slider.setEnabled(checked)
+        if checked:
+            self._bbox_opacity = self._prev_bbox_opacity
+        self._push_overlay_settings()
+
+    def _on_ov_bbox_slider(self, value: int) -> None:
+        pct = value / 100.0
+        self._bbox_opacity = pct
+        if self._show_bboxes:
+            self._prev_bbox_opacity = pct
+        self._bbox_pct_label.setText(f"{value}%")
+        self._push_overlay_settings()
+
+    def _on_ov_label_check(self, checked: bool) -> None:
+        self._show_labels = checked
+        self._label_slider.setEnabled(checked)
+        if checked:
+            self._label_opacity = self._prev_label_opacity
+        self._push_overlay_settings()
+
+    def _on_ov_label_slider(self, value: int) -> None:
+        pct = value / 100.0
+        self._label_opacity = pct
+        if self._show_labels:
+            self._prev_label_opacity = pct
+        self._label_pct_label.setText(f"{value}%")
+        self._push_overlay_settings()
 
     def _push_overlay_settings(self) -> None:
         """Forward current overlay state to the image label (overlay repaint only)."""

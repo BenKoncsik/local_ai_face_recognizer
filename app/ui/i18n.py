@@ -581,6 +581,36 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "export_collage_html_btn":     {"en": "Export HTML Gallery …",
                                     "hu": "HTML galéria exportálása …"},
 
+    # ── Image metadata export ─────────────────────────────────────────────
+    "export_metadata_group":       {"en": "Image Metadata Export",
+                                    "hu": "Kép metaadat export"},
+    "export_metadata_desc":        {"en": "Export per-image metadata (persons, date, location, GPS) "
+                                          "to CSV or XLSX for archiving, research, or external processing.",
+                                    "hu": "Képenkénti metaadatok (személyek, dátum, helyszín, GPS) "
+                                          "exportálása CSV vagy XLSX formátumba archiválási, kutatási "
+                                          "vagy külső feldolgozási célokra."},
+    "export_metadata_format":      {"en": "Format:", "hu": "Formátum:"},
+    "export_metadata_csv":         {"en": "CSV", "hu": "CSV"},
+    "export_metadata_xlsx":        {"en": "XLSX (Excel)", "hu": "XLSX (Excel)"},
+    "export_metadata_person_mode": {"en": "Persons column:", "hu": "Személyek oszlop:"},
+    "export_metadata_persons_list": {"en": "One field, comma-separated",
+                                     "hu": "Egy mező, vesszővel elválasztva"},
+    "export_metadata_persons_cols": {"en": "Separate columns (Person1, Person2 …)",
+                                     "hu": "Külön oszlopok (Person1, Person2 …)"},
+    "export_metadata_fields":      {"en": "Fields to include:", "hu": "Exportálandó mezők:"},
+    "export_metadata_filename":    {"en": "Filename", "hu": "Fájlnév"},
+    "export_metadata_relpath":     {"en": "Relative path", "hu": "Relatív útvonal"},
+    "export_metadata_persons":     {"en": "Persons", "hu": "Személyek"},
+    "export_metadata_date":        {"en": "Date", "hu": "Dátum"},
+    "export_metadata_location":    {"en": "Location", "hu": "Helyszín"},
+    "export_metadata_gps":         {"en": "GPS coordinates", "hu": "GPS koordináták"},
+    "export_metadata_btn":         {"en": "Export …", "hu": "Exportálás …"},
+    "export_metadata_done":        {"en": "Export Complete", "hu": "Export kész"},
+    "export_metadata_saved":       {"en": "Saved to:\n{path}", "hu": "Mentve:\n{path}"},
+    "export_metadata_no_fields":   {"en": "Please select at least one field to export.",
+                                    "hu": "Válasszon legalább egy exportálandó mezőt."},
+    "export_metadata_no_fields_title": {"en": "No Fields Selected", "hu": "Nincs mező kiválasztva"},
+
     # ── Status bar update notification ────────────────────────────────────
     "status_update_available":     {"en": "New version available: v{version}  ↑",
                                     "hu": "Új verzió elérhető: v{version}  ↑"},
@@ -1024,6 +1054,20 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                       "people.\nReview them now?",
                                 "hu": "{n} lehetséges névegyezés található ismeretlen "
                                       "személyekhez.\nÁtnézed őket most?"},
+    "suggestions_full_image":       {"en": "Full Image", "hu": "Teljes kép"},
+    "suggestions_all_images":       {"en": "All Images", "hu": "Összes kép"},
+    "suggestions_compare":          {"en": "Compare", "hu": "Összehasonlítás"},
+    "suggestions_gallery_title":    {"en": "{name} — All Faces", "hu": "{name} — Összes arc"},
+    "suggestions_compare_title":    {"en": "Compare: {cand} vs {target}",
+                                     "hu": "Összehasonlítás: {cand} vs {target}"},
+    "suggestions_full_img_title":   {"en": "Full Image", "hu": "Teljes kép"},
+    "suggestions_candidate":        {"en": "Unknown", "hu": "Ismeretlen"},
+    "suggestions_target":           {"en": "Named person", "hu": "Ismert személy"},
+    "suggestions_no_faces":         {"en": "No faces found.", "hu": "Nincs arc."},
+    "suggestions_click_full_image": {"en": "Click to open full image",
+                                     "hu": "Kattints a teljes kép megnyitásához"},
+    "suggestions_keyboard_hint":    {"en": "↑↓ navigate · Enter approve · Del reject · Space compare",
+                                     "hu": "↑↓ navigálás · Enter jóváhagyás · Del elutasítás · Szóköz összehasonlítás"},
 
     # ── Google Drive cache (settings read-only display) ────────────────────
     "gdrive_cache_group":      {"en": "Google Drive Cache",

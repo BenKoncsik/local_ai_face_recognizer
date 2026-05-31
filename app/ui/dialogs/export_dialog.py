@@ -1,12 +1,13 @@
-"""Export dialog — CSV, JSON, image and collage export in one place."""
+"""Export dialog — CSV, JSON, image, collage, and image metadata export."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Set
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QFileDialog,
@@ -26,6 +27,18 @@ from PySide6.QtWidgets import (
 
 from app.db.database import session_scope
 from app.services.export_service import ExportService
+from app.services.image_metadata_export_service import (
+    ALL_FIELDS,
+    FIELD_DATE,
+    FIELD_FILENAME,
+    FIELD_GPS,
+    FIELD_LOCATION,
+    FIELD_PERSONS,
+    FIELD_RELPATH,
+    PERSON_MODE_COLS,
+    PERSON_MODE_LIST,
+    ImageMetadataExportService,
+)
 from app.ui.i18n import t
 
 
@@ -160,6 +173,87 @@ class ExportDialog(QDialog):
         col_html_layout.addWidget(self._collage_html_export_btn)
         layout.addWidget(col_html_box)
 
+        # --- Image Metadata Export ---
+        meta_box = QGroupBox(t("export_metadata_group"))
+        meta_layout = QVBoxLayout(meta_box)
+
+        meta_desc = QLabel(t("export_metadata_desc"))
+        meta_desc.setWordWrap(True)
+        meta_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        meta_layout.addWidget(meta_desc)
+
+        # Format
+        fmt_label = QLabel(t("export_metadata_format"))
+        meta_layout.addWidget(fmt_label)
+        fmt_row = QHBoxLayout()
+        self._meta_fmt_csv = QRadioButton(t("export_metadata_csv"))
+        self._meta_fmt_xlsx = QRadioButton(t("export_metadata_xlsx"))
+        self._meta_fmt_csv.setChecked(True)
+        self._meta_fmt_group = QButtonGroup(self)
+        self._meta_fmt_group.addButton(self._meta_fmt_csv)
+        self._meta_fmt_group.addButton(self._meta_fmt_xlsx)
+        fmt_row.addWidget(self._meta_fmt_csv)
+        fmt_row.addWidget(self._meta_fmt_xlsx)
+        fmt_row.addStretch()
+        meta_layout.addLayout(fmt_row)
+
+        # Person mode
+        pmode_label = QLabel(t("export_metadata_person_mode"))
+        meta_layout.addWidget(pmode_label)
+        pmode_row = QHBoxLayout()
+        self._meta_persons_list = QRadioButton(t("export_metadata_persons_list"))
+        self._meta_persons_cols = QRadioButton(t("export_metadata_persons_cols"))
+        self._meta_persons_list.setChecked(True)
+        self._meta_pmode_group = QButtonGroup(self)
+        self._meta_pmode_group.addButton(self._meta_persons_list)
+        self._meta_pmode_group.addButton(self._meta_persons_cols)
+        pmode_row.addWidget(self._meta_persons_list)
+        pmode_row.addWidget(self._meta_persons_cols)
+        pmode_row.addStretch()
+        meta_layout.addLayout(pmode_row)
+
+        # Field checkboxes
+        fields_label = QLabel(t("export_metadata_fields"))
+        meta_layout.addWidget(fields_label)
+        fields_grid = QHBoxLayout()
+        left_col = QVBoxLayout()
+        right_col = QVBoxLayout()
+
+        self._cb_filename = QCheckBox(t("export_metadata_filename"))
+        self._cb_relpath = QCheckBox(t("export_metadata_relpath"))
+        self._cb_persons = QCheckBox(t("export_metadata_persons"))
+        self._cb_date = QCheckBox(t("export_metadata_date"))
+        self._cb_location = QCheckBox(t("export_metadata_location"))
+        self._cb_gps = QCheckBox(t("export_metadata_gps"))
+
+        for cb in (
+            self._cb_filename,
+            self._cb_relpath,
+            self._cb_persons,
+            self._cb_date,
+            self._cb_location,
+            self._cb_gps,
+        ):
+            cb.setChecked(True)
+
+        left_col.addWidget(self._cb_filename)
+        left_col.addWidget(self._cb_relpath)
+        left_col.addWidget(self._cb_persons)
+        right_col.addWidget(self._cb_date)
+        right_col.addWidget(self._cb_location)
+        right_col.addWidget(self._cb_gps)
+
+        fields_grid.addLayout(left_col)
+        fields_grid.addLayout(right_col)
+        fields_grid.addStretch()
+        meta_layout.addLayout(fields_grid)
+
+        self._meta_export_btn = QPushButton(f"💾  {t('export_metadata_btn')}")
+        self._meta_export_btn.clicked.connect(self._on_export_metadata)
+        meta_layout.addWidget(self._meta_export_btn)
+
+        layout.addWidget(meta_box)
+
         layout.addStretch()
         scroll.setWidget(inner)
         outer.addWidget(scroll, stretch=1)
@@ -239,6 +333,59 @@ class ExportDialog(QDialog):
         QMessageBox.information(
             self, t("images_exported"), t("files_copied", n=n, folder=folder)
         )
+
+    def _on_export_metadata(self) -> None:
+        fields = self._selected_fields()
+        if not fields:
+            QMessageBox.warning(
+                self,
+                t("export_metadata_no_fields_title"),
+                t("export_metadata_no_fields"),
+            )
+            return
+
+        use_xlsx = self._meta_fmt_xlsx.isChecked()
+        if use_xlsx:
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("export_metadata_group"), "image_metadata.xlsx",
+                "Excel Files (*.xlsx)"
+            )
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self, t("export_metadata_group"), "image_metadata.csv",
+                "CSV Files (*.csv)"
+            )
+        if not path:
+            return
+
+        person_mode = PERSON_MODE_COLS if self._meta_persons_cols.isChecked() else PERSON_MODE_LIST
+
+        with session_scope() as session:
+            svc = ImageMetadataExportService(session)
+            if use_xlsx:
+                out = svc.export_xlsx(path, fields, person_mode)
+            else:
+                out = svc.export_csv(path, fields, person_mode)
+
+        QMessageBox.information(
+            self, t("export_metadata_done"), t("export_metadata_saved", path=out)
+        )
+
+    def _selected_fields(self) -> Set[str]:
+        fields: Set[str] = set()
+        if self._cb_filename.isChecked():
+            fields.add(FIELD_FILENAME)
+        if self._cb_relpath.isChecked():
+            fields.add(FIELD_RELPATH)
+        if self._cb_persons.isChecked():
+            fields.add(FIELD_PERSONS)
+        if self._cb_date.isChecked():
+            fields.add(FIELD_DATE)
+        if self._cb_location.isChecked():
+            fields.add(FIELD_LOCATION)
+        if self._cb_gps.isChecked():
+            fields.add(FIELD_GPS)
+        return fields
 
     def _on_collage_import_clicked(self) -> None:
         if self._on_collage_import_cb is None:
