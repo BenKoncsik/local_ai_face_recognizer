@@ -28,6 +28,10 @@ from app.embeddings.tflite_embedder import TFLiteEmbedder
 from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
+from app.services.intra_image_consistency_service import (
+    IntraImageConsistencyService,
+    IntraImageConsistencyStats,
+)
 from app.services.recognition_service import RecognitionService, RecognitionStats
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
@@ -113,9 +117,9 @@ class PipelineWorker(QThread):
 
         # --- Stage 1: Scan ---
         if self._drive_mode:
-            self.log_message.emit("Stage 1/6: Scanning Google Drive project folder …")
+            self.log_message.emit("Stage 1/7: Scanning Google Drive project folder …")
         else:
-            self.log_message.emit("Stage 1/6: Scanning image folder …")
+            self.log_message.emit("Stage 1/7: Scanning image folder …")
         new_ids = self._run_scan()
         if self._abort:
             self.finished.emit(False, "Aborted after scan")
@@ -125,7 +129,7 @@ class PipelineWorker(QThread):
         all_pending = self._get_pending_detection_ids()
         mode_label = "high-accuracy" if self._high_accuracy else "fast"
         self.log_message.emit(
-            f"Stage 2/6: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
+            f"Stage 2/7: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
         )
         total_faces = self._run_detection(all_pending)
         if self._abort:
@@ -133,7 +137,7 @@ class PipelineWorker(QThread):
             return
 
         # --- Stage 3: Embedding ---
-        self.log_message.emit("Stage 3/6: Generating face embeddings …")
+        self.log_message.emit("Stage 3/7: Generating face embeddings …")
         try:
             embedded = self._run_embedding(exclude_low_quality)
         except ImportError as exc:
@@ -153,19 +157,25 @@ class PipelineWorker(QThread):
 
         # --- Stage 4: Recognition ---
         self.log_message.emit(
-            "Stage 4/6: Recognizing faces from learned people …"
+            "Stage 4/7: Recognizing faces from learned people …"
         )
         rec_stats = self._run_recognition(exclude_low_quality)
 
         # --- Stage 5: Unknown-face clustering ---
         self.log_message.emit(
-            "Stage 5/6: Clustering unassigned faces into Unknown persons …"
+            "Stage 5/7: Clustering unassigned faces into Unknown persons …"
         )
         cluster_stats = self._run_clustering(exclude_low_quality)
 
-        # --- Stage 6: Name suggestions ---
+        # --- Stage 6: Same-image identity consistency ---
         self.log_message.emit(
-            "Stage 6/6: Matching unknown faces against named people …"
+            "Stage 6/7: Unifying same-person faces within each image …"
+        )
+        consistency_stats = self._run_intra_image_consistency(exclude_low_quality)
+
+        # --- Stage 7: Name suggestions ---
+        self.log_message.emit(
+            "Stage 7/7: Matching unknown faces against named people …"
         )
         n_suggestions = self._run_suggestions(exclude_low_quality)
         self.suggestions_ready.emit(n_suggestions)
@@ -183,6 +193,8 @@ class PipelineWorker(QThread):
             f"({cluster_stats.n_assigned_to_new} faces), "
             f"+{cluster_stats.n_assigned_to_existing} → existing, "
             f"{cluster_stats.n_singletons} unassigned | "
+            f"intra-image: {consistency_stats.n_faces_reassigned} face(s) reunified, "
+            f"{consistency_stats.n_persons_removed} fragment(s) removed | "
             f"{n_suggestions} suggestion(s)"
         )
         self.log_message.emit(summary)
@@ -312,6 +324,27 @@ class PipelineWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             log.warning("Unknown clustering stage failed: %s", exc)
             return ClusteringStats()
+
+    def _run_intra_image_consistency(
+        self, exclude_low_quality: bool = False
+    ) -> IntraImageConsistencyStats:
+        """Reunify same-person faces split across identities within one image."""
+        try:
+            with session_scope() as session:
+                svc = IntraImageConsistencyService(
+                    session=session,
+                    config=self._config.intra_image,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                stats = svc.run()
+                self.progress.emit(
+                    1, 1, "Consistency",
+                    f"{stats.n_faces_reassigned} face(s) reunified",
+                )
+                return stats
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Intra-image consistency stage failed: %s", exc)
+            return IntraImageConsistencyStats()
 
     def _run_suggestions(self, exclude_low_quality: bool = False) -> int:
         """Compute name suggestions; never aborts the pipeline on failure."""

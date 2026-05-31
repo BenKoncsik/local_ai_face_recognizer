@@ -35,6 +35,7 @@ class ScanModesDialog(QDialog):
         on_face_rescan_fast: Callable[[], None],
         on_face_rescan_accurate: Callable[[], None],
         on_find_overlapping_unknown_faces: Callable[[], None],
+        on_identity_repair_scan: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -43,6 +44,7 @@ class ScanModesDialog(QDialog):
         self._on_face_rescan_fast = on_face_rescan_fast
         self._on_face_rescan_accurate = on_face_rescan_accurate
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
+        self._on_identity_repair_scan = on_identity_repair_scan
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -100,6 +102,15 @@ class ScanModesDialog(QDialog):
             callback=self._launch_overlapping_unknown_cleanup,
             danger=False,
         ))
+        if self._on_identity_repair_scan is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.identityRepair.title"),
+                description=t("scanModes.identityRepair.description"),
+                button_label=t("scanModes.identityRepair.startButton"),
+                warning=t("scanModes.identityRepair.warning"),
+                callback=self._launch_identity_repair_scan,
+                danger=False,
+            ))
         cards_layout.addWidget(self._make_card(
             title=t("scanModes.fullRescan.title"),
             description=t("scanModes.fullRescan.description"),
@@ -203,3 +214,8 @@ class ScanModesDialog(QDialog):
     def _launch_overlapping_unknown_cleanup(self) -> None:
         self.accept()
         self._on_find_overlapping_unknown_faces()
+
+    def _launch_identity_repair_scan(self) -> None:
+        self.accept()
+        if self._on_identity_repair_scan is not None:
+            self._on_identity_repair_scan()

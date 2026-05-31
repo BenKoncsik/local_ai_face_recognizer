@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -23,6 +23,12 @@ class Detection:
         w:          Width of bounding box in pixels.
         h:          Height of bounding box in pixels.
         confidence: Detector confidence score [0.0 – 1.0].
+        landmarks:  Optional 5 facial landmarks in image pixels, ordered
+                    right-eye, left-eye, nose, right-mouth, left-mouth — the
+                    canonical ArcFace order consumed by
+                    :func:`app.embeddings.alignment.align_face_5pt`.  ``None``
+                    for detectors that do not produce landmarks (Coral, the
+                    Caffe SSD CPU path, Haar).
     """
 
     x: int
@@ -30,6 +36,7 @@ class Detection:
     w: int
     h: int
     confidence: float
+    landmarks: Optional[List[List[float]]] = None
 
     @property
     def x2(self) -> int:
@@ -51,7 +58,11 @@ class Detection:
         y = max(0, min(self.y, img_h - 1))
         x2 = max(0, min(self.x2, img_w))
         y2 = max(0, min(self.y2, img_h))
-        return Detection(x=x, y=y, w=x2 - x, h=y2 - y, confidence=self.confidence)
+        return Detection(
+            x=x, y=y, w=x2 - x, h=y2 - y,
+            confidence=self.confidence,
+            landmarks=self.landmarks,
+        )
 
 
 class FaceDetector(ABC):

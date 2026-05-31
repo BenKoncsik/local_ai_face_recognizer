@@ -205,6 +205,22 @@ def create_detector(config: DetectionConfig) -> FaceDetector:
             "Set this in config.yaml to enable Coral acceleration."
         )
 
+    # Prefer the landmark-capable YuNet detector (needed for "aligned" crops).
+    if config.use_yunet:
+        try:
+            from app.detectors.yunet_detector import YuNetDetector
+
+            detector = YuNetDetector(model_path=config.yunet_model_path)
+            log.info("Using CPU detector (backend: %s)", detector.backend_name)
+            return detector
+        except FileNotFoundError as exc:
+            log.warning(
+                "YuNet model unavailable (%s) — falling back to Caffe/Haar CPU "
+                "detector. 'aligned' crop mode will degrade to 'square'.", exc
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("YuNet init failed: %s — falling back to Caffe/Haar CPU", exc)
+
     from app.detectors.cpu_detector import CpuDetector
 
     detector = CpuDetector(model_path=config.cpu_model_path)

@@ -26,6 +26,8 @@ def save_face_crop(
     thumbnail_size: Tuple[int, int] = (128, 128),
     face_index: int = 0,
     dest_path: Optional[Path] = None,
+    crop_mode: str = "legacy",
+    landmarks: Optional[object] = None,
 ) -> Optional[Path]:
     """Extract a face crop and save it as a JPEG thumbnail.
 
@@ -40,32 +42,32 @@ def save_face_crop(
         dest_path:      Explicit output path; overrides the auto-generated name.
                         Use this to overwrite an existing crop in-place without
                         introducing filename collisions.
+        crop_mode:      ``"legacy"`` (stretch), ``"square"`` (aspect-preserving)
+                        or ``"aligned"`` (5-point landmark alignment).  See
+                        :mod:`app.embeddings.alignment`.
+        landmarks:      Optional 5×2 facial landmarks, used by ``"aligned"``.
 
     Returns:
         :class:`Path` to the saved crop file, or ``None`` on failure.
     """
+    from app.embeddings.alignment import make_face_crop
+
     x, y, w, h = detection.as_tuple()
 
     if w <= 0 or h <= 0:
         log.debug("Skipping zero-area crop for image_id=%d", image_id)
         return None
 
-    crop = img_bgr[y : y + h, x : x + w]
-    if crop.size == 0:
+    thumb = make_face_crop(
+        img_bgr,
+        bbox=(x, y, w, h),
+        output_size=thumbnail_size,
+        mode=crop_mode,
+        landmarks=landmarks,
+        legacy_margin_frac=0.10,
+    )
+    if thumb is None:
         return None
-
-    # Add a small margin (10% each side) to include face context
-    img_h, img_w = img_bgr.shape[:2]
-    margin_x = int(w * 0.10)
-    margin_y = int(h * 0.10)
-    x1 = max(0, x - margin_x)
-    y1 = max(0, y - margin_y)
-    x2 = min(img_w, x + w + margin_x)
-    y2 = min(img_h, y + h + margin_y)
-    crop = img_bgr[y1:y2, x1:x2]
-
-    # Resize to thumbnail
-    thumb = cv2.resize(crop, thumbnail_size, interpolation=cv2.INTER_AREA)
 
     if dest_path is not None:
         dest = dest_path

@@ -269,6 +269,8 @@ class DetectionService:
                 detector_backend=self._detector.backend_name,
                 crop_path=None,
             )
+            if det.landmarks is not None:
+                face.set_landmarks(det.landmarks)
             self._session.add(face)
             self._session.flush()
 
@@ -279,6 +281,8 @@ class DetectionService:
                 image_id=image.id,
                 thumbnail_size=self._config.scan.thumbnail_size,
                 face_index=face.id,
+                crop_mode=self._config.embedding.crop_mode,
+                landmarks=det.landmarks,
             )
             if crop_path is not None:
                 face.crop_path = str(crop_path)

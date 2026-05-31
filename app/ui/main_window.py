@@ -270,6 +270,9 @@ class MainWindow(QMainWindow):
         self._preview_panel.face_bbox_update_requested.connect(
             self._on_preview_face_bbox_update
         )
+        self._preview_panel.face_diagnostics_requested.connect(
+            self._on_preview_face_diagnostics
+        )
         splitter.addWidget(self._preview_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -741,6 +744,7 @@ class MainWindow(QMainWindow):
             on_face_rescan_fast=self._on_redetect_fast,
             on_face_rescan_accurate=self._on_redetect_accurate,
             on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
+            on_identity_repair_scan=self._on_identity_repair_scan,
             parent=self,
         )
         dlg.exec()
@@ -893,6 +897,80 @@ class MainWindow(QMainWindow):
             previous_preview_image_id=preview_image_id,
             deleted_face_ids=set(selected_ids),
         )
+
+    def _on_identity_repair_scan(self) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        from app.app_settings import app_qsettings
+        from app.services.identity_repair_service import IdentityRepairService
+        from app.ui.dialogs.identity_repair_dialog import IdentityRepairDialog
+
+        exclude_low_quality = app_qsettings().value(
+            "face_quality/exclude_low_quality", True, type=bool
+        )
+        try:
+            with session_scope() as session:
+                svc = IdentityRepairService(
+                    session,
+                    config=self._config.identity_repair,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                candidates = svc.scan()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Identity repair scan failed")
+            QMessageBox.critical(self, t("error"), t("repair_error", error=exc))
+            return
+
+        if not candidates:
+            QMessageBox.information(
+                self, t("repair_no_matches_title"), t("repair_no_matches_msg")
+            )
+            return
+
+        dlg = IdentityRepairDialog(candidates=candidates, parent=self)
+        dlg.exec()
+        if not dlg.merge_requested():
+            return
+
+        pairs = dlg.selected_pairs()
+        if not pairs:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("repair_confirm_title"),
+            t("repair_confirm_msg", n=len(pairs)),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                svc = IdentityRepairService(
+                    session,
+                    config=self._config.identity_repair,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                result = svc.apply(pairs)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Identity repair apply failed")
+            QMessageBox.critical(self, t("error"), t("repair_error", error=exc))
+            return
+
+        self._status_label.setText(
+            t(
+                "repair_done_status",
+                groups=result.groups_consolidated,
+                merged=result.persons_merged_away,
+            )
+        )
+        self._refresh_persons()
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+        self._image_browser._reload_current_face_data()
 
     @Slot(int)
     def _open_overlap_match_face(self, known_face_id: int) -> None:
@@ -1398,6 +1476,32 @@ class MainWindow(QMainWindow):
         self._on_reassign_face()
 
     @Slot(int)
+    def _on_preview_face_diagnostics(self, face_id: int) -> None:
+        """Show the 'why this identity?' developer diagnostics for a face."""
+        from app.app_settings import app_qsettings
+        from app.services.face_diagnostics_service import FaceDiagnosticsService
+        from app.ui.dialogs.face_diagnostics_dialog import FaceDiagnosticsDialog
+
+        exclude_low_quality = app_qsettings().value(
+            "face_quality/exclude_low_quality", True, type=bool
+        )
+        try:
+            with session_scope() as session:
+                svc = FaceDiagnosticsService(
+                    session,
+                    config=self._config.recognition,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                diag = svc.explain(face_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Face diagnostics failed")
+            QMessageBox.critical(self, t("error"), t("diag_error", error=exc))
+            return
+
+        if diag is None:
+            return
+        FaceDiagnosticsDialog(diag, parent=self).exec()
+
     def _on_preview_face_delete(self, face_id: int) -> None:
         """Handle 'Arc törlése' from the preview panel context menu (hard delete)."""
         reply = QMessageBox.question(

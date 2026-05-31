@@ -323,6 +323,14 @@ class Face(Base):
         "embedding", LargeBinary, nullable=True
     )
 
+    # 5 facial landmarks (right-eye, left-eye, nose, right-mouth, left-mouth)
+    # stored as raw bytes (numpy float32 (5, 2) array → tobytes()).  NULL when
+    # the detector did not produce landmarks (Coral, Caffe SSD, Haar).  Used by
+    # the "aligned" crop mode.  Use get_landmarks() / set_landmarks() helpers.
+    _landmarks: Mapped[Optional[bytes]] = mapped_column(
+        "landmarks", LargeBinary, nullable=True
+    )
+
     # Whether this face was manually excluded from clustering
     is_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -372,6 +380,25 @@ class Face(Base):
     def set_embedding(self, vector: np.ndarray) -> None:
         """Serialise a float32 numpy array and store it."""
         self._embedding = vector.astype(np.float32).tobytes()
+
+    def get_landmarks(self) -> Optional[np.ndarray]:
+        """Deserialise the stored landmarks to a float32 ``(5, 2)`` array."""
+        if self._landmarks is None:
+            return None
+        return np.frombuffer(self._landmarks, dtype=np.float32).reshape(5, 2).copy()
+
+    def set_landmarks(self, points: Optional[object]) -> None:
+        """Serialise 5×2 facial landmarks and store them.
+
+        Accepts any array-like of shape ``(5, 2)``; ``None`` clears the field.
+        """
+        if points is None:
+            self._landmarks = None
+            return
+        arr = np.asarray(points, dtype=np.float32)
+        if arr.shape != (5, 2):
+            raise ValueError(f"landmarks must be 5x2, got {arr.shape}")
+        self._landmarks = arr.tobytes()
 
     def __repr__(self) -> str:
         return (

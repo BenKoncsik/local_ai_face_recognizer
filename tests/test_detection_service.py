@@ -31,6 +31,80 @@ class _DummyDetector(FaceDetector):
         ]
 
 
+class _LandmarkDetector(FaceDetector):
+    """Detector that returns one face carrying 5 landmarks."""
+
+    LANDMARKS = [[20, 30], [50, 31], [35, 45], [22, 60], [48, 61]]
+
+    @property
+    def backend_name(self) -> str:
+        return "yunet"
+
+    def detect(
+        self,
+        image_bgr: np.ndarray,
+        confidence_threshold: float = 0.5,
+        min_face_size: int = 50,
+    ):
+        return [
+            Detection(
+                x=10, y=10, w=70, h=70, confidence=0.95, landmarks=self.LANDMARKS
+            ),
+        ]
+
+
+def test_detection_service_persists_landmarks(monkeypatch, tmp_path):
+    """Landmarks from the detector must be stored on the Face row and forwarded
+    to save_face_crop so the aligned crop mode can use them."""
+    db_path = tmp_path / "faces.db"
+    init_db(db_path)
+
+    image_path = tmp_path / "p.jpg"
+    assert cv2.imwrite(str(image_path), np.full((240, 320, 3), 255, np.uint8))
+
+    with session_scope() as session:
+        image = Image(
+            file_path=str(image_path),
+            file_hash="hash",
+            file_mtime=image_path.stat().st_mtime,
+        )
+        session.add(image)
+        session.flush()
+        image_id = image.id
+
+    captured_landmarks: list = []
+
+    def fake_save_face_crop(*args, landmarks=None, **kwargs):
+        captured_landmarks.append(landmarks)
+        return Path(kwargs.get("crops_dir", tmp_path)) / "crop.jpg"
+
+    monkeypatch.setattr(
+        "app.services.detection_service.save_face_crop", fake_save_face_crop
+    )
+
+    cfg = AppConfig(base_dir=str(tmp_path))
+    cfg.storage.db_path = str(db_path)
+    cfg.storage.crops_dir = "crops"
+    cfg.embedding.crop_mode = "aligned"
+
+    with session_scope() as session:
+        service = DetectionService(
+            session=session, detector=_LandmarkDetector(), config=cfg
+        )
+        assert service.process([image_id]) == 1
+
+    # Landmarks were forwarded to the crop function.
+    assert captured_landmarks == [_LandmarkDetector.LANDMARKS]
+
+    # And persisted on the Face row, round-tripping through float32 bytes.
+    with session_scope() as session:
+        face = session.query(Face).one()
+        stored = face.get_landmarks()
+    assert stored is not None
+    assert stored.shape == (5, 2)
+    assert np.allclose(stored, np.array(_LandmarkDetector.LANDMARKS, dtype=float))
+
+
 def test_detection_service_uses_face_id_for_crop_naming(monkeypatch, tmp_path):
     """Each crop filename must be keyed by the face's DB primary key.
 
@@ -65,6 +139,8 @@ def test_detection_service_uses_face_id_for_crop_naming(monkeypatch, tmp_path):
         thumbnail_size,
         face_index=0,
         dest_path=None,
+        crop_mode="legacy",
+        landmarks=None,
     ):
         captured_indexes.append(face_index)
         dest = dest_path or (Path(crops_dir) / f"img{image_id:06d}_face{face_index:06d}.jpg")

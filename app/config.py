@@ -34,6 +34,17 @@ class DetectionConfig:
     # Default: OpenCV's bundled res10_300x300_ssd deploy.prototxt / caffemodel.
     cpu_model_path: Optional[str] = None
 
+    # Path to the YuNet ONNX model (face_detection_yunet_2023mar.onnx).  YuNet
+    # returns 5 facial landmarks per face, which the "aligned" embedding crop
+    # mode needs.  When None the detector is auto-located in models/; set this
+    # to point elsewhere.  Set use_yunet=False to force the Caffe/Haar CPU path.
+    yunet_model_path: Optional[str] = None
+
+    # Prefer the landmark-capable YuNet detector over the plain Caffe SSD / Haar
+    # CPU detector when a YuNet model is available.  Required for crop_mode
+    # "aligned" to produce real alignment.  Coral (when configured) still wins.
+    use_yunet: bool = True
+
     # Input size expected by the CPU DNN model (width, height)
     cpu_model_input_size: tuple[int, int] = (300, 300)
 
@@ -73,6 +84,18 @@ class EmbeddingConfig:
     # Length of the embedding vector produced by the model.
     # MobileFaceNet: 192.  ArcFace variants: 512.
     embedding_dim: int = 192
+
+    # How face crops are extracted before embedding.  Embedding models are
+    # trained on *aligned* faces, so the crop geometry directly affects how
+    # stable a person's embedding is across photos.
+    #   "legacy"  — bbox + margin stretched to a square (original behaviour;
+    #               distorts non-square boxes).
+    #   "square"  — aspect-preserving square crop (no landmarks needed).
+    #   "aligned" — 5-point similarity-transform alignment to the ArcFace
+    #               template (requires landmarks; falls back to "square").
+    # WARNING: changing this on an existing library changes every embedding —
+    # a full re-detect + re-embed is required for results to stay comparable.
+    crop_mode: str = "legacy"
 
 
 @dataclass
@@ -372,6 +395,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             min_face_size=det.get("min_face_size", cfg.detection.min_face_size),
             coral_model_path=det.get("coral_model_path"),
             cpu_model_path=det.get("cpu_model_path"),
+            yunet_model_path=det.get("yunet_model_path"),
+            use_yunet=det.get("use_yunet", cfg.detection.use_yunet),
             cpu_model_input_size=tuple(
                 det.get("cpu_model_input_size", list(cfg.detection.cpu_model_input_size))
             ),
@@ -393,6 +418,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             model_path=emb.get("model_path"),
             input_size=tuple(emb.get("input_size", list(cfg.embedding.input_size))),
             embedding_dim=emb.get("embedding_dim", cfg.embedding.embedding_dim),
+            crop_mode=emb.get("crop_mode", cfg.embedding.crop_mode),
         )
 
         clu = raw.get("clustering", {})

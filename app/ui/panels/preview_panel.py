@@ -659,6 +659,7 @@ class PreviewPanel(QWidget):
     face_delete_requested      = Signal(int)
     face_create_requested      = Signal(int, int, int, int, int)
     face_bbox_update_requested = Signal(int, int, int, int, int)
+    face_diagnostics_requested = Signal(int)
     prev_image_requested       = Signal()
     next_image_requested       = Signal()
 
@@ -1081,6 +1082,8 @@ class PreviewPanel(QWidget):
         assign_action = menu.addAction(f"👤  {t('assign_to_person')}")
         edit_action   = menu.addAction(f"✏  {t('modify_selection')}")
         delete_action = menu.addAction(f"🗑  {t('delete_selection')}")
+        menu.addSeparator()
+        diag_action = menu.addAction(f"🔍  {t('diag_menu')}")
 
         chosen = menu.exec(QPoint(gx, gy))
         if chosen == assign_action:
@@ -1089,6 +1092,8 @@ class PreviewPanel(QWidget):
             self._start_face_edit(face_id)
         elif chosen == delete_action:
             self.face_delete_requested.emit(face_id)
+        elif chosen == diag_action:
+            self.face_diagnostics_requested.emit(face_id)
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
         self._image_label.set_draw_mode(active)

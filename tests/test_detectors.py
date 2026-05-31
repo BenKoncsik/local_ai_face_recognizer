@@ -32,11 +32,14 @@ class TestFactoryFallback:
     """Verify the factory returns a CpuDetector when Coral is unavailable."""
 
     def test_cpu_fallback_when_no_coral_config(self, monkeypatch):
-        """With no coral_model_path configured, factory must return CpuDetector."""
+        """With no coral_model_path configured, factory must return CpuDetector.
+
+        use_yunet is disabled so we exercise the Caffe/Haar CPU path explicitly.
+        """
         from app.detectors.cpu_detector import CpuDetector
         from app.detectors.factory import create_detector
 
-        config = DetectionConfig(coral_model_path=None)
+        config = DetectionConfig(coral_model_path=None, use_yunet=False)
         detector = create_detector(config)
 
         # Should be a CPU detector (possibly Haar if model files absent)
@@ -50,9 +53,27 @@ class TestFactoryFallback:
         # Monkeypatch probe_coral to return False
         monkeypatch.setattr(factory, "probe_coral", lambda *args, **kwargs: False)
 
-        config = DetectionConfig(coral_model_path="/nonexistent/model.tflite")
+        config = DetectionConfig(
+            coral_model_path="/nonexistent/model.tflite", use_yunet=False
+        )
         detector = factory.create_detector(config)
         assert isinstance(detector, CpuDetector)
+
+    def test_yunet_preferred_when_available(self, monkeypatch):
+        """With use_yunet and a loadable model, the factory picks YuNet over the
+        Caffe/Haar CPU detector."""
+        from app.detectors import factory
+        from app.detectors.yunet_detector import YuNetDetector
+
+        config = DetectionConfig(coral_model_path=None, use_yunet=True)
+        detector = factory.create_detector(config)
+        # Falls back to CpuDetector only if the YuNet model is missing.
+        from app.paths import resource_path
+        from app.detectors.yunet_detector import _DEFAULT_MODEL
+
+        if resource_path(_DEFAULT_MODEL).exists():
+            assert isinstance(detector, YuNetDetector)
+            assert detector.backend_name == "yunet"
 
 
 class _DummyDetector(FaceDetector):

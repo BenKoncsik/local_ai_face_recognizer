@@ -4,6 +4,9 @@
 #    deploy.prototxt
 #    res10_300x300_ssd_iter_140000.caffemodel
 #
+#  Face detection (CPU, YuNet — returns 5 landmarks, enables "aligned" crops):
+#    face_detection_yunet_2023mar.onnx
+#
 #  Face detection (Coral Edge TPU):
 #    ssd_mobilenet_v2_face_quant_postprocess_edgetpu.tflite
 #

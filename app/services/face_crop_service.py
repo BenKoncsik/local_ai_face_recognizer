@@ -37,6 +37,7 @@ def save_crop_for_face(
     crops_dir: Path,
     thumbnail_size: Tuple[int, int],
     img_bgr: Optional[np.ndarray] = None,
+    crop_mode: str = "legacy",
 ) -> Optional[Path]:
     """Regenerate one face crop into its Face.id-keyed canonical file."""
     if face.id is None:
@@ -71,6 +72,7 @@ def save_crop_for_face(
         thumbnail_size=thumbnail_size,
         face_index=face.id,
         dest_path=dest,
+        crop_mode=crop_mode,
     )
     if crop_path is None:
         return None

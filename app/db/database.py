@@ -114,6 +114,7 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("quality_score", "FLOAT"),
             ("quality_reasons", "VARCHAR(256)"),
             ("is_low_quality", "BOOLEAN"),
+            ("landmarks", "BLOB"),
         ],
     }
     with engine.connect() as conn:

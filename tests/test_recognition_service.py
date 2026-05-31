@@ -92,7 +92,7 @@ class TestRecognitionAssignments:
             _add_face(s, img, nagy, _axis_vec(DIM, 64, noise=0.02, seed=3))
 
         with session_scope() as s:
-            assignments = RecognitionService(s).recognize_pending()
+            assignments, stats = RecognitionService(s).recognize_pending()
 
         assert len(assignments) == 1
         assert assignments[0].face_id == candidate
@@ -116,7 +116,7 @@ class TestRecognitionAssignments:
             _add_face(s, img, person_b, _axis_vec(DIM, 1))
 
         with session_scope() as s:
-            assignments = RecognitionService(s).recognize_pending()
+            assignments, stats = RecognitionService(s).recognize_pending()
 
         assert assignments == []
         with session_scope() as s:
@@ -131,7 +131,7 @@ class TestRecognitionAssignments:
             _add_face(s, img, known, _axis_vec(DIM, 0))
 
         with session_scope() as s:
-            assignments = RecognitionService(s).recognize_pending()
+            assignments, stats = RecognitionService(s).recognize_pending()
 
         assert len(assignments) == 1
         with session_scope() as s:
@@ -149,7 +149,7 @@ class TestRecognitionAssignments:
 
         config = RecognitionConfig(auto_assign_threshold=0.5, min_margin=0.2)
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert assignments == []
         with session_scope() as s:
@@ -250,7 +250,7 @@ class TestAdaptiveThreshold:
         )
 
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert any(a.face_id == candidate_id for a in assignments)
 
@@ -320,7 +320,7 @@ class TestSameImageAssist:
         )
 
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert any(a.face_id == candidate_id for a in assignments)
         with session_scope() as s:
@@ -361,7 +361,7 @@ class TestSameImageAssist:
         )
 
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert not any(a.face_id == candidate_id for a in assignments)
         with session_scope() as s:
@@ -409,7 +409,7 @@ class TestSameImageAssist:
         )
 
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert not any(a.face_id == candidate_id for a in assignments)
         with session_scope() as s:
@@ -469,7 +469,7 @@ class TestSameImageAssist:
         )
 
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert not any(a.face_id == candidate_id for a in assignments)
         with session_scope() as s:
@@ -492,7 +492,7 @@ class TestRecognitionCorrections:
             )
 
         with session_scope() as s:
-            assignments = RecognitionService(s).recognize_pending()
+            assignments, stats = RecognitionService(s).recognize_pending()
 
         assert assignments == []
         with session_scope() as s:
@@ -506,7 +506,7 @@ class TestRecognitionCorrections:
             _add_face(s, img, protected, _axis_vec(DIM, 0))
 
         with session_scope() as s:
-            assignments = RecognitionService(s).recognize_pending()
+            assignments, stats = RecognitionService(s).recognize_pending()
 
         assert assignments == []
         with session_scope() as s:
@@ -528,7 +528,7 @@ class TestRecognitionCorrections:
 
         config = RecognitionConfig(profile_auto_min_confidence=0.85)
         with session_scope() as s:
-            assignments = RecognitionService(s, config).recognize_pending()
+            assignments, stats = RecognitionService(s, config).recognize_pending()
 
         assert assignments == []
         with session_scope() as s:

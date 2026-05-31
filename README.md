@@ -108,6 +108,25 @@ wget -P models/ \
 
 Without these files, the detector falls back to OpenCV's Haar cascade (lower quality but always available).
 
+#### Face detection (CPU) — YuNet (recommended; enables aligned crops)
+
+YuNet returns 5 facial landmarks per face, which the `aligned` embedding crop
+mode needs to warp faces onto the ArcFace template.  When present it is used in
+preference to the Caffe SSD / Haar CPU path.
+
+```bash
+wget -P models/ \
+  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+```
+
+Override the location with `detection.yunet_model_path`, or set
+`detection.use_yunet: false` to force the Caffe/Haar path.
+
+> **Changing `embedding.crop_mode`** (`legacy` → `square` → `aligned`) changes
+> the geometry of every crop and therefore every embedding.  Existing
+> embeddings are *not* comparable to new ones, so after switching you must
+> re-run a full **re-detect + re-embed** of the library.
+
 #### Face embedding — MobileFaceNet TFLite (CPU only)
 
 The embedding model is NOT included in the repository.  You have three options:
@@ -296,7 +315,9 @@ Key thresholds:
 ### Placeholder / known limitations
 - Embedding model file must be downloaded separately (see Setup)
 - CPU model files (Caffe SSD) must be downloaded separately
-- No face alignment step (crops are axis-aligned rectangles, no rotation correction)
+- Face alignment available via `embedding.crop_mode: aligned` (5-point ArcFace
+  alignment) when the YuNet detector supplies landmarks; otherwise crops are
+  axis-aligned rectangles with no rotation correction
 - Clustering is global re-run (not incremental)
 - Re-clustering does not preserve cluster↔person mapping when many clusters change
 - `worker_threads` config exists but pipeline is currently serial (QThread runs one thread)

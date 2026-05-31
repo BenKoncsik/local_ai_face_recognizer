@@ -36,6 +36,17 @@ detection:
   #
   # cpu_model_path: models/res10_300x300_ssd_iter_140000.caffemodel
 
+  # YuNet ONNX detector. Returns 5 facial landmarks per face, which the
+  # "aligned" embedding crop_mode needs. Preferred over the Caffe/Haar CPU
+  # path when available (Coral, if configured, still takes priority).
+  #
+  # How to obtain:
+  #   wget -P models/ https://github.com/opencv/opencv_zoo/raw/main/\
+  #        models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+  #
+  # use_yunet: true              # set false to force the Caffe/Haar path
+  # yunet_model_path: models/face_detection_yunet_2023mar.onnx
+
   # IoU threshold for "Find overlapping ? boxes" cleanup candidates.
   # A question-mark box is listed when it overlaps a real named face by at
   # least this much. Typical range: 0.30 - 0.40.
@@ -64,6 +75,15 @@ embedding:
 
   # Length of the output embedding vector (MobileFaceNet = 192, ArcFace = 512)
   embedding_dim: 192
+
+  # How face crops are extracted before embedding:
+  #   legacy  — bbox + margin stretched to a square (original; distorts boxes)
+  #   square  — aspect-preserving square crop (no landmarks needed)
+  #   aligned — 5-point ArcFace alignment (needs landmarks from YuNet; falls
+  #             back to "square" when landmarks are unavailable)
+  # WARNING: changing this changes every embedding. Re-detect + re-embed the
+  # whole library afterwards, otherwise old and new embeddings are not comparable.
+  # crop_mode: legacy
 
 clustering:
   # Legacy DBSCAN grouping settings. The main pipeline now uses the learned

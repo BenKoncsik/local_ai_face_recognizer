@@ -1024,6 +1024,74 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Review step included — known named faces are never deleted",
          "hu": "Átnézési lépéssel — az ismert, elnevezett arcokat soha nem törli"},
 
+    # ── Identity repair scan ──────────────────────────────────────────────
+    "scanModes.identityRepair.title":
+        {"en": "Identity Repair Scan",
+         "hu": "Identitás-helyreállító vizsgálat"},
+    "scanModes.identityRepair.description":
+        {"en": "Scans the whole database for 'Unknown N' identities that are "
+               "really the same person split apart over many runs (e.g. "
+               "Unknown 98 ≈ Unknown 155). It only proposes merges first; "
+               "nothing is consolidated until you review the list, keep the "
+               "pairs you want, and confirm.",
+         "hu": "Átvizsgálja az egész adatbázist olyan „Unknown N” identitások "
+               "után, amelyek valójában ugyanaz a személy, csak több futás "
+               "során szétestek (pl. Unknown 98 ≈ Unknown 155). Először csak "
+               "összevonásokat javasol; semmit nem von össze, amíg át nem nézed "
+               "a listát, ki nem választod a párokat, és meg nem erősíted."},
+    "scanModes.identityRepair.startButton":
+        {"en": "Scan for Fragmented Identities",
+         "hu": "Széttöredezett identitások keresése"},
+    "scanModes.identityRepair.warning":
+        {"en": "Review step included — only auto-named Unknown persons are merged",
+         "hu": "Átnézési lépéssel — csak automatikus „Unknown” személyeket von össze"},
+
+    # Identity repair results dialog
+    "repair_title":      {"en": "Identity Repair — Merge Fragmented Unknowns",
+                          "hu": "Identitás-helyreállítás — Töredékek összevonása"},
+    "repair_intro":      {"en": "Pairs of 'Unknown' identities that appear to be the "
+                                "same person. Keep the pairs you want to merge, then "
+                                "confirm. Transitively linked pairs are consolidated "
+                                "into one identity.",
+                          "hu": "Olyan „Unknown” identitáspárok, amelyek azonos "
+                                "személynek tűnnek. Hagyd bejelölve az összevonandó "
+                                "párokat, majd erősítsd meg. A láncban összekapcsolt "
+                                "párok egyetlen identitássá olvadnak."},
+    "repair_count":      {"en": "{n} merge candidate(s)", "hu": "{n} összevonási javaslat"},
+    "repair_no_matches_title": {"en": "No fragments found", "hu": "Nincs töredék"},
+    "repair_no_matches_msg":   {"en": "No fragmented Unknown identities were found.",
+                                "hu": "Nem található széttöredezett „Unknown” identitás."},
+    "repair_pair_label": {"en": "{a} ≈ {b}  ({pct}% match, {fa}+{fb} faces)",
+                          "hu": "{a} ≈ {b}  ({pct}% egyezés, {fa}+{fb} arc)"},
+    "repair_merge_btn":  {"en": "Merge Selected", "hu": "Kijelöltek összevonása"},
+    "repair_confirm_title": {"en": "Confirm merge", "hu": "Összevonás megerősítése"},
+    "repair_confirm_msg":   {"en": "Merge {n} candidate pair(s)? This consolidates the "
+                                   "linked Unknown identities and cannot be auto-undone.",
+                             "hu": "Összevonod a(z) {n} javasolt párt? Ez egyesíti a "
+                                   "kapcsolódó „Unknown” identitásokat, és nem vonható "
+                                   "vissza automatikusan."},
+    "repair_done_status":   {"en": "Identity repair: {groups} group(s) consolidated, "
+                                   "{merged} fragment(s) merged away",
+                             "hu": "Identitás-helyreállítás: {groups} csoport egyesítve, "
+                                   "{merged} töredék összevonva"},
+    "repair_error":      {"en": "Identity repair failed: {error}",
+                          "hu": "Az identitás-helyreállítás sikertelen: {error}"},
+
+    # ── Face diagnostics ("why this identity?") ───────────────────────────
+    "diag_menu":         {"en": "Why this identity?", "hu": "Miért ez az identitás?"},
+    "diag_title":        {"en": "Face Diagnostics — face #{id}",
+                          "hu": "Arc diagnosztika — arc #{id}"},
+    "diag_current":      {"en": "Current identity", "hu": "Jelenlegi identitás"},
+    "diag_source":       {"en": "Assigned via", "hu": "Hozzárendelés módja"},
+    "diag_threshold":    {"en": "Adaptive threshold", "hu": "Adaptív küszöb"},
+    "diag_quality":      {"en": "Quality", "hu": "Minőség"},
+    "diag_named_header": {"en": "Top named-person matches", "hu": "Legjobb nevesített egyezések"},
+    "diag_unknown_header": {"en": "Top Unknown matches", "hu": "Legjobb „Unknown” egyezések"},
+    "diag_verdict":      {"en": "Verdict", "hu": "Magyarázat"},
+    "diag_none":         {"en": "(none)", "hu": "(nincs)"},
+    "diag_error":        {"en": "Diagnostics failed: {error}",
+                          "hu": "A diagnosztika sikertelen: {error}"},
+
     # ── Name suggestions ──────────────────────────────────────────────────
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},
     "suggestions_title": {"en": "Name Suggestions — Unknown → Known",
