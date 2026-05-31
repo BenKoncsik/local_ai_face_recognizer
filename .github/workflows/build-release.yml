@@ -605,7 +605,7 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
-          EDDSA_SIG="$("$SPARKLE_DIST/bin/sign_update" "$ZIP" -k "$KEY_FILE")"
+          EDDSA_SIG="$("$SPARKLE_DIST/bin/sign_update" "$ZIP" --ed-key-file "$KEY_FILE")"
           rm -f "$KEY_FILE"
           echo "EdDSA signature: $EDDSA_SIG"
           echo "SPARKLE_EDDSA_SIG=$EDDSA_SIG" >> "$GITHUB_ENV"
