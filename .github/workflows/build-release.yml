@@ -599,8 +599,10 @@ jobs:
           set -euo pipefail
           ZIP="release/Face-Local-macOS-sparkle-${{ needs.prepare.outputs.package_version }}.zip"
 
+          # Write key text directly — Sparkle sign_update expects the raw
+          # base64 private key string as-is, not binary.
           KEY_FILE="${RUNNER_TEMP}/sparkle_ed_private_key"
-          echo "$SPARKLE_PRIVATE_KEY" | base64 --decode > "$KEY_FILE"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
           EDDSA_SIG="$("$SPARKLE_DIST/bin/sign_update" "$ZIP" -k "$KEY_FILE")"

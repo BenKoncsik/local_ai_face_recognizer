@@ -1835,7 +1835,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _start_update_check(self) -> None:
-        """Background thread — check GitHub releases without blocking the UI."""
+        """Background update check at startup.
+
+        On macOS, when SparkleHelper is bundled inside the .app, delegates to
+        Sparkle for a native background check and returns early.  Sparkle will
+        show its own update sheet if a new version is found; the Qt dialog is
+        not used in that path.
+
+        On all other platforms (and on macOS outside a frozen bundle, e.g. when
+        running from source), falls back to the GitHub-API-based check.
+        """
+        import sys
+        if sys.platform == "darwin":
+            from app.updater import start_background_update_check
+            if start_background_update_check():
+                # SparkleHelper is running; it handles everything from here.
+                return
+
         from app import __version__
         from app.services.update_service import fetch_latest_release, is_newer
 
@@ -1866,7 +1882,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_update_notify_clicked(self) -> None:
         if self._pending_release:
-            dlg = UpdateDialog(self._pending_release, parent=self)
+            dlg = UpdateDialog(self._pending_release, parent=self, auto_start=True)
             dlg.exec()
 
     def _refresh_persons(self) -> None:

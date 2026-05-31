@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -27,8 +27,12 @@ log = logging.getLogger(__name__)
 
 
 class _DownloadThread(QThread):
-    progress = Signal(int, int)   # downloaded, total
-    finished = Signal(str)        # path
+    progress = Signal(int, int)       # downloaded_bytes, total_bytes
+    download_complete = Signal(str)   # local file path — NOT named 'finished' to
+                                      # avoid shadowing QThread.finished, which Qt
+                                      # uses internally for thread lifecycle management.
+                                      # Shadowing it prevents proper cleanup and causes
+                                      # QThread::~QThread() to abort() on a live thread.
     error = Signal(str)
 
     def __init__(self, release: ReleaseInfo) -> None:
@@ -43,24 +47,48 @@ class _DownloadThread(QThread):
                 self._release.asset_name,
             )
             path = download_asset(self._release, self.progress.emit)
-            self.finished.emit(str(path))
+            self.download_complete.emit(str(path))
         except Exception as exc:
             log.exception("Update download failed")
             self.error.emit(str(exc))
 
 
 class UpdateDialog(QDialog):
-    """Shows release info and lets the user download + apply the update."""
+    """Shows release info and handles download + apply.
 
-    def __init__(self, release: ReleaseInfo, parent: Optional[QWidget] = None) -> None:
+    When ``auto_start=True`` the download begins immediately after the dialog
+    is shown and the update is applied automatically when the download finishes
+    — no extra button clicks needed.  This is the mode used when the user
+    clicks the status-bar notification chip.
+
+    When ``auto_start=False`` (default) the user initiates the download
+    manually, which is the mode used from the Settings dialog.
+    """
+
+    def __init__(
+        self,
+        release: ReleaseInfo,
+        parent: Optional[QWidget] = None,
+        auto_start: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._release = release
         self._downloaded_path: Optional[Path] = None
         self._thread: Optional[_DownloadThread] = None
+        self._auto_start = auto_start
 
         self.setWindowTitle(t("update_available_short", version=release.version))
         self.setMinimumWidth(460)
         self._build_ui()
+
+        if auto_start:
+            # Hide the manual download button — we start immediately.
+            self._download_btn.setVisible(False)
+            self._progress.setVisible(True)
+            self._status_label.setVisible(True)
+            self._status_label.setText(t("downloading"))
+            # Defer one event-loop tick so the dialog is fully painted first.
+            QTimer.singleShot(0, self._on_download)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -135,8 +163,10 @@ class UpdateDialog(QDialog):
 
         self._thread = _DownloadThread(self._release)
         self._thread.progress.connect(self._on_progress)
-        self._thread.finished.connect(self._on_done)
+        self._thread.download_complete.connect(self._on_done)
         self._thread.error.connect(self._on_error)
+        # Let Qt manage cleanup: delete the C++ object after the OS thread exits.
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def _on_progress(self, downloaded: int, total: int) -> None:
@@ -155,7 +185,18 @@ class UpdateDialog(QDialog):
         self._progress.setValue(100)
         self._apply_btn.setEnabled(True)
 
-        if sys.platform == "darwin":
+        # Wait for the OS thread to fully exit before we close the dialog or
+        # call sys.exit().  download_complete is emitted from inside run(),
+        # so the Qt thread may still be alive at the OS level when this slot
+        # runs.  Without wait(), Python GC can destroy the QThread wrapper
+        # while the thread is still winding down → QThread::~QThread() abort.
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.wait(3000)
+
+        if self._auto_start or sys.platform == "darwin":
+            # Auto-apply: either the user clicked the notification chip
+            # (auto_start) or we are on macOS where the shell-script installer
+            # always runs without UAC prompts.
             self._status_label.setText(f"✓ {t('downloaded_updating')}")
             self._status_label.setStyleSheet("color: #4caf50; font-size: 11px;")
             QApplication.processEvents()

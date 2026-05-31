@@ -509,6 +509,17 @@ class SettingsDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _on_check_update(self) -> None:
+        import sys
+
+        # On macOS, when SparkleHelper is bundled, delegate to Sparkle.
+        # Sparkle shows its own native update dialog and handles the download.
+        if sys.platform == "darwin":
+            from app.updater import check_for_updates
+            if check_for_updates():
+                self._update_status_label.setText(f"🔄 {t('checking')}")
+                self._update_status_label.setStyleSheet("")
+                return
+
         from app.services.update_service import fetch_latest_release, is_newer
         from app.ui.dialogs.update_dialog import UpdateDialog
 
