@@ -617,7 +617,7 @@ jobs:
               "version":        "${{ needs.prepare.outputs.package_version }}",
               "build":          "${{ needs.prepare.outputs.package_version }}",
               "zip_name":       "Face-Local-macOS-sparkle-${{ needs.prepare.outputs.package_version }}.zip",
-              "eddsa_signature": os.environ["SPARKLE_EDDSA_SIG"],
+              "eddsa_signature": "$EDDSA_SIG",
               "min_os_version": "12.0",
               "signed":         True,
           }
