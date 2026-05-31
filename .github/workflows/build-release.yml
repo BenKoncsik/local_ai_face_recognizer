@@ -610,14 +610,14 @@ jobs:
           echo "EdDSA signature: $EDDSA_SIG"
           printf 'SPARKLE_EDDSA_SIG<<%s\n%s\n%s\n' "EOF_SIG" "$EDDSA_SIG" "EOF_SIG" >> "$GITHUB_ENV"
 
-          python3 - <<PY
+          EDDSA_SIG="$EDDSA_SIG" python3 - <<'PY'
           import json, os
           from pathlib import Path
           meta = {
               "version":        "${{ needs.prepare.outputs.package_version }}",
               "build":          "${{ needs.prepare.outputs.package_version }}",
               "zip_name":       "Face-Local-macOS-sparkle-${{ needs.prepare.outputs.package_version }}.zip",
-              "eddsa_signature": "$EDDSA_SIG",
+              "eddsa_signature": os.environ["EDDSA_SIG"],
               "min_os_version": "12.0",
               "signed":         True,
           }
