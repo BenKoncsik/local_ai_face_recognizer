@@ -158,6 +158,51 @@ class TestMatchJobWorker:
         # Whatever got written before the cancel must be internally consistent.
         _assert_consistent()
 
+    def test_scoring_runs_in_parallel(self, qtbot, tmp_db, monkeypatch):
+        """Multiple chunks must be scored concurrently on the pool.
+
+        Guards against regressing to the old submit-then-block pattern, which
+        used the thread pool but only ever ran one chunk at a time.
+        """
+        import time as _time
+
+        from app.services import merge_suggestion_service as mss
+
+        _seed_pairs(8)
+
+        lock = threading.Lock()
+        state = {"active": 0, "peak": 0}
+        real_score = mss.MergeSuggestionService.score_candidates
+
+        def _tracking_score(self, candidates, targets, suppressed):
+            with lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            try:
+                _time.sleep(0.05)  # widen the window so overlap is observable
+                return real_score(self, candidates, targets, suppressed)
+            finally:
+                with lock:
+                    state["active"] -= 1
+
+        monkeypatch.setattr(
+            mss.MergeSuggestionService, "score_candidates", _tracking_score
+        )
+
+        cfg = _config()                 # chunk_size == 1 → 8 chunks
+        cfg.matching.max_workers = 4    # allow up to 4 concurrent scorers
+        cfg.matching.reserved_cpus = 0
+        worker = MatchJobWorker(cfg)
+        worker.enqueue_full_scan()
+        with qtbot.waitSignal(worker.idle, timeout=15000):
+            worker.start()
+        worker.shutdown()
+        worker.wait(5000)
+
+        assert state["peak"] >= 2, (
+            f"scoring did not run in parallel (peak concurrency={state['peak']})"
+        )
+
     def test_scoped_job_runs(self, qtbot, tmp_db):
         _seed_pairs(3)
         with session_scope() as session:

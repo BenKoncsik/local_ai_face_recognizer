@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from app.config import AppConfig, save_db_path
 from app.db.database import ensure_unknown_person, init_db, session_scope
 from app.db.models import Face, Image, Person
+from app.jobs.job_types import JobState
 from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
@@ -56,9 +57,8 @@ from app.ui.panels.locations_panel import LocationsPanel
 from app.ui.panels.log_panel import LogPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
-from app.workers.pipeline_worker import PipelineWorker
 from app.workers.match_job_worker import MatchJobWorker
-from app.jobs.job_types import JobState
+from app.workers.pipeline_worker import PipelineWorker
 
 log = logging.getLogger(__name__)
 
@@ -90,8 +90,17 @@ class MainWindow(QMainWindow):
         self._match_worker: Optional[MatchJobWorker] = None
         self._current_person_id: Optional[int] = None
         self._current_face_id: Optional[int] = None
+        self._recorder = None  # ScreenRecorderService, lazily created on start
+        self._recording_log = None  # RecordingTimelineLog while recording
+        # Active image/person context shown in the image-browser tab (for the
+        # recording timeline log).
+        self._browser_image_name: Optional[str] = None
+        self._browser_person_name: Optional[str] = None
+        self._load_recording_prefs()
         self._pending_suggestion_count: int = 0
         self._open_suggestion_count: int = 0
+        self._match_active: bool = False
+        self._match_paused: bool = False
         self._db_path: str = str(config.db_path_resolved)
         self._pending_release = None
 
@@ -223,6 +232,17 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        from app.ui.widgets.recording_controls import RecordingControls
+        self._recording_controls = RecordingControls()
+        self._recording_controls.start_requested.connect(self._on_record_start)
+        self._recording_controls.pause_toggle_requested.connect(
+            self._on_record_pause_toggle
+        )
+        self._recording_controls.stop_requested.connect(self._on_record_stop)
+        tb.addWidget(self._recording_controls)
+
+        tb.addSeparator()
+
         self._gdrive_btn = QPushButton()
         self._gdrive_btn.clicked.connect(self._on_toggle_drive_project)
         self._gdrive_btn.setVisible(False)  # shown when prefs.is_ready
@@ -286,6 +306,10 @@ class MainWindow(QMainWindow):
         # --- Tab 1: Képböngésző ---
         self._image_browser = ImageBrowserPanel(config=self._config)
         self._image_browser.person_data_changed.connect(self._refresh_persons)
+        self._image_browser.image_displayed.connect(self._on_browser_image_displayed)
+        self._image_browser.active_person_changed.connect(
+            self._on_browser_person_changed
+        )
         self._tabs.addTab(self._image_browser, t("tab_image_browser"))
 
         # --- Tab 2: Családi kereső ---
@@ -396,7 +420,7 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background: #313244; }"
         )
         self._match_chip_btn.setToolTip(t("match_chip_tip"))
-        self._match_chip_btn.clicked.connect(self._on_show_suggestions)
+        self._match_chip_btn.clicked.connect(self._on_match_chip_clicked)
         status.addPermanentWidget(self._match_chip_btn)
 
         self._status_label = QLabel()
@@ -448,18 +472,66 @@ class MainWindow(QMainWindow):
     def _on_match_status(self, status) -> None:
         self._match_chip_btn.setVisible(True)
         if status.state == JobState.RUNNING:
+            self._match_active = True
+            # A fresh RUNNING update means the worker is making progress, so it
+            # is no longer paused even if the user toggled pause earlier.
+            self._match_paused = False
             self._match_chip_btn.setText(
                 t("match_chip_running", label=status.label,
+                  processed=status.processed, total=status.total,
                   pct=status.percent(), found=status.found)
             )
         elif status.state == JobState.PAUSED:
+            self._match_paused = True
             self._match_chip_btn.setText(t("match_chip_paused"))
         elif status.state == JobState.FAILED:
+            self._match_active = False
+            self._match_paused = False
             self._match_chip_btn.setText(t("match_chip_failed"))
         elif status.state == JobState.CANCELLED:
+            self._match_active = False
+            self._match_paused = False
             self._match_chip_btn.setText(t("match_chip_cancelled"))
         elif status.state == JobState.DONE:
+            self._match_active = False
+            self._match_paused = False
             self._refresh_match_chip()
+
+    @Slot()
+    def _on_match_chip_clicked(self) -> None:
+        """When a job is active show pause/resume/cancel; else open suggestions."""
+        if not self._match_active:
+            self._on_show_suggestions()
+            return
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        if self._match_paused:
+            menu.addAction(t("match_menu_resume"), self._on_match_resume)
+        else:
+            menu.addAction(t("match_menu_pause"), self._on_match_pause)
+        menu.addAction(t("match_menu_cancel"), self._on_match_cancel)
+        menu.addSeparator()
+        menu.addAction(t("match_menu_review"), self._on_show_suggestions)
+        menu.exec(self._match_chip_btn.mapToGlobal(
+            self._match_chip_btn.rect().topLeft()
+        ))
+
+    def _on_match_pause(self) -> None:
+        if self._match_worker is not None:
+            self._match_worker.pause()
+            self._match_paused = True
+            self._match_chip_btn.setText(t("match_chip_paused"))
+
+    def _on_match_resume(self) -> None:
+        if self._match_worker is not None:
+            self._match_worker.resume()
+            self._match_paused = False
+
+    def _on_match_cancel(self) -> None:
+        if self._match_worker is not None:
+            self._match_worker.cancel_current()
+            self._match_active = False
+            self._match_paused = False
 
     @Slot(int)
     def _on_match_suggestions_found(self, open_count: int) -> None:
@@ -480,7 +552,10 @@ class MainWindow(QMainWindow):
         """Graceful stop of the background worker (no half-written state)."""
         if self._match_worker is not None:
             self._match_worker.shutdown()
-            self._match_worker.wait(3000)
+            if not self._match_worker.wait(10_000):
+                log.warning("MatchJobWorker did not stop within 10 s — terminating")
+                self._match_worker.terminate()
+                self._match_worker.wait(3_000)
             self._match_worker = None
 
     # ------------------------------------------------------------------
@@ -499,6 +574,8 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._settings_btn.setText(t("settings"))
+        if hasattr(self, "_recording_controls"):
+            self._recording_controls.retranslate()
         self._update_gdrive_toolbar_btn()
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
@@ -1334,6 +1411,226 @@ class MainWindow(QMainWindow):
             self._retranslate()
             self._refresh_persons()
 
+        # Pick up any recording-setting changes for the next recording.
+        self._load_recording_prefs()
+
+    # ------------------------------------------------------------------
+    # Screen recording
+    # ------------------------------------------------------------------
+
+    def _on_record_start(self) -> None:
+        from app.services.screen_recorder_service import (
+            CaptureDevices,
+            RecorderState,
+            RecordingOptions,
+            ScreenRecorderService,
+            probe_devices,
+            resolve_ffmpeg,
+        )
+
+        rec_cfg = self._config.recording
+        ffmpeg = resolve_ffmpeg(rec_cfg.ffmpeg_path)
+        if not ffmpeg:
+            QMessageBox.warning(
+                self, t("rec_ffmpeg_missing_title"), t("rec_ffmpeg_missing_body")
+            )
+            return
+
+        # Pick output folder — default to the last-used / configured dir.
+        start_dir = rec_cfg.output_dir or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self, t("rec_choose_dir"), start_dir
+        )
+        if not chosen:
+            return
+        # Remember the choice (config + persisted settings).
+        rec_cfg.output_dir = chosen
+        self._save_recording_output_dir(chosen)
+
+        from datetime import datetime
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_dir = Path(chosen) / f"recording_{stamp}"
+
+        devices: CaptureDevices = probe_devices(
+            ffmpeg, want_system_audio=rec_cfg.capture_system_audio
+        )
+        if not rec_cfg.capture_microphone:
+            devices.microphone = None
+        options = RecordingOptions(
+            fps=rec_cfg.fps,
+            quality=rec_cfg.quality,
+            segment_seconds=rec_cfg.segment_seconds,
+            capture_cursor=rec_cfg.capture_cursor,
+        )
+
+        self._recorder = ScreenRecorderService(ffmpeg, parent=self)
+        self._recorder.state_changed.connect(self._on_recorder_state)
+        self._recorder.elapsed_changed.connect(self._on_recorder_elapsed)
+        self._recorder.error.connect(self._on_recorder_error)
+
+        from app.services.recording_timeline_log import RecordingTimelineLog
+        session_dir.mkdir(parents=True, exist_ok=True)
+        self._recording_log = RecordingTimelineLog(
+            session_dir / "timeline.txt",
+            person_prefix=t("rec_person_prefix"),
+            none_placeholder=t("rec_none_placeholder"),
+        )
+
+        self._recorder.start(
+            session_dir, devices, options, concat_on_stop=rec_cfg.concat_on_stop
+        )
+        if self._recorder.state is RecorderState.RECORDING:
+            self._notify_recording_context()
+
+    def _on_record_pause_toggle(self) -> None:
+        from app.services.screen_recorder_service import RecorderState
+        if self._recorder is None:
+            return
+        if self._recorder.state is RecorderState.RECORDING:
+            self._recorder.pause()
+        elif self._recorder.state is RecorderState.PAUSED:
+            self._recorder.resume()
+            self._notify_recording_context()
+
+    def _on_record_stop(self) -> None:
+        if self._recorder is None:
+            return
+        elapsed = self._recorder.elapsed_seconds
+        final = self._recorder.stop()
+        if self._recording_log is not None:
+            self._recording_log.finalize(elapsed)
+            self._recording_log = None
+        out_dir = self._recorder.output_dir
+        self._recorder = None
+        target = final or out_dir
+        if target is not None:
+            QMessageBox.information(
+                self, t("rec_saved_title"), t("rec_saved_body", path=str(target))
+            )
+
+    def _on_recorder_state(self, state) -> None:
+        self._recording_controls.set_state(state)
+
+    def _on_recorder_elapsed(self, seconds: int) -> None:
+        self._recording_controls.set_elapsed(seconds)
+
+    def _on_recorder_error(self, message: str) -> None:
+        QMessageBox.critical(self, t("rec_error_title"), message)
+        if self._recording_log is not None and self._recorder is not None:
+            self._recording_log.finalize(self._recorder.elapsed_seconds)
+        self._recording_log = None
+
+    def _notify_recording_context(
+        self,
+        image_name: Optional[str] = None,
+        track_person: bool = True,
+    ) -> None:
+        """Record which image/person is active in the timeline log.
+
+        When *image_name* is given it is used directly (e.g. from the image
+        browser); otherwise the face-tab preview's current image is resolved.
+        *track_person* controls whether the selected person is logged.
+        """
+        from app.services.screen_recorder_service import RecorderState
+        if self._recording_log is None or self._recorder is None:
+            return
+        if self._recorder.state not in (
+            RecorderState.RECORDING,
+            RecorderState.PAUSED,
+        ):
+            return
+        person_name: Optional[str] = None
+        image_id = (
+            None if image_name is not None else self._preview_panel.current_image_id
+        )
+        try:
+            with session_scope() as session:
+                if image_id is not None:
+                    img = session.get(Image, image_id)
+                    if img is not None:
+                        image_name = Path(img.file_path).name
+                if track_person and self._current_person_id is not None:
+                    p = session.get(Person, self._current_person_id)
+                    if p is not None:
+                        person_name = p.name
+        except Exception:  # noqa: BLE001 — logging must never break the UI
+            log.debug("recording context lookup failed", exc_info=True)
+        self._recording_log.note_active(
+            image_name, person_name, self._recorder.elapsed_seconds
+        )
+
+    @Slot(int, str)
+    def _on_browser_image_displayed(self, _image_id: int, file_path: str) -> None:
+        """Image-browser tab opened an image — update the recording timeline.
+
+        A new image clears any face selection (see ``_load_image``), so the
+        active person resets to ``None`` until the user clicks a face.
+        """
+        self._browser_image_name = Path(file_path).name
+        self._browser_person_name = None
+        self._notify_browser_context()
+
+    @Slot(object)
+    def _on_browser_person_changed(self, person_name) -> None:
+        """A face was selected / (re)assigned in the image-browser tab."""
+        self._browser_person_name = person_name or None
+        self._notify_browser_context()
+
+    def _notify_browser_context(self) -> None:
+        """Push the image-browser tab's active image + person to the log."""
+        if self._recording_log is None or self._recorder is None:
+            return
+        from app.services.screen_recorder_service import RecorderState
+        if self._recorder.state not in (
+            RecorderState.RECORDING,
+            RecorderState.PAUSED,
+        ):
+            return
+        self._recording_log.note_active(
+            self._browser_image_name,
+            self._browser_person_name,
+            self._recorder.elapsed_seconds,
+        )
+
+    def _save_recording_output_dir(self, path: str) -> None:
+        try:
+            from app.app_settings import app_qsettings
+            app_qsettings().setValue("recording/output_dir", path)
+        except Exception:  # noqa: BLE001
+            log.debug("could not persist recording output dir", exc_info=True)
+
+    def _load_recording_prefs(self) -> None:
+        """Overlay persisted recording settings (QSettings) onto the config."""
+        try:
+            from app.app_settings import app_qsettings
+            qs = app_qsettings()
+            rec = self._config.recording
+            saved_dir = qs.value("recording/output_dir", None, type=str)
+            if saved_dir:
+                rec.output_dir = saved_dir
+            ffmpeg_path = qs.value("recording/ffmpeg_path", None, type=str)
+            if ffmpeg_path:
+                rec.ffmpeg_path = ffmpeg_path
+            rec.quality = qs.value("recording/quality", rec.quality, type=str)
+            rec.fps = qs.value("recording/fps", rec.fps, type=int)
+            rec.segment_seconds = qs.value(
+                "recording/segment_seconds", rec.segment_seconds, type=int
+            )
+            rec.capture_cursor = qs.value(
+                "recording/capture_cursor", rec.capture_cursor, type=bool
+            )
+            rec.capture_microphone = qs.value(
+                "recording/capture_microphone", rec.capture_microphone, type=bool
+            )
+            rec.capture_system_audio = qs.value(
+                "recording/capture_system_audio", rec.capture_system_audio, type=bool
+            )
+            rec.concat_on_stop = qs.value(
+                "recording/concat_on_stop", rec.concat_on_stop, type=bool
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("could not load recording prefs", exc_info=True)
+
     # ------------------------------------------------------------------
     # Pipeline slots
     # ------------------------------------------------------------------
@@ -1418,6 +1715,7 @@ class MainWindow(QMainWindow):
 
         # Prioritise matching the currently viewed (unknown) person.
         self._enqueue_scoped_match([person_id])
+        self._notify_recording_context()
 
     @Slot(int)
     def _on_face_selected(self, face_id: int) -> None:
@@ -1427,6 +1725,7 @@ class MainWindow(QMainWindow):
 
         self._remove_face_btn.setEnabled(True)
         self._reassign_btn.setEnabled(True)
+        self._notify_recording_context()
 
     def _show_face_in_preview(self, face_id: int) -> None:
         """Reload the preview image and select *face_id*."""
@@ -1468,6 +1767,7 @@ class MainWindow(QMainWindow):
 
         self._remove_face_btn.setEnabled(True)
         self._reassign_btn.setEnabled(True)
+        self._notify_recording_context()
 
     @Slot(int)
     def _on_preview_face_assign(self, face_id: int) -> None:
@@ -2177,6 +2477,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         """Intercept close to shut down an open Drive session gracefully."""
+        # Finalize any in-progress recording so segments + timeline are saved.
+        if self._recorder is not None:
+            from app.services.screen_recorder_service import RecorderState
+            if self._recorder.state in (
+                RecorderState.RECORDING,
+                RecorderState.PAUSED,
+            ):
+                self._on_record_stop()
         if self._gdrive_session is not None and not self._gdrive_closing:
             # Don't actually close yet — let the Drive thread finish, then quit.
             event.ignore()

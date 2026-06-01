@@ -297,6 +297,36 @@ class ScanConfig:
 
 
 @dataclass
+class RecordingConfig:
+    """Screen-recording (documentation capture) parameters.
+
+    The recorder shells out to the system ``ffmpeg`` binary.  Audio capture
+    always includes the microphone; system/speaker audio is best-effort and
+    only used when a virtual loopback device is auto-detected (macOS: BlackHole
+    / Loopback, Windows: a WASAPI ``virtual-audio-capturer``).
+    """
+
+    # Last-used / configured output directory.  ``None`` → ask on first start.
+    output_dir: Optional[str] = None
+    # Capture frame rate (documentation quality; 15–20 recommended).
+    fps: int = 18
+    # Quality preset: ``"low"`` | ``"normal"`` | ``"better"``.
+    quality: str = "normal"
+    # Length of each on-disk segment in seconds (crash-protection granularity).
+    segment_seconds: int = 8
+    # Draw the mouse cursor into the recording.
+    capture_cursor: bool = True
+    # Record the microphone (mandatory by design — kept as a flag for clarity).
+    capture_microphone: bool = True
+    # Best-effort system/speaker audio (needs a virtual loopback device).
+    capture_system_audio: bool = True
+    # Explicit ffmpeg path; ``None`` → resolve from PATH.
+    ffmpeg_path: Optional[str] = None
+    # Concatenate the segments into a single final mp4 when recording stops.
+    concat_on_stop: bool = True
+
+
+@dataclass
 class AppConfig:
     """Top-level application configuration."""
 
@@ -312,6 +342,7 @@ class AppConfig:
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
+    recording: RecordingConfig = field(default_factory=RecordingConfig)
 
     # Base directory used to resolve relative paths in sub-configs.
     # Defaults to the current working directory.
@@ -550,6 +581,29 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             worker_threads=sc.get("worker_threads", cfg.scan.worker_threads),
             thumbnail_size=tuple(
                 sc.get("thumbnail_size", list(cfg.scan.thumbnail_size))
+            ),
+        )
+
+        rec = raw.get("recording", {})
+        cfg.recording = RecordingConfig(
+            output_dir=rec.get("output_dir", cfg.recording.output_dir),
+            fps=rec.get("fps", cfg.recording.fps),
+            quality=rec.get("quality", cfg.recording.quality),
+            segment_seconds=rec.get(
+                "segment_seconds", cfg.recording.segment_seconds
+            ),
+            capture_cursor=rec.get(
+                "capture_cursor", cfg.recording.capture_cursor
+            ),
+            capture_microphone=rec.get(
+                "capture_microphone", cfg.recording.capture_microphone
+            ),
+            capture_system_audio=rec.get(
+                "capture_system_audio", cfg.recording.capture_system_audio
+            ),
+            ffmpeg_path=rec.get("ffmpeg_path", cfg.recording.ffmpeg_path),
+            concat_on_stop=rec.get(
+                "concat_on_stop", cfg.recording.concat_on_stop
             ),
         )
 

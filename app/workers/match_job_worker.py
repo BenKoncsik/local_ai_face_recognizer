@@ -28,7 +28,7 @@ import os
 import queue
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import List, Optional, Sequence
 
@@ -46,7 +46,7 @@ from app.jobs.job_types import (
     JobStatus,
 )
 from app.services.merge_suggestion_service import (
-    MergeProfile,
+    MergeCandidateResult,
     MergeSuggestionService,
 )
 
@@ -161,7 +161,13 @@ class MatchJobWorker(QThread):
                 if self._queue.empty():
                     self.idle.emit()
         finally:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+            # Don't block the QThread waiting for pool futures — the scoring
+            # work is pure computation with no DB side effects, so it's safe to
+            # abandon in-flight futures.  Python's ThreadPoolExecutor atexit
+            # handler will join the pool threads cleanly after this QThread has
+            # already exited, which avoids the QThread::~QThread abort that
+            # occurs when the destructor fires while the thread is still alive.
+            self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
             log.info("MatchJobWorker stopped")
 
@@ -193,6 +199,11 @@ class MatchJobWorker(QThread):
 
     def _run_job(self, job: JobSpec, token: CancellationToken) -> None:
         started_at = _utcnow_naive()
+        t0 = time.monotonic()
+        log.info(
+            "Job %s started (kind=%s, priority=%s, label=%r)",
+            job.job_id, job.kind, job.priority.name, job.label,
+        )
         self._emit_status(job, JobState.RUNNING, force=True)
 
         # --- Load profiles + suppressed pairs once (read-only snapshot) ---
@@ -220,56 +231,65 @@ class MatchJobWorker(QThread):
         chunks = [
             candidates[i : i + chunk_size] for i in range(0, total, chunk_size)
         ]
+        # Number of chunks scored concurrently on the pool.  score_candidates
+        # is pure and its matmul releases the GIL, so this gives real parallel
+        # speedup; DB writes stay serialised on this (the job) thread.
+        max_inflight = max(1, self._worker_count())
+        assert self._executor is not None
+        scorer = MergeSuggestionService(None, self._mcfg)  # type: ignore[arg-type]
 
-        for chunk in chunks:
+        i = 0
+        n_chunks = len(chunks)
+        while i < n_chunks:
             token.wait_if_paused()
             token.raise_if_cancelled()
 
-            # Let queued scoped jobs preempt a long full scan at chunk edges.
+            # Let queued scoped jobs preempt a long full scan between waves
+            # (no full-scan futures are in flight at this point).
             if job.kind == JOB_KIND_FULL:
                 self._run_pending_scoped()
 
-            found = self._process_chunk(
-                chunk, targets, suppressed, job.job_id, started_at, token
-            )
-            status.processed += len(chunk)
-            status.found += found
-            self._emit_status_obj(status)
+            wave = chunks[i : i + max_inflight]
+            i += len(wave)
+
+            # Fan the wave out across the pool, then persist results serially
+            # as they complete (keeps SQLite writes single-threaded).
+            futures = {
+                self._executor.submit(
+                    scorer.score_candidates, chunk, targets, suppressed
+                ): chunk
+                for chunk in wave
+            }
+            for future in as_completed(futures):
+                chunk = futures[future]
+                results = future.result()
+                token.raise_if_cancelled()
+                written = self._persist_results(results, job.job_id, started_at)
+                status.processed += len(chunk)
+                status.found += written
+                self._emit_status_obj(status)
 
         self._emit_status_obj(status, state=JobState.DONE, force=True)
         log.info(
-            "Job %s done: %d candidate(s), %d suggestion(s) written",
-            job.job_id, status.processed, status.found,
+            "Job %s done in %.2fs: %d candidate(s) scored, %d suggestion(s) written "
+            "(%d-way parallel scoring)",
+            job.job_id, time.monotonic() - t0, status.processed, status.found,
+            max_inflight,
         )
 
-    def _process_chunk(
+    def _persist_results(
         self,
-        chunk: List[MergeProfile],
-        targets: List[MergeProfile],
-        suppressed,
+        results: List[MergeCandidateResult],
         job_id: str,
         started_at: datetime,
-        token: CancellationToken,
     ) -> int:
-        """Score one chunk on the pool, then persist serialised on this thread."""
-        assert self._executor is not None
-        future = self._executor.submit(
-            MergeSuggestionService(None, self._mcfg).score_candidates,  # type: ignore[arg-type]
-            chunk,
-            targets,
-            suppressed,
-        )
-        # score_candidates is pure (no DB); a None session is never touched.
-        results = future.result()
-        token.raise_if_cancelled()
+        """Persist scored results serialised on the job thread."""
         if not results:
             return 0
-
         with session_scope() as session:
-            written = MergeSuggestionService(session, self._mcfg).persist_results(
-                results, job_id, started_at
-            )
-            open_count = MergeSuggestionService(session, self._mcfg).count_open()
+            svc = MergeSuggestionService(session, self._mcfg)
+            written = svc.persist_results(results, job_id, started_at)
+            open_count = svc.count_open() if written else 0
         if written:
             self.suggestions_found.emit(open_count)
         return written

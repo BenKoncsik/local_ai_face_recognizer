@@ -196,3 +196,39 @@ scan:
 
   # Size (width, height) of saved face crop thumbnails
   thumbnail_size: [128, 128]
+
+recording:
+  # Built-in screen recorder (for documenting meetings / image walk-throughs).
+  # Shells out to the system `ffmpeg` binary.  Most of these are also editable
+  # in the UI under Settings → Recording (which persists to QSettings and
+  # overrides the values here at runtime).
+
+  # Default output folder.  null → ask on first recording, then remembered.
+  output_dir: null
+
+  # Capture frame rate (documentation quality; 15–20 recommended).
+  fps: 18
+
+  # Quality preset: low | normal | better  (lower = smaller file).
+  quality: normal
+
+  # Length of each on-disk segment in seconds.  Shorter = less data lost on a
+  # crash, but more files to concatenate at the end.
+  segment_seconds: 8
+
+  # Draw the mouse cursor into the recording.
+  capture_cursor: true
+
+  # Record the microphone.
+  capture_microphone: true
+
+  # Best-effort system/speaker audio.  Requires a virtual loopback device
+  # (macOS: BlackHole/Loopback, Windows: a WASAPI virtual-audio-capturer).
+  # Silently skipped when no such device is detected.
+  capture_system_audio: true
+
+  # Explicit ffmpeg path; null → resolve from PATH.
+  ffmpeg_path: null
+
+  # Concatenate the segments into a single recording.mp4 when stopping.
+  concat_on_stop: true
