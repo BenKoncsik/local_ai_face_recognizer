@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -34,6 +33,7 @@ class ScanModesDialog(QDialog):
         on_full_rescan: Callable[[], None],
         on_face_rescan_fast: Callable[[], None],
         on_face_rescan_accurate: Callable[[], None],
+        on_reset_unknown_persons: Callable[[], None],
         on_find_overlapping_unknown_faces: Callable[[], None],
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
@@ -43,6 +43,7 @@ class ScanModesDialog(QDialog):
         self._on_full_rescan = on_full_rescan
         self._on_face_rescan_fast = on_face_rescan_fast
         self._on_face_rescan_accurate = on_face_rescan_accurate
+        self._on_reset_unknown_persons = on_reset_unknown_persons
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
         self._on_identity_repair_scan = on_identity_repair_scan
 
@@ -92,6 +93,14 @@ class ScanModesDialog(QDialog):
             button_label=t("scanModes.preciseRescan.startButton"),
             warning=t("scanModes.preciseRescan.warning"),
             callback=self._launch_face_rescan_accurate,
+            danger=False,
+        ))
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.resetUnknowns.title"),
+            description=t("scanModes.resetUnknowns.description"),
+            button_label=t("scanModes.resetUnknowns.startButton"),
+            warning=t("scanModes.resetUnknowns.warning"),
+            callback=self._launch_reset_unknown_persons,
             danger=False,
         ))
         cards_layout.addWidget(self._make_card(
@@ -214,6 +223,10 @@ class ScanModesDialog(QDialog):
     def _launch_overlapping_unknown_cleanup(self) -> None:
         self.accept()
         self._on_find_overlapping_unknown_faces()
+
+    def _launch_reset_unknown_persons(self) -> None:
+        self.accept()
+        self._on_reset_unknown_persons()
 
     def _launch_identity_repair_scan(self) -> None:
         self.accept()

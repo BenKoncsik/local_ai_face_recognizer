@@ -820,11 +820,69 @@ class MainWindow(QMainWindow):
             on_full_rescan=self._on_force_rescan,
             on_face_rescan_fast=self._on_redetect_fast,
             on_face_rescan_accurate=self._on_redetect_accurate,
+            on_reset_unknown_persons=self._on_reset_unknown_persons,
             on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
             on_identity_repair_scan=self._on_identity_repair_scan,
             parent=self,
         )
         dlg.exec()
+
+    @Slot()
+    def _on_reset_unknown_persons(self) -> None:
+        from app.gdrive import preferences as _gprefs
+
+        prefs = _gprefs.load()
+        if prefs.enabled and self._gdrive_session is None:
+            QMessageBox.information(
+                self, t("gdrive_chip_opening"), t("gdrive_scan_no_session")
+            )
+            return
+        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
+            QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
+            return
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("reset_unknowns_title"),
+            t("reset_unknowns_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Stop matching first: its queued jobs may still hold snapshots of the
+        # Unknown persons that are about to be deleted.
+        self._shutdown_match_worker()
+        try:
+            with session_scope() as session:
+                from app.services.unknown_person_reset_service import UnknownPersonResetService
+
+                result = UnknownPersonResetService(session).reset()
+        finally:
+            self._start_match_worker()
+
+        self._current_person_id = None
+        self._current_face_id = None
+        self._cluster_panel.clear()
+        self._preview_panel.clear()
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+        log.info(
+            "Unknown identity reset: deleted %d person(s), unassigned %d face(s).",
+            result.deleted_persons,
+            result.unassigned_faces,
+        )
+        self._status_label.setText(
+            t(
+                "reset_unknowns_status",
+                persons=result.deleted_persons,
+                faces=result.unassigned_faces,
+            )
+        )
+        self._start_pipeline(high_accuracy=False)
 
     @Slot()
     def _on_scan(self) -> None:

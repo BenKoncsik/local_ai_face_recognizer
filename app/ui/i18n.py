@@ -1037,6 +1037,38 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Slow — may take several minutes on large libraries",
          "hu": "Lassú — nagy képkönyvtárnál több percig tarthat"},
 
+    # reset automatically created Unknown identities
+    "scanModes.resetUnknowns.title":
+        {"en": "Rebuild Unknown Identities",
+         "hu": "Unknown személyek újraépítése"},
+    "scanModes.resetUnknowns.description":
+        {"en": "Deletes every automatically created 'Unknown N' person and makes their faces "
+               "unassigned again. Face boxes and embeddings are preserved. The recognition "
+               "pipeline then runs again, using your named people as training examples, and "
+               "rebuilds the remaining Unknown clusters from scratch.",
+         "hu": "Törli az összes automatikusan létrehozott „Unknown N” személyt, és az arcaikat "
+               "újra hozzárendeletlen állapotba teszi. Az arckeretek és embeddingek megmaradnak. "
+               "Ezután újra lefut a felismerési folyamat az elnevezett személyek tanítási "
+               "mintáival, majd a fennmaradó Unknown klaszterek tisztán újraépülnek."},
+    "scanModes.resetUnknowns.startButton":
+        {"en": "Rebuild Unknown Identities",
+         "hu": "Unknown személyek újraépítése"},
+    "scanModes.resetUnknowns.warning":
+        {"en": "Auto-created Unknown groups will be deleted and rebuilt",
+         "hu": "Az automatikus Unknown csoportok törlődnek és újraépülnek"},
+    "reset_unknowns_title":
+        {"en": "Rebuild Unknown Identities",
+         "hu": "Unknown személyek újraépítése"},
+    "reset_unknowns_msg":
+        {"en": "Delete every automatically created 'Unknown N' person and run recognition again?\n\n"
+               "Named people, face boxes and embeddings will be preserved.",
+         "hu": "Törli az összes automatikusan létrehozott „Unknown N” személyt, majd újra "
+               "futtatja a felismerést?\n\n"
+               "Az elnevezett személyek, arckeretek és embeddingek megmaradnak."},
+    "reset_unknowns_status":
+        {"en": "Rebuilding Unknown identities: {persons} person(s) deleted, {faces} face(s) reset",
+         "hu": "Unknown személyek újraépítése: {persons} személy törölve, {faces} arc alaphelyzetbe állítva"},
+
     # overlapping question-mark cleanup
     "scanModes.overlapCleanup.title":
         {"en": "Find Overlapping ? Boxes",
