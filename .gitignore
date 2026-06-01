@@ -552,3 +552,5 @@ playground.xcworkspace
 .vscode
 data
 github-actions-org-runner-selection-spec.md alias
+docs/wiki/local_ai_face_recognizer.wiki/
+.claude
