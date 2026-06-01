@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import MatchingConfig
 from app.db.models import (
@@ -156,12 +156,21 @@ class MergeSuggestionService:
     # Profile loading (read-only)
     # ------------------------------------------------------------------
 
+    # Eager-load faces (and each face's image) in a couple of batched queries
+    # instead of lazy-loading them one person/face at a time — profile building
+    # is otherwise O(persons) round-trips (a classic N+1) that dominates the
+    # job time on large libraries.
+    _PROFILE_LOAD_OPTS = (
+        selectinload(Person.faces).selectinload(Face.image),
+    )
+
     def load_targets(self) -> List[MergeProfile]:
         """Profiles for every manually-named, non-protected person."""
         persons = (
             self._session.query(Person)
             .filter(Person.is_auto_named == False)  # noqa: E712
             .filter(Person.is_protected == False)  # noqa: E712
+            .options(*self._PROFILE_LOAD_OPTS)
             .all()
         )
         return self._profiles_for(persons)
@@ -178,21 +187,28 @@ class MergeSuggestionService:
             if not ids:
                 return []
             query = query.filter(Person.id.in_(ids))
-        return self._profiles_for(query.all())
+        return self._profiles_for(query.options(*self._PROFILE_LOAD_OPTS).all())
 
     def _profiles_for(self, persons: List[Person]) -> List[MergeProfile]:
         profiles: List[MergeProfile] = []
         for person in persons:
-            usable = [
-                f
-                for f in person.faces
-                if not f.is_excluded
-                and f.get_embedding() is not None
-                and not (self._exclude_low_quality and f.is_low_quality)
-            ]
+            # Deserialise each embedding exactly once (it is a blob decode +
+            # copy), keeping it alongside its face so the centroid reuses it.
+            usable: List[Face] = []
+            embeddings: List[np.ndarray] = []
+            for f in person.faces:
+                if f.is_excluded:
+                    continue
+                if self._exclude_low_quality and f.is_low_quality:
+                    continue
+                emb = f.get_embedding()
+                if emb is None:
+                    continue
+                usable.append(f)
+                embeddings.append(emb)
             if not usable:
                 continue
-            centroid = self._centroid([f.get_embedding() for f in usable])
+            centroid = self._centroid(embeddings)
             rep = self._pick_representative(person, usable)
             rep_bbox = (rep.bbox_x, rep.bbox_y, rep.bbox_w, rep.bbox_h)
             profiles.append(
@@ -410,6 +426,18 @@ class MergeSuggestionService:
             .all()
         }
 
+        # Pre-load existing suggestions for every pair in this batch in one
+        # query (avoids a per-result SELECT — an N+1 over the result set).
+        existing_by_pair: Dict[Tuple[int, int], MergeSuggestion] = {
+            (s.source_person_id, s.target_person_id): s
+            for s in self._session.query(MergeSuggestion)
+            .filter(
+                MergeSuggestion.source_person_id.in_(person_ids),
+                MergeSuggestion.target_person_id.in_(person_ids),
+            )
+            .all()
+        }
+
         n_written = 0
         try:
             for r in results:
@@ -432,14 +460,7 @@ class MergeSuggestionService:
                 src_id, dst_id = self._normalise_pair(
                     r.candidate_person_id, r.target_person_id
                 )
-                existing = (
-                    self._session.query(MergeSuggestion)
-                    .filter(
-                        MergeSuggestion.source_person_id == src_id,
-                        MergeSuggestion.target_person_id == dst_id,
-                    )
-                    .first()
-                )
+                existing = existing_by_pair.get((src_id, dst_id))
                 if existing is not None:
                     # Never resurrect a decided pair; just refresh open ones.
                     if existing.status not in MERGE_OPEN_STATUSES:
@@ -450,17 +471,19 @@ class MergeSuggestionService:
                     existing.status = MERGE_STATUS_PENDING
                     existing.job_id = job_id
                 else:
-                    self._session.add(
-                        MergeSuggestion(
-                            source_person_id=src_id,
-                            target_person_id=dst_id,
-                            confidence=r.confidence,
-                            face_similarity=r.face_similarity,
-                            name_similarity=r.name_similarity,
-                            status=MERGE_STATUS_PENDING,
-                            job_id=job_id,
-                        )
+                    new_row = MergeSuggestion(
+                        source_person_id=src_id,
+                        target_person_id=dst_id,
+                        confidence=r.confidence,
+                        face_similarity=r.face_similarity,
+                        name_similarity=r.name_similarity,
+                        status=MERGE_STATUS_PENDING,
+                        job_id=job_id,
                     )
+                    self._session.add(new_row)
+                    # Guard against a repeated pair within this same batch
+                    # inserting a duplicate row.
+                    existing_by_pair[(src_id, dst_id)] = new_row
                 n_written += 1
             self._session.commit()
         except Exception:

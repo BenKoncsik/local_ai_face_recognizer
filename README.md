@@ -14,8 +14,24 @@ Scans a folder tree of images, detects faces, groups identical people into clust
 4. **Cluster** — groups faces by cosine similarity using DBSCAN.
 5. **Label** — PySide6 GUI lets you rename clusters, merge wrong splits, reassign individual faces, and mark same/different pairs.
 6. **Export** — CSV, JSON reports, or copy face images to a folder.
+7. **Record** — a built-in screen recorder (toolbar ● / ⏸ / ■) captures the app
+   window, cursor and microphone for documenting meetings or image
+   walk-throughs, alongside a `timeline.txt` "subtitle" log of which image and
+   selected person was active at each moment.
 
 Everything is persisted in a local SQLite database. No network calls are made.
+
+### Screen recording
+
+The recorder shells out to the system **`ffmpeg`** binary (install via
+`brew install ffmpeg` on macOS, or set the path in **Settings → Recording**).
+Output is written as short, independently playable MP4 **segments** (default
+8 s) so an interrupted recording still leaves a usable file; the segments are
+concatenated into `recording.mp4` when you stop. The microphone is always
+captured. **System/speaker audio** is best-effort and only included when a
+virtual loopback device is present — macOS needs
+[BlackHole](https://github.com/ExistentialAudio/BlackHole) or Loopback,
+Windows a WASAPI `virtual-audio-capturer`; otherwise it is silently skipped.
 
 ---
 

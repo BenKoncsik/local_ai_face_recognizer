@@ -195,14 +195,13 @@ class _SuggestionRow(QFrame):
     """One suggestion: unknown face → suggested named face, with actions.
 
     Signals (all carry the persisted ``suggestion_id``):
-        approved / rejected / deferred / dismissed: ``(suggestion_id: int)``
+        approved / rejected / deferred: ``(suggestion_id: int)``
         focused: emitted when any part of this row is interacted with
     """
 
     approved  = Signal(int)
     rejected  = Signal(int)
     deferred  = Signal(int)
-    dismissed = Signal(int)
     focused   = Signal()
 
     def __init__(
@@ -293,11 +292,6 @@ class _SuggestionRow(QFrame):
         defer_btn.clicked.connect(self._trigger_defer)
         main_row.addWidget(defer_btn)
 
-        dismiss_btn = QPushButton(t("suggestions_dismiss"))
-        dismiss_btn.setStyleSheet("QPushButton { color: #aa6688; }")
-        dismiss_btn.clicked.connect(self._trigger_dismiss)
-        main_row.addWidget(dismiss_btn)
-
         root.addLayout(main_row)
 
     # ------------------------------------------------------------------
@@ -364,17 +358,9 @@ class _SuggestionRow(QFrame):
         self.focused.emit()
         self.deferred.emit(self._sid)
 
-    def _trigger_dismiss(self) -> None:
-        self.focused.emit()
-        self.dismissed.emit(self._sid)
-
     def trigger_defer(self) -> None:
         """Programmatic defer (e.g. from keyboard shortcut)."""
         self._trigger_defer()
-
-    def trigger_dismiss(self) -> None:
-        """Programmatic dismiss (e.g. from keyboard shortcut)."""
-        self._trigger_dismiss()
 
     def _trigger_compare(self) -> None:
         self.focused.emit()
@@ -562,7 +548,6 @@ class SuggestionDialog(QDialog):
             row.approved.connect(self._on_approve)
             row.rejected.connect(self._on_reject)
             row.deferred.connect(self._on_defer)
-            row.dismissed.connect(self._on_dismiss)
             row.focused.connect(lambda idx=i: self._set_focus(idx))
             self._rows.append(row)
             self._list_layout.insertWidget(self._list_layout.count() - 1, row)
@@ -609,9 +594,6 @@ class SuggestionDialog(QDialog):
             event.accept()
         elif key == Qt.Key_L:
             focused.trigger_defer()
-            event.accept()
-        elif key == Qt.Key_X:
-            focused.trigger_dismiss()
             event.accept()
         elif key == Qt.Key_Space:
             focused.trigger_compare()
@@ -669,23 +651,6 @@ class SuggestionDialog(QDialog):
     def _on_defer(self, suggestion_id: int) -> None:
         if self._run_decision(lambda svc: svc.defer(suggestion_id), "defer"):
             log.info("Merge suggestion %d deferred", suggestion_id)
-            self._reload()
-
-    @Slot(int)
-    def _on_dismiss(self, suggestion_id: int) -> None:
-        s = self._display_for(suggestion_id)
-        if s is not None:
-            reply = QMessageBox.question(
-                self,
-                t("suggestions_dismiss"),
-                t("suggestions_dismiss_confirm",
-                  cand=s.candidate_name, target=s.target_name),
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
-        if self._run_decision(lambda svc: svc.dismiss(suggestion_id), "dismiss"):
-            log.info("Merge suggestion %d dismissed", suggestion_id)
             self._reload()
 
     def _run_decision(self, action, label: str) -> bool:

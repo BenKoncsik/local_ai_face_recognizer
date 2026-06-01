@@ -1009,6 +1009,11 @@ class ImageBrowserPanel(QWidget):
     """Finder-style image browser: folder/image tree | image preview."""
 
     person_data_changed = Signal()
+    # Emitted with (image_id, file_path) whenever a new image is displayed.
+    image_displayed = Signal(int, str)
+    # Emitted with the selected face's person name (str) or None whenever the
+    # active face selection / assignment changes — drives the recording log.
+    active_person_changed = Signal(object)
 
     def __init__(self, config=None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -2368,6 +2373,7 @@ class ImageBrowserPanel(QWidget):
                 _ = f.person
             self._current_image_id = image_id
             self._current_path = img.file_path
+            self.image_displayed.emit(image_id, img.file_path)
             self._detection_done = img.detection_done
             photo_date = img.photo_date or ""
             current_place_id = img.place_id
@@ -2561,7 +2567,10 @@ class ImageBrowserPanel(QWidget):
             self._redraw_faces()
             self._show_face_info(clicked_id)
 
-        self._show_inline_editor(clicked_id)
+        entry = next((f for f in self._face_data if f[0] == clicked_id), None)
+        person_name = entry[5] if entry else None
+        if not person_name:
+            self._show_inline_editor(clicked_id)
 
     def _on_image_right_clicked(self, lx: int, ly: int) -> None:
         orig_x, orig_y = self._label_to_image(lx, ly)
@@ -3302,6 +3311,7 @@ class ImageBrowserPanel(QWidget):
         if entry is None:
             return
         _, _, _, _, _, person_name, _ = entry
+        self.active_person_changed.emit(person_name)
         self._assign_btn.setEnabled(True)
         self._create_btn.setEnabled(True)
         if person_name:
@@ -3333,6 +3343,7 @@ class ImageBrowserPanel(QWidget):
         self._assign_btn.setEnabled(False)
         self._create_btn.setEnabled(False)
         self._new_name_edit.clear()
+        self.active_person_changed.emit(None)
 
     # ──────────────────────────────────────────────────────────────────
     # Photo date

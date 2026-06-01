@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -70,6 +71,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
         tabs.addTab(self._build_tab_shortcuts(), t("settings_tab_shortcuts"))
+        tabs.addTab(self._build_tab_recording(), t("settings_tab_recording"))
         tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
         outer.addWidget(tabs, stretch=1)
 
@@ -258,6 +260,98 @@ class SettingsDialog(QDialog):
         layout.addWidget(deol_group)
         layout.addStretch()
         return widget
+
+    def _build_tab_recording(self) -> QWidget:
+        """Build the screen-recording settings tab."""
+        qs = _qsettings()
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(14)
+
+        # ── Output folder ─────────────────────────────────────────────────
+        out_group = QGroupBox(t("settings_tab_recording"))
+        out_form = QFormLayout(out_group)
+
+        dir_row = QHBoxLayout()
+        self._rec_dir_edit = QLineEdit(
+            qs.value("recording/output_dir", "", type=str) or ""
+        )
+        self._rec_dir_edit.setPlaceholderText(t("rec_set_unset"))
+        dir_row.addWidget(self._rec_dir_edit)
+        browse_btn = QPushButton(t("rec_set_browse"))
+        browse_btn.clicked.connect(self._on_browse_recording_dir)
+        dir_row.addWidget(browse_btn)
+        out_form.addRow(t("rec_set_output_dir"), dir_row)
+
+        self._rec_quality_combo = QComboBox()
+        for key, label_key in (
+            ("low", "rec_quality_low"),
+            ("normal", "rec_quality_normal"),
+            ("better", "rec_quality_better"),
+        ):
+            self._rec_quality_combo.addItem(t(label_key), userData=key)
+        cur_quality = qs.value("recording/quality", "normal", type=str)
+        qidx = self._rec_quality_combo.findData(cur_quality)
+        if qidx >= 0:
+            self._rec_quality_combo.setCurrentIndex(qidx)
+        out_form.addRow(t("rec_set_quality"), self._rec_quality_combo)
+
+        self._rec_fps_spin = QSpinBox()
+        self._rec_fps_spin.setRange(5, 60)
+        self._rec_fps_spin.setValue(qs.value("recording/fps", 18, type=int))
+        out_form.addRow(t("rec_set_fps"), self._rec_fps_spin)
+
+        self._rec_segment_spin = QSpinBox()
+        self._rec_segment_spin.setRange(2, 60)
+        self._rec_segment_spin.setValue(
+            qs.value("recording/segment_seconds", 8, type=int)
+        )
+        out_form.addRow(t("rec_set_segment"), self._rec_segment_spin)
+
+        self._rec_ffmpeg_edit = QLineEdit(
+            qs.value("recording/ffmpeg_path", "", type=str) or ""
+        )
+        out_form.addRow(t("rec_set_ffmpeg_path"), self._rec_ffmpeg_edit)
+
+        layout.addWidget(out_group)
+
+        # ── Capture toggles ───────────────────────────────────────────────
+        cap_group = QGroupBox(t("settings_tab_recording"))
+        cap_layout = QVBoxLayout(cap_group)
+        self._rec_cursor_check = QCheckBox(t("rec_set_cursor"))
+        self._rec_cursor_check.setChecked(
+            qs.value("recording/capture_cursor", True, type=bool)
+        )
+        self._rec_mic_check = QCheckBox(t("rec_set_microphone"))
+        self._rec_mic_check.setChecked(
+            qs.value("recording/capture_microphone", True, type=bool)
+        )
+        self._rec_sysaudio_check = QCheckBox(t("rec_set_system_audio"))
+        self._rec_sysaudio_check.setChecked(
+            qs.value("recording/capture_system_audio", True, type=bool)
+        )
+        self._rec_concat_check = QCheckBox(t("rec_set_concat"))
+        self._rec_concat_check.setChecked(
+            qs.value("recording/concat_on_stop", True, type=bool)
+        )
+        for cb in (
+            self._rec_cursor_check,
+            self._rec_mic_check,
+            self._rec_sysaudio_check,
+            self._rec_concat_check,
+        ):
+            cap_layout.addWidget(cb)
+        layout.addWidget(cap_group)
+
+        layout.addStretch()
+        return widget
+
+    def _on_browse_recording_dir(self) -> None:
+        start = self._rec_dir_edit.text() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, t("rec_choose_dir"), start)
+        if chosen:
+            self._rec_dir_edit.setText(chosen)
 
     def _build_tab_shortcuts(self) -> QWidget:
         """Build the keyboard shortcuts configuration tab."""
@@ -596,6 +690,20 @@ class SettingsDialog(QDialog):
         _qsettings().setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
         )
+        qs = _qsettings()
+        qs.setValue("recording/output_dir", self._rec_dir_edit.text().strip())
+        qs.setValue("recording/quality", self._rec_quality_combo.currentData())
+        qs.setValue("recording/fps", self._rec_fps_spin.value())
+        qs.setValue("recording/segment_seconds", self._rec_segment_spin.value())
+        qs.setValue("recording/ffmpeg_path", self._rec_ffmpeg_edit.text().strip())
+        qs.setValue("recording/capture_cursor", self._rec_cursor_check.isChecked())
+        qs.setValue(
+            "recording/capture_microphone", self._rec_mic_check.isChecked()
+        )
+        qs.setValue(
+            "recording/capture_system_audio", self._rec_sysaudio_check.isChecked()
+        )
+        qs.setValue("recording/concat_on_stop", self._rec_concat_check.isChecked())
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)
