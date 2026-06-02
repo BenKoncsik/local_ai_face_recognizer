@@ -51,6 +51,8 @@ class ExportDialog(QDialog):
         current_person_name: Optional[str] = None,
         on_collage_import: Optional[Callable[[], None]] = None,
         on_collage_html_export: Optional[Callable[[], None]] = None,
+        on_project_export: Optional[Callable[[], None]] = None,
+        on_project_import: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -58,6 +60,8 @@ class ExportDialog(QDialog):
         self._person_name = current_person_name
         self._on_collage_import_cb = on_collage_import
         self._on_collage_html_export_cb = on_collage_html_export
+        self._on_project_export_cb = on_project_export
+        self._on_project_import_cb = on_project_import
         self.setWindowTitle(t("export_title"))
         self.setMinimumWidth(500)
         self.setMinimumHeight(300)
@@ -95,6 +99,28 @@ class ExportDialog(QDialog):
         scope_layout.addWidget(self._all_radio)
         scope_layout.addWidget(self._cur_radio)
         layout.addWidget(scope_box)
+
+        # --- Full project package (.facepack) ---
+        pkg_box = QGroupBox(t("pkg_group"))
+        pkg_layout = QVBoxLayout(pkg_box)
+        pkg_export_desc = QLabel(t("pkg_export_desc"))
+        pkg_export_desc.setWordWrap(True)
+        pkg_export_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        pkg_layout.addWidget(pkg_export_desc)
+        self._project_export_btn = QPushButton(f"📦  {t('pkg_export_btn')}")
+        self._project_export_btn.setEnabled(self._on_project_export_cb is not None)
+        self._project_export_btn.clicked.connect(self._on_project_export_clicked)
+        pkg_layout.addWidget(self._project_export_btn)
+
+        pkg_import_desc = QLabel(t("pkg_import_desc"))
+        pkg_import_desc.setWordWrap(True)
+        pkg_import_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        pkg_layout.addWidget(pkg_import_desc)
+        self._project_import_btn = QPushButton(f"📂  {t('pkg_import_btn')}")
+        self._project_import_btn.setEnabled(self._on_project_import_cb is not None)
+        self._project_import_btn.clicked.connect(self._on_project_import_clicked)
+        pkg_layout.addWidget(self._project_import_btn)
+        layout.addWidget(pkg_box)
 
         # --- CSV ---
         csv_box = QGroupBox(t("csv_export"))
@@ -398,3 +424,15 @@ class ExportDialog(QDialog):
             return
         self.accept()
         self._on_collage_html_export_cb()
+
+    def _on_project_export_clicked(self) -> None:
+        if self._on_project_export_cb is None:
+            return
+        self.accept()
+        self._on_project_export_cb()
+
+    def _on_project_import_clicked(self) -> None:
+        if self._on_project_import_cb is None:
+            return
+        self.accept()
+        self._on_project_import_cb()

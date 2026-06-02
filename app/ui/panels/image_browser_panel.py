@@ -3496,17 +3496,27 @@ class ImageBrowserPanel(QWidget):
         new_name = self._place_rename_edit.text().strip()
         if not new_name:
             return
-        with session_scope() as session:
-            img = session.get(Image, self._current_image_id)
-            if img is None or img.place_id is None:
-                return
-            place = PlaceService(session).name_place(img.place_id, new_name)
-            place_id = place.id
-            place_name = place.name
-            anon = place.is_anonymous
-            source = place.source
-            place_lat = place.latitude
-            place_lon = place.longitude
+        try:
+            with session_scope() as session:
+                img = session.get(Image, self._current_image_id)
+                if img is None or img.place_id is None:
+                    return
+                place = PlaceService(session).name_place(img.place_id, new_name)
+                place_id = place.id
+                place_name = place.name
+                anon = place.is_anonymous
+                source = place.source
+                place_lat = place.latitude
+                place_lon = place.longitude
+        except Exception as exc:  # noqa: BLE001
+            from PySide6.QtWidgets import QMessageBox
+            from app.ui.i18n import t
+            QMessageBox.critical(
+                self,
+                t("ibp_place_rename_btn"),
+                t("places_merge_error", error=str(exc)),
+            )
+            return
         log.info("Place renamed: %d -> %r", place_id, new_name)
         self._reload_places()
         self._update_place_panel(place_id, place_name, anon, source, place_lat, place_lon)

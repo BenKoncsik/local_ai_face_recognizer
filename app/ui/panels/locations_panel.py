@@ -262,23 +262,39 @@ class LocationsPanel(QWidget):
             item = self._table.item(row, 0)
             if item is not None:
                 ids.append(int(item.data(_ROLE_ID)))
+
+        # Prefer a named (non-anonymous) place as the merge target so that
+        # the named place's ID survives and the anonymous one is absorbed.
         target_id = self._current_place_id or ids[0]
         with session_scope() as session:
             places = session.query(Place).filter(Place.id.in_(ids)).order_by(Place.id).all()
             for place in places:
                 _ = list(place.aliases)
+            named = [p for p in places if not p.is_anonymous]
+            if named:
+                named_id = named[0].id
+                if target_id not in {p.id for p in named}:
+                    target_id = named_id
             dlg = PlaceMergeDialog(places, target_id, self)
             if dlg.exec() != dlg.Accepted:
                 return
             choice = dlg.choice()
-        with session_scope() as session:
-            PlaceService(session).merge_places(
-                [pid for pid in ids if pid != target_id],
-                target_id,
-                name=choice.name,
-                latitude=choice.latitude,
-                longitude=choice.longitude,
-                thumbnail_path=choice.thumbnail_path,
+        try:
+            with session_scope() as session:
+                PlaceService(session).merge_places(
+                    [pid for pid in ids if pid != target_id],
+                    target_id,
+                    name=choice.name,
+                    latitude=choice.latitude,
+                    longitude=choice.longitude,
+                    thumbnail_path=choice.thumbnail_path,
+                )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                t("places_merge_title"),
+                t("places_merge_error", error=str(exc)),
             )
+            return
         self.refresh()
         self._load_detail(target_id)

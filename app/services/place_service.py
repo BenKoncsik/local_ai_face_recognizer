@@ -339,7 +339,7 @@ class PlaceService:
 
         if name is not None and name.strip():
             target.name = name.strip()
-            target.is_anonymous = False
+        target.is_anonymous = False
         if latitude is not None:
             target.latitude = latitude
         elif target.latitude is None:

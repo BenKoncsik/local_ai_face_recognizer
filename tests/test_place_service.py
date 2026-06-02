@@ -156,6 +156,77 @@ def test_merge_places_moves_images_and_preserves_source_data(db):
         assert alias.latitude == pytest.approx(48.0)
 
 
+def test_merge_anonymous_place_clears_is_anonymous(db):
+    """Merging an anonymous GPS place into a named one must clear is_anonymous."""
+    with session_scope() as session:
+        svc = PlaceService(session)
+        anon = svc.create_place(
+            "Névtelen hely GPS alapján", 47.0, 19.0, is_anonymous=True, source="exif"
+        )
+        named = svc.create_place("Balrangliget villa", 47.01, 19.01)
+        image = _add_image(session)
+        image.place_id = anon.id
+        anon_id = anon.id
+        named_id = named.id
+        image_id = image.id
+
+    # Merge the anonymous place (source) into the named one (target)
+    with session_scope() as session:
+        PlaceService(session).merge_places([anon_id], named_id, name="Balrangliget villa")
+
+    with session_scope() as session:
+        target = session.get(Place, named_id)
+        image = session.get(Image, image_id)
+        assert target is not None
+        assert target.is_anonymous is False, "target must not be anonymous after merge"
+        assert target.name == "Balrangliget villa"
+        assert image.place_id == named_id
+        assert session.get(Place, anon_id) is None
+
+
+def test_merge_anonymous_target_clears_is_anonymous(db):
+    """Merging a named place INTO an anonymous target still clears is_anonymous."""
+    with session_scope() as session:
+        svc = PlaceService(session)
+        anon = svc.create_place(
+            "Névtelen hely GPS alapján", 47.0, 19.0, is_anonymous=True, source="exif"
+        )
+        named = svc.create_place("Balrangliget villa", 47.01, 19.01)
+        anon_id = anon.id
+        named_id = named.id
+
+    # Anonymous place is the target (as happens in the UI when anon sorts first)
+    with session_scope() as session:
+        PlaceService(session).merge_places([named_id], anon_id, name="Balrangliget villa")
+
+    with session_scope() as session:
+        target = session.get(Place, anon_id)
+        assert target is not None
+        assert target.is_anonymous is False, "anonymous flag must be cleared after merge"
+        assert target.name == "Balrangliget villa"
+        assert session.get(Place, named_id) is None
+
+
+def test_name_place_persists_across_sessions(db):
+    """name_place() must clear is_anonymous so a new session reads the new name."""
+    with session_scope() as session:
+        svc = PlaceService(session)
+        anon = svc.create_place(
+            "Névtelen hely GPS alapján", 47.0, 19.0, is_anonymous=True, source="exif"
+        )
+        place_id = anon.id
+
+    with session_scope() as session:
+        PlaceService(session).name_place(place_id, "Custom Name")
+
+    with session_scope() as session:
+        place = session.get(Place, place_id)
+        assert place is not None
+        assert place.name == "Custom Name"
+        assert place.is_anonymous is False
+        assert place.source == "manual"
+
+
 def test_list_persons_for_place_uses_face_assignments(db):
     with session_scope() as session:
         image = _add_image(session)

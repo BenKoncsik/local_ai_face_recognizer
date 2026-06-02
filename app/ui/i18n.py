@@ -324,6 +324,49 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "exported_n":        {"en": "Exported {n} image(s) to:\n{folder}",
                           "hu": "{n} kép exportálva:\n{folder}"},
     "export_title":      {"en": "Export", "hu": "Exportálás"},
+    # ── Full project package (.facepack) ──────────────────────────────────────
+    "pkg_group":         {"en": "Full project package (.facepack)",
+                          "hu": "Teljes projektcsomag (.facepack)"},
+    "pkg_export_desc":   {"en": "Bundle the database, face crops, local images and "
+                                "config into a single portable .facepack file.",
+                          "hu": "Az adatbázis, az arckivágások, a lokális képek és a "
+                                "konfiguráció egyetlen hordozható .facepack fájlba."},
+    "pkg_export_btn":    {"en": "Export full project", "hu": "Teljes projekt exportálása"},
+    "pkg_import_desc":   {"en": "Restore a project from a .facepack file into a new "
+                                "project folder.",
+                          "hu": "Projekt visszaállítása egy .facepack fájlból új "
+                                "projektmappába."},
+    "pkg_import_btn":    {"en": "Import project", "hu": "Projekt importálása"},
+    "pkg_export_dialog": {"en": "Export project package", "hu": "Projektcsomag exportálása"},
+    "pkg_import_dialog": {"en": "Select project package", "hu": "Projektcsomag kiválasztása"},
+    "pkg_import_dest":   {"en": "Choose destination project folder",
+                          "hu": "Válassz cél projektmappát"},
+    "pkg_filter":        {"en": "Face-Local package (*.facepack)",
+                          "hu": "Face-Local csomag (*.facepack)"},
+    "pkg_progress_export": {"en": "Exporting project package…",
+                            "hu": "Projektcsomag exportálása…"},
+    "pkg_progress_import": {"en": "Importing project package…",
+                            "hu": "Projektcsomag importálása…"},
+    "pkg_export_done":   {"en": "Project package", "hu": "Projektcsomag"},
+    "pkg_export_ok":     {"en": "Saved {images} image(s) and {crops} crop(s) to:\n{path}",
+                          "hu": "{images} kép és {crops} kivágás mentve ide:\n{path}"},
+    "pkg_export_warn":   {"en": "\n\nWarning: {missing} image(s) were missing locally "
+                                "and could not be bundled (see log).",
+                          "hu": "\n\nFigyelem: {missing} kép lokálisan hiányzott és nem "
+                                "került a csomagba (részletek a logban)."},
+    "pkg_import_title":  {"en": "Import project", "hu": "Projekt importálása"},
+    "pkg_import_confirm": {"en": "This will extract the project into:\n{dest}\n\n"
+                                 "Your current project will not be overwritten. "
+                                 "Continue?",
+                           "hu": "A projekt ide lesz kibontva:\n{dest}\n\n"
+                                 "A jelenlegi projekt nem íródik felül. Folytatja?"},
+    "pkg_import_ok":     {"en": "Project imported to:\n{dest}\n\nOpen it now?",
+                          "hu": "Projekt importálva ide:\n{dest}\n\nMegnyitja most?"},
+    "pkg_import_opened": {"en": "Imported project is now active.",
+                          "hu": "Az importált projekt mostantól aktív."},
+    "pkg_import_later":  {"en": "Imported project is ready at:\n{dest}",
+                          "hu": "Az importált projekt készen áll itt:\n{dest}"},
+    "pkg_error_title":   {"en": "Project package error", "hu": "Projektcsomag hiba"},
     "export_scope":      {"en": "Scope", "hu": "Hatókör"},
     "export_all_persons": {"en": "All persons", "hu": "Összes személy"},
     "export_selected_person": {"en": "Selected person only: {name}",
@@ -796,6 +839,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_merge_keep_name": {"en": "Keep name:", "hu": "Maradó név:"},
     "places_merge_keep_coords": {"en": "Keep coordinates:", "hu": "Maradó koordináta:"},
     "places_merge_keep_thumbnail": {"en": "Keep thumbnail:", "hu": "Maradó bélyegkép:"},
+    "places_merge_error": {"en": "Failed to save changes: {error}",
+                           "hu": "Nem sikerült menteni: {error}"},
 
     # ── 3-column image browser (ib3_*) ────────────────────────────────────
     "ib3_folders_hdr":         {"en": "Folders",           "hu": "Mappák"},

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -2373,9 +2374,221 @@ class MainWindow(QMainWindow):
             current_person_name=person_name,
             on_collage_import=self._on_import_collage,
             on_collage_html_export=self._on_export_collage_html,
+            on_project_export=self._on_export_project_package,
+            on_project_import=self._on_import_project_package,
             parent=self,
         )
         dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Full project package (.facepack) export / import
+    # ------------------------------------------------------------------
+
+    def _build_package_service(self) -> "ProjectPackageService":
+        from app.services.image_library_service import get_image_library_optional
+        from app.services.project_package_service import ProjectPackageService
+
+        lib = get_image_library_optional()
+        return ProjectPackageService(
+            db_path=self._db_path,
+            crops_dir=self._config.crops_dir_resolved,
+            library_root=lib.library_root if lib else None,
+            local_config_path=lib.local_config_path() if lib else None,
+        )
+
+    @Slot()
+    def _on_export_project_package(self) -> None:
+        from app.services.project_package_service import (
+            PACKAGE_EXTENSION,
+            ProjectPackageError,
+        )
+
+        default_name = f"face_local_project{PACKAGE_EXTENSION}"
+        start_dir = _last_dir("paths/last_package", str(Path.home()))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            t("pkg_export_dialog"),
+            str(Path(start_dir) / default_name),
+            t("pkg_filter"),
+        )
+        if not path:
+            return
+        _save_dir("paths/last_package", str(Path(path).parent))
+
+        try:
+            from app import __version__ as app_version
+        except Exception:  # noqa: BLE001
+            app_version = ""
+
+        progress = QProgressDialog(
+            t("pkg_progress_export"), None, 0, 100, self
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setValue(0)
+
+        def on_progress(cur: int, total: int, _msg: str) -> None:
+            pct = int(cur / total * 100) if total else 0
+            progress.setValue(min(pct, 100))
+            QApplication.processEvents()
+
+        try:
+            svc = self._build_package_service()
+            result = svc.export_package(
+                path, app_version=str(app_version), progress_cb=on_progress
+            )
+        except ProjectPackageError as exc:
+            progress.close()
+            log.exception("Project package export failed")
+            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            progress.close()
+            log.exception("Project package export failed")
+            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
+            return
+        finally:
+            progress.close()
+
+        msg = t(
+            "pkg_export_ok",
+            images=result.image_count,
+            crops=result.crop_count,
+            path=result.package_path,
+        )
+        if result.missing_images:
+            msg += t("pkg_export_warn", missing=len(result.missing_images))
+        QMessageBox.information(self, t("pkg_export_done"), msg)
+
+    @Slot()
+    def _on_import_project_package(self) -> None:
+        from app.services.project_package_service import ProjectPackageError, ProjectPackageService
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            t("pkg_import_dialog"),
+            _last_dir("paths/last_package", str(Path.home())),
+            t("pkg_filter"),
+        )
+        if not path:
+            return
+        _save_dir("paths/last_package", str(Path(path).parent))
+
+        validation = ProjectPackageService.validate_package(path)
+        if not validation.ok:
+            QMessageBox.critical(
+                self, t("pkg_error_title"), "\n".join(validation.errors)
+            )
+            return
+
+        dest = QFileDialog.getExistingDirectory(
+            self, t("pkg_import_dest"), str(Path.home())
+        )
+        if not dest:
+            return
+        # Extract into a dedicated, non-empty-safe subfolder of the chosen dir.
+        dest_dir = Path(dest) / Path(path).stem
+        if dest_dir.exists() and any(dest_dir.iterdir()):
+            from datetime import datetime
+            dest_dir = Path(dest) / f"{Path(path).stem}_{datetime.now():%Y%m%d_%H%M%S}"
+
+        reply = QMessageBox.question(
+            self,
+            t("pkg_import_title"),
+            t("pkg_import_confirm", dest=dest_dir),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        progress = QProgressDialog(
+            t("pkg_progress_import"), None, 0, 100, self
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setValue(0)
+
+        def on_progress(cur: int, total: int, _msg: str) -> None:
+            pct = int(cur / total * 100) if total else 0
+            progress.setValue(min(pct, 100))
+            QApplication.processEvents()
+
+        try:
+            result = ProjectPackageService.import_package(
+                path, dest_dir, progress_cb=on_progress
+            )
+        except ProjectPackageError as exc:
+            progress.close()
+            log.exception("Project package import failed")
+            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            progress.close()
+            log.exception("Project package import failed")
+            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
+            return
+        finally:
+            progress.close()
+
+        reply = QMessageBox.question(
+            self,
+            t("pkg_import_title"),
+            t("pkg_import_ok", dest=result.project_dir),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._activate_imported_project(result)
+        else:
+            QMessageBox.information(
+                self, t("pkg_import_title"),
+                t("pkg_import_later", dest=result.project_dir),
+            )
+
+    def _activate_imported_project(self, result) -> None:
+        """Open the freshly imported project as the active database."""
+        from app.services.image_library_service import get_image_library_optional
+        from app.services.project_package_service import ProjectPackageService
+
+        new_db = str(result.db_path)
+        self._db_path = new_db
+        self._config.storage.db_path = new_db
+        self._config.storage.crops_dir = str(result.crops_dir)
+        save_db_path(new_db)
+        init_db(new_db)  # also re-initialises the ImageLibraryService
+        ensure_unknown_person()
+
+        # Point the library root at the extracted images and remap crop paths,
+        # then migrate any legacy absolute paths to portable relative paths.
+        lib = get_image_library_optional()
+        if lib is not None:
+            try:
+                lib.set_library_root(result.images_dir)
+            except OSError:
+                log.warning("Imported images dir missing: %s", result.images_dir)
+        with session_scope() as session:
+            ProjectPackageService.remap_crop_paths(session, result.crops_dir)
+            if lib is not None and lib.is_available():
+                try:
+                    lib.migrate_to_relative_paths(
+                        session, result.images_dir, validate_files=False
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("Relative-path migration after import failed")
+
+        self._current_person_id = None
+        self._current_face_id = None
+        self._cluster_panel.clear()
+        self._preview_panel.clear()
+        self._refresh_persons()
+        self._image_browser.refresh()
+        if hasattr(self, "_locations_panel"):
+            self._locations_panel.refresh()
+        QMessageBox.information(
+            self, t("pkg_import_title"), t("pkg_import_opened")
+        )
+        log.info("Activated imported project: %s", new_db)
 
     # ------------------------------------------------------------------
     # Helpers
