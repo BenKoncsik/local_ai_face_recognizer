@@ -15,7 +15,6 @@ permissions:
   contents: write
   actions: read
   issues: read
-  repository-projects: write
 
 env:
   PYTHON_VERSION: "3.11"
@@ -190,19 +189,6 @@ jobs:
             echo "tag=$TAG"
             echo "release_name=$RELEASE_NAME"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Move referenced issues to Commitolt
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN }}
-          PROJECT_OWNER: ${{ github.repository_owner }}
-          PROJECT_TITLE: Local AI Face Recognizer
-          PROJECT_STATUS_FIELD: Status
-          PROJECT_TARGET_OPTION: Commitolt
-          PROJECT_ISSUE_MOVE_BEST_EFFORT: "true"
-        shell: bash
-        run: python3 .github/scripts/move_project_issues_ready.py
 
   build-macos:
     needs:
@@ -1533,20 +1519,6 @@ jobs:
             --target "$GITHUB_SHA" \
             --name "$RELEASE_NAME" \
             --notes "$notes"
-
-      - name: Advance project issue statuses
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN }}
-          PROJECT_OWNER: ${{ github.repository_owner }}
-          PROJECT_TITLE: Local AI Face Recognizer
-          PROJECT_STATUS_FIELD: Status
-          PROJECT_ISSUE_MOVE_BEST_EFFORT: "true"
-        shell: bash
-        run: |
-          PROJECT_SOURCE_OPTION="In review" PROJECT_TARGET_OPTION="Done" python3 .github/scripts/move_project_issues_ready.py || true
-          PROJECT_TARGET_OPTION="In review" python3 .github/scripts/move_project_issues_ready.py || true
 
   post-to-buffer:
     if: ${{ needs.release.result == 'success' && github.event_name == 'push' && github.run_attempt == 1 }}
