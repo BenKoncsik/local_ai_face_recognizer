@@ -945,9 +945,14 @@ class MainWindow(QMainWindow):
             return
 
         threshold = self._config.detection.duplicate_unknown_iou_threshold
+        containment = self._config.detection.duplicate_unknown_containment_threshold
         try:
             with session_scope() as session:
-                finder = DuplicateUnknownFaceFinder(session, iou_threshold=threshold)
+                finder = DuplicateUnknownFaceFinder(
+                    session,
+                    iou_threshold=threshold,
+                    containment_threshold=containment,
+                )
                 matches = finder.find()
                 images_examined = finder.images_examined
         except Exception as exc:  # noqa: BLE001
@@ -1003,7 +1008,11 @@ class MainWindow(QMainWindow):
         preview_image_id = self._preview_panel.current_image_id
         try:
             with session_scope() as session:
-                finder = DuplicateUnknownFaceFinder(session, iou_threshold=threshold)
+                finder = DuplicateUnknownFaceFinder(
+                    session,
+                    iou_threshold=threshold,
+                    containment_threshold=containment,
+                )
                 result = finder.delete_unknown_faces(selected_ids)
         except Exception as exc:  # noqa: BLE001
             log.exception("Overlapping unknown face cleanup failed")

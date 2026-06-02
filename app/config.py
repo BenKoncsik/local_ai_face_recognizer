@@ -65,6 +65,11 @@ class DetectionConfig:
     # question-mark boxes overlapping already named faces.
     duplicate_unknown_iou_threshold: float = 0.35
 
+    # Containment threshold for the same cleanup action. A small box nested
+    # inside a much larger one has a low IoU but a near-1.0 containment ratio
+    # (intersection / smaller-box area); this catches that case.
+    duplicate_unknown_containment_threshold: float = 0.80
+
 
 @dataclass
 class EmbeddingConfig:
@@ -441,6 +446,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             duplicate_unknown_iou_threshold=det.get(
                 "duplicate_unknown_iou_threshold",
                 cfg.detection.duplicate_unknown_iou_threshold,
+            ),
+            duplicate_unknown_containment_threshold=det.get(
+                "duplicate_unknown_containment_threshold",
+                cfg.detection.duplicate_unknown_containment_threshold,
             ),
         )
 

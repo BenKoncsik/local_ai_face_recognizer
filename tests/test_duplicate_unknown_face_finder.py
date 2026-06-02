@@ -69,7 +69,28 @@ def test_lists_known_face_overlapping_unknown(tmp_db):
     assert matches[0].known_face_id == known.id
     assert matches[0].unknown_face_id == unknown.id
     assert matches[0].known_person_name == "Alice"
-    assert matches[0].iou >= 0.30
+    assert matches[0].overlap >= 0.30
+
+
+def test_small_unknown_nested_in_large_known_is_listed(tmp_db):
+    """A tight '?' box nested inside a generous named-face box has a low IoU
+    but high containment, so it must still be flagged (regression)."""
+    with session_scope() as session:
+        image = _add_image(session)
+        person = _add_person(session, "Cikky")
+        # Large named box (e.g. head + hair) fully enclosing a small ? box.
+        known = _add_face(session, image, (0, 0, 200, 200), person)
+        unknown = _add_face(session, image, (60, 80, 70, 90))
+
+    # IoU here is ~70*90 / (200*200) = 0.157 — below the IoU threshold.
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session, iou_threshold=0.35)
+        matches = finder.find()
+
+    assert len(matches) == 1
+    assert matches[0].unknown_face_id == unknown.id
+    assert matches[0].known_face_id == known.id
+    assert matches[0].overlap >= 0.80  # reports the containment ratio
 
 
 def test_distant_unknown_is_not_listed(tmp_db):
@@ -224,6 +245,40 @@ def test_same_person_overlapping_duplicates_are_listed(tmp_db):
     assert len(matches) == 1
     ids = {matches[0].unknown_face_id, matches[0].known_face_id}
     assert ids == {face_a.id, face_b.id}
+
+
+def test_same_auto_named_cluster_overlapping_duplicates_are_listed(tmp_db):
+    """Two overlapping boxes in the same auto-named cluster are a duplicate
+    detection and must be flagged even though neither face is named yet."""
+    with session_scope() as session:
+        image = _add_image(session)
+        auto = _add_person(session, "Unknown 96", auto=True)
+        face_a = _add_face(session, image, (10, 10, 100, 100), auto)
+        face_b = _add_face(session, image, (20, 20, 90, 90), auto)
+
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session, iou_threshold=0.30)
+        matches = finder.find()
+
+    assert len(matches) == 1
+    ids = {matches[0].unknown_face_id, matches[0].known_face_id}
+    assert ids == {face_a.id, face_b.id}
+
+
+def test_protected_catch_all_overlaps_are_not_listed(tmp_db):
+    """The protected catch-all bucket ("Ismeretlen") groups many distinct
+    identities under one person_id, so two overlapping boxes there are NOT
+    assumed to be the same face."""
+    with session_scope() as session:
+        image = _add_image(session)
+        bucket = _add_person(session, "Ismeretlen", protected=True)
+        _add_face(session, image, (10, 10, 100, 100), bucket)
+        _add_face(session, image, (20, 20, 90, 90), bucket)
+
+    with session_scope() as session:
+        matches = DuplicateUnknownFaceFinder(session, iou_threshold=0.30).find()
+
+    assert matches == []
 
 
 def test_same_person_non_overlapping_not_listed(tmp_db):

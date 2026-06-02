@@ -562,7 +562,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "overlap_col_person": {"en": "Reference person", "hu": "Referencia személy"},
     "overlap_col_unknown_id": {"en": "Candidate face ID", "hu": "Jelölt arc ID"},
     "overlap_col_known_id": {"en": "Reference face ID", "hu": "Referencia arc ID"},
-    "overlap_col_iou":   {"en": "IoU", "hu": "IoU"},
+    "overlap_col_overlap": {"en": "Overlap", "hu": "Átfedés"},
     "overlap_col_delete": {"en": "Delete?", "hu": "Törölhető"},
     "overlap_delete_checkbox_tip": {"en": "Delete this candidate face record",
                                     "hu": "Ennek a jelölt face rekordnak a törlése"},

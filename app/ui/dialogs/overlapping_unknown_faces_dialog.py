@@ -36,7 +36,7 @@ _COL_PREVIEW = 1
 _COL_PERSON = 2
 _COL_UNKNOWN_ID = 3
 _COL_KNOWN_ID = 4
-_COL_IOU = 5
+_COL_OVERLAP = 5
 _COL_DELETE = 6
 _NUM_COLS = 7
 
@@ -353,7 +353,7 @@ class OverlappingUnknownFacesDialog(QDialog):
                 t("overlap_col_person"),
                 t("overlap_col_unknown_id"),
                 t("overlap_col_known_id"),
-                t("overlap_col_iou"),
+                t("overlap_col_overlap"),
                 t("overlap_col_delete"),
             ]
         )
@@ -368,7 +368,7 @@ class OverlappingUnknownFacesDialog(QDialog):
         header.setSectionResizeMode(_COL_IMAGE, QHeaderView.Stretch)
         header.setSectionResizeMode(_COL_PREVIEW, QHeaderView.Fixed)
         self._table.setColumnWidth(_COL_PREVIEW, _THUMB_PX + 12)
-        for col in (_COL_PERSON, _COL_UNKNOWN_ID, _COL_KNOWN_ID, _COL_IOU, _COL_DELETE):
+        for col in (_COL_PERSON, _COL_UNKNOWN_ID, _COL_KNOWN_ID, _COL_OVERLAP, _COL_DELETE):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
         for row, match in enumerate(self._matches):
@@ -421,7 +421,7 @@ class OverlappingUnknownFacesDialog(QDialog):
         self._table.setItem(row, _COL_PERSON, QTableWidgetItem(match.known_person_name))
         self._table.setItem(row, _COL_UNKNOWN_ID, QTableWidgetItem(str(match.unknown_face_id)))
         self._table.setItem(row, _COL_KNOWN_ID, QTableWidgetItem(str(match.known_face_id)))
-        self._table.setItem(row, _COL_IOU, QTableWidgetItem(f"{match.iou:.2f}"))
+        self._table.setItem(row, _COL_OVERLAP, QTableWidgetItem(f"{match.overlap:.2f}"))
 
         checkbox = QCheckBox()
         checkbox.setChecked(True)

@@ -15,6 +15,11 @@ log = logging.getLogger(__name__)
 
 DEFAULT_OVERLAP_IOU_THRESHOLD = 0.35
 
+# A tight "?" box nested inside a generous named-face box has a low IoU (the
+# large box dominates the union) but a high containment ratio. Flag the pair
+# when this fraction of the *smaller* box lies inside the other box.
+DEFAULT_CONTAINMENT_THRESHOLD = 0.80
+
 # Matches common placeholder/unknown name patterns (case-insensitive, trimmed):
 #   "?", "??", "Unknown", "Unknown 96", "Unknown_96", "unknown",
 #   "Ismeretlen", "Ismeretlen 5", "ismeretlen_3", etc.
@@ -41,7 +46,7 @@ class OverlappingUnknownFaceMatch:
     unknown_face_id: int
     known_face_id: int
     known_person_name: str
-    iou: float
+    overlap: float
     unknown_bbox: tuple[int, int, int, int]
     known_bbox: tuple[int, int, int, int]
 
@@ -74,9 +79,11 @@ class DuplicateUnknownFaceFinder:
         self,
         session: Session,
         iou_threshold: float = DEFAULT_OVERLAP_IOU_THRESHOLD,
+        containment_threshold: float = DEFAULT_CONTAINMENT_THRESHOLD,
     ) -> None:
         self._session = session
         self._iou_threshold = iou_threshold
+        self._containment_threshold = containment_threshold
         self.images_examined: int = 0
         # Face IDs that were flagged as same-person duplicates; may be deleted
         # even if _is_unknown() returns False for them.
@@ -105,15 +112,16 @@ class DuplicateUnknownFaceFinder:
             # ── Pass 1: unknown/placeholder overlapping a named face ──────────
             for unknown in unknown_faces:
                 best_known: Face | None = None
-                best_iou = 0.0
+                best_key = (0.0, 0.0)
                 for known in known_faces:
-                    iou = face_iou(unknown, known)
-                    if iou >= self._iou_threshold and iou > best_iou:
+                    key = self._overlap_score(unknown, known)
+                    if key is not None and key > best_key:
                         best_known = known
-                        best_iou = iou
+                        best_key = key
 
                 if best_known is None or best_known.person is None:
                     continue
+                best_score = best_key[0]
 
                 matches.append(
                     OverlappingUnknownFaceMatch(
@@ -123,7 +131,7 @@ class DuplicateUnknownFaceFinder:
                         unknown_face_id=unknown.id,
                         known_face_id=best_known.id,
                         known_person_name=best_known.person.name,
-                        iou=best_iou,
+                        overlap=best_score,
                         unknown_bbox=_bbox_tuple(unknown),
                         known_bbox=_bbox_tuple(best_known),
                     )
@@ -131,11 +139,15 @@ class DuplicateUnknownFaceFinder:
                 reported_unknown_ids.add(unknown.id)
 
             # ── Pass 2: same-person duplicate detections ──────────────────────
-            # Group known faces by person_id; flag overlapping pairs.
+            # Group faces by person_id and flag overlapping pairs. This covers
+            # not only manually named people but also auto-named / placeholder
+            # clusters (e.g. two boxes both landing in "Unknown 96") — the
+            # clustering already decided they are one identity, so an overlap
+            # within a single image is a duplicate detection.
             from collections import defaultdict
             by_person: dict[int, list[Face]] = defaultdict(list)
-            for face in known_faces:
-                if face.person_id is not None:
+            for face in visible_faces:
+                if self._is_dedup_candidate(face):
                     by_person[face.person_id].append(face)
 
             for pid, pfaces in by_person.items():
@@ -143,9 +155,10 @@ class DuplicateUnknownFaceFinder:
                     continue
                 for i, fa in enumerate(pfaces):
                     for fb in pfaces[i + 1:]:
-                        iou = face_iou(fa, fb)
-                        if iou < self._iou_threshold:
+                        key = self._overlap_score(fa, fb)
+                        if key is None:
                             continue
+                        score = key[0]
                         # The lower-confidence (or higher-id) face is the duplicate.
                         conf_a = fa.confidence or 0.0
                         conf_b = fb.confidence or 0.0
@@ -164,7 +177,7 @@ class DuplicateUnknownFaceFinder:
                                 unknown_face_id=unk.id,
                                 known_face_id=kno.id,
                                 known_person_name=person_name,
-                                iou=iou,
+                                overlap=score,
                                 unknown_bbox=_bbox_tuple(unk),
                                 known_bbox=_bbox_tuple(kno),
                             )
@@ -228,6 +241,23 @@ class DuplicateUnknownFaceFinder:
             missing_or_changed=tuple(missing_or_changed),
         )
 
+    def _overlap_score(self, a: Face, b: Face) -> tuple[float, float] | None:
+        """Return a ``(score, iou)`` ranking key if *a* and *b* overlap, else None.
+
+        Two boxes count as overlapping when their IoU clears ``iou_threshold``
+        *or* one box is largely contained in the other (``containment`` clears
+        ``containment_threshold``). The latter catches a small face box nested
+        inside a much larger one, where IoU alone is misleadingly low.
+
+        ``score`` (the larger of the two metrics) is what gets reported; the raw
+        ``iou`` is carried alongside so that, among equally-scoring candidates,
+        the most precisely matching box (highest IoU) wins the tie.
+        """
+        iou, containment = face_overlap_metrics(a, b)
+        if iou >= self._iou_threshold or containment >= self._containment_threshold:
+            return max(iou, containment), iou
+        return None
+
     @staticmethod
     def _is_unknown(face: Face) -> bool:
         """Return True for unassigned, auto-named, or placeholder-named faces."""
@@ -243,6 +273,23 @@ class DuplicateUnknownFaceFinder:
         return False
 
     @staticmethod
+    def _is_dedup_candidate(face: Face) -> bool:
+        """Return True for faces that belong to exactly one identity cluster.
+
+        Such faces (any non-protected person — named, auto-named, or
+        placeholder) can be safely deduplicated against their siblings in the
+        same image. The protected catch-all bucket (e.g. "Ismeretlen") is
+        excluded because its single ``person_id`` aggregates many distinct
+        identities, so two of its boxes overlapping need not be the same face.
+        """
+        person = face.person
+        return (
+            face.person_id is not None
+            and person is not None
+            and not person.is_protected
+        )
+
+    @staticmethod
     def _is_known(face: Face) -> bool:
         person = face.person
         return (
@@ -253,19 +300,34 @@ class DuplicateUnknownFaceFinder:
         )
 
 
-def face_iou(a: Face, b: Face) -> float:
-    """Compute Intersection-over-Union for two stored face bounding boxes."""
+def face_overlap_metrics(a: Face, b: Face) -> tuple[float, float]:
+    """Return ``(iou, containment)`` for two stored face bounding boxes.
+
+    ``iou`` is the classic intersection-over-union. ``containment`` is the
+    intersection divided by the area of the *smaller* box; it stays close to
+    1.0 when a small box is nested inside a much larger one — exactly the case
+    (a tight "?" box sitting inside a generous named-face box) where IoU is
+    misleadingly low because the large box dominates the union.
+    """
     ax1, ay1, ax2, ay2 = a.bbox_x, a.bbox_y, a.bbox_x + a.bbox_w, a.bbox_y + a.bbox_h
     bx1, by1, bx2, by2 = b.bbox_x, b.bbox_y, b.bbox_x + b.bbox_w, b.bbox_y + b.bbox_h
     inter_w = max(0, min(ax2, bx2) - max(ax1, bx1))
     inter_h = max(0, min(ay2, by2) - max(ay1, by1))
     inter = inter_w * inter_h
     if inter == 0:
-        return 0.0
+        return 0.0, 0.0
     area_a = max(0, a.bbox_w) * max(0, a.bbox_h)
     area_b = max(0, b.bbox_w) * max(0, b.bbox_h)
     union = area_a + area_b - inter
-    return inter / union if union > 0 else 0.0
+    iou = inter / union if union > 0 else 0.0
+    smaller = min(area_a, area_b)
+    containment = inter / smaller if smaller > 0 else 0.0
+    return iou, containment
+
+
+def face_iou(a: Face, b: Face) -> float:
+    """Compute Intersection-over-Union for two stored face bounding boxes."""
+    return face_overlap_metrics(a, b)[0]
 
 
 def _bbox_tuple(face: Face) -> tuple[int, int, int, int]:
