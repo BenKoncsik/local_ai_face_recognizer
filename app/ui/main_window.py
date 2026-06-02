@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,6 +11,7 @@ from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -93,11 +95,13 @@ class MainWindow(QMainWindow):
         self._current_face_id: Optional[int] = None
         self._recorder = None  # ScreenRecorderService, lazily created on start
         self._recording_log = None  # RecordingTimelineLog while recording
+        self._recording_metadata = None  # RecordingMetadataWriter while recording
         # Active image/person context shown in the image-browser tab (for the
         # recording timeline log).
         self._browser_image_name: Optional[str] = None
         self._browser_person_name: Optional[str] = None
         self._load_recording_prefs()
+        self._connect_display_events()
         self._pending_suggestion_count: int = 0
         self._open_suggestion_count: int = 0
         self._match_active: bool = False
@@ -1490,10 +1494,14 @@ class MainWindow(QMainWindow):
         from app.services.screen_recorder_service import (
             CaptureDevices,
             RecorderState,
+            RecordingDisplayMode,
             RecordingOptions,
             ScreenRecorderService,
+            effective_fps,
             probe_devices,
+            resolve_capture_region,
             resolve_ffmpeg,
+            selected_displays,
         )
 
         rec_cfg = self._config.recording
@@ -1502,6 +1510,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, t("rec_ffmpeg_missing_title"), t("rec_ffmpeg_missing_body")
             )
+            return
+
+        # Privacy notice — show unless the user opted out.
+        if not self._confirm_recording_privacy():
             return
 
         # Pick output folder — default to the last-used / configured dir.
@@ -1524,8 +1536,48 @@ class MainWindow(QMainWindow):
         )
         if not rec_cfg.capture_microphone:
             devices.microphone = None
+
+        # Resolve which monitors / window to capture, and cap the fps for
+        # multi-monitor captures.
+        from app.ui.display_utils import active_window_bounds, enumerate_displays
+        mode = RecordingDisplayMode.from_value(rec_cfg.display_mode)
+        displays = enumerate_displays()
+        # On macOS the avfoundation "Capture screen N" device index is not the
+        # monitor ordinal (capture devices come after the cameras), so map each
+        # monitor to its real avfoundation index before resolving the region.
+        if sys.platform.startswith("darwin") and displays:
+            from app.services.screen_recorder_service import probe_screen_indices
+            screen_idx = probe_screen_indices(ffmpeg)
+            for i, disp in enumerate(displays):
+                if i < len(screen_idx):
+                    try:
+                        disp.av_index = int(screen_idx[i])
+                    except (TypeError, ValueError):
+                        disp.av_index = None
+        region = resolve_capture_region(
+            mode,
+            displays,
+            rec_cfg.selected_display_ids,
+            active_window_bounds(self),
+        )
+        fps = effective_fps(
+            rec_cfg.fps,
+            mode,
+            displays,
+            rec_cfg.selected_display_ids,
+            auto_reduce=rec_cfg.auto_reduce_fps,
+            multi_monitor_cap=rec_cfg.multi_monitor_fps_cap,
+        )
+        if sys.platform.startswith("darwin") and mode in (
+            RecordingDisplayMode.ALL_DISPLAYS,
+            RecordingDisplayMode.ACTIVE_WINDOW,
+        ):
+            log.info(
+                "macOS avfoundation cannot capture a window or merge displays; "
+                "recording the primary screen for mode %s", mode.value
+            )
         options = RecordingOptions(
-            fps=rec_cfg.fps,
+            fps=fps,
             quality=rec_cfg.quality,
             segment_seconds=rec_cfg.segment_seconds,
             capture_cursor=rec_cfg.capture_cursor,
@@ -1539,16 +1591,87 @@ class MainWindow(QMainWindow):
         from app.services.recording_timeline_log import RecordingTimelineLog
         session_dir.mkdir(parents=True, exist_ok=True)
         self._recording_log = RecordingTimelineLog(
-            session_dir / "timeline.txt",
+            session_dir / "timeline.srt",
             person_prefix=t("rec_person_prefix"),
-            none_placeholder=t("rec_none_placeholder"),
+        )
+
+        # Metadata — written immediately as "crashed" until a clean finalize.
+        captured = selected_displays(mode, displays, rec_cfg.selected_display_ids)
+        self._recording_metadata = self._make_recording_metadata(
+            session_dir, mode, fps, captured, devices
         )
 
         self._recorder.start(
-            session_dir, devices, options, concat_on_stop=rec_cfg.concat_on_stop
+            session_dir,
+            devices,
+            options,
+            concat_on_stop=rec_cfg.concat_on_stop,
+            region=region,
         )
         if self._recorder.state is RecorderState.RECORDING:
             self._notify_recording_context()
+
+    def _confirm_recording_privacy(self) -> bool:
+        """Show the privacy notice; return ``False`` if the user cancels."""
+        from app.app_settings import app_qsettings
+        qs = app_qsettings()
+        if qs.value("recording/privacy_ack", False, type=bool):
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(t("rec_privacy_title"))
+        box.setText(t("rec_privacy_body"))
+        box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        dont_ask = QCheckBox(t("rec_privacy_dont_ask"))
+        box.setCheckBox(dont_ask)
+        if box.exec() != QMessageBox.Ok:
+            return False
+        if dont_ask.isChecked():
+            qs.setValue("recording/privacy_ack", True)
+        return True
+
+    def _make_recording_metadata(
+        self, session_dir, mode, fps, captured_displays, devices
+    ):
+        """Build + write the initial (pessimistic) recording metadata."""
+        from datetime import datetime, timezone
+
+        from app.services.recording_metadata import (
+            METADATA_FILENAME,
+            RecordingMetadata,
+            RecordingMetadataWriter,
+        )
+        from app.services.screen_recorder_service import displays_bounding_box
+
+        box = displays_bounding_box(captured_displays)
+        meta = RecordingMetadata(
+            started_at=datetime.now(timezone.utc).isoformat(),
+            platform=sys.platform,
+            fps=fps,
+            width=box[2] if box else None,
+            height=box[3] if box else None,
+            display_mode=mode.value,
+            monitors=[
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "width": d.width,
+                    "height": d.height,
+                    "is_primary": d.is_primary,
+                    "x": d.x,
+                    "y": d.y,
+                }
+                for d in captured_displays
+            ],
+            layout={"x": box[0], "y": box[1], "width": box[2], "height": box[3]}
+            if box
+            else None,
+            captured_microphone=devices.microphone is not None,
+            captured_system_audio=devices.system_audio is not None,
+        )
+        writer = RecordingMetadataWriter(session_dir / METADATA_FILENAME, meta)
+        writer.begin()
+        return writer
 
     def _on_record_pause_toggle(self) -> None:
         from app.services.screen_recorder_service import RecorderState
@@ -1568,6 +1691,7 @@ class MainWindow(QMainWindow):
         if self._recording_log is not None:
             self._recording_log.finalize(elapsed)
             self._recording_log = None
+        self._finalize_recording_metadata(elapsed, crashed=False)
         out_dir = self._recorder.output_dir
         self._recorder = None
         target = final or out_dir
@@ -1584,9 +1708,63 @@ class MainWindow(QMainWindow):
 
     def _on_recorder_error(self, message: str) -> None:
         QMessageBox.critical(self, t("rec_error_title"), message)
+        elapsed = self._recorder.elapsed_seconds if self._recorder is not None else 0
         if self._recording_log is not None and self._recorder is not None:
-            self._recording_log.finalize(self._recorder.elapsed_seconds)
+            self._recording_log.finalize(elapsed)
         self._recording_log = None
+        if self._recording_metadata is not None:
+            self._recording_metadata.add_error(message)
+        self._finalize_recording_metadata(elapsed, crashed=True)
+
+    def _finalize_recording_metadata(self, elapsed: float, *, crashed: bool) -> None:
+        """Write the closing metadata record (clean stop or crash)."""
+        if self._recording_metadata is None:
+            return
+        try:
+            from datetime import datetime, timezone
+            self._recording_metadata.finalize(
+                datetime.now(timezone.utc).isoformat(),
+                float(elapsed),
+                crashed=crashed,
+            )
+        except Exception:  # noqa: BLE001 — never let metadata break shutdown
+            log.debug("could not finalize recording metadata", exc_info=True)
+        self._recording_metadata = None
+
+    def _connect_display_events(self) -> None:
+        """Watch for monitor hot-plug / layout changes (best-effort, no crash).
+
+        A monitor disappearing or resizing mid-recording can break the active
+        ffmpeg capture; that surfaces via the recorder's ``error`` signal (which
+        finalizes the log + metadata as crashed).  Here we only log the event so
+        it is diagnosable and never let a display-layer hiccup raise.
+        """
+        try:
+            app = QApplication.instance()
+            if app is None:
+                return
+            app.screenAdded.connect(self._on_screen_changed)
+            app.screenRemoved.connect(self._on_screen_changed)
+        except Exception:  # noqa: BLE001
+            log.debug("could not connect display events", exc_info=True)
+
+    def _on_screen_changed(self, _screen=None) -> None:
+        try:
+            from app.services.screen_recorder_service import RecorderState
+            recording = (
+                self._recorder is not None
+                and self._recorder.state in (
+                    RecorderState.RECORDING,
+                    RecorderState.PAUSED,
+                )
+            )
+            log.info(
+                "display configuration changed (recording=%s); "
+                "active capture is unaffected unless a captured monitor was lost",
+                recording,
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("screen-change handler failed", exc_info=True)
 
     def _notify_recording_context(
         self,
@@ -1696,6 +1874,18 @@ class MainWindow(QMainWindow):
             rec.concat_on_stop = qs.value(
                 "recording/concat_on_stop", rec.concat_on_stop, type=bool
             )
+            rec.display_mode = qs.value(
+                "recording/display_mode", rec.display_mode, type=str
+            )
+            rec.auto_reduce_fps = qs.value(
+                "recording/auto_reduce_fps", rec.auto_reduce_fps, type=bool
+            )
+            saved_ids = qs.value("recording/selected_display_ids", None)
+            if saved_ids is not None:
+                # QSettings may round-trip a single string instead of a list.
+                if isinstance(saved_ids, str):
+                    saved_ids = [saved_ids] if saved_ids else []
+                rec.selected_display_ids = [str(x) for x in saved_ids]
         except Exception:  # noqa: BLE001
             log.debug("could not load recording prefs", exc_info=True)
 
@@ -2457,8 +2647,8 @@ class MainWindow(QMainWindow):
             crops=result.crop_count,
             path=result.package_path,
         )
-        if result.missing_images:
-            msg += t("pkg_export_warn", missing=len(result.missing_images))
+        if result.warning_count:
+            msg += t("pkg_export_warn", missing=result.warning_count)
         QMessageBox.information(self, t("pkg_export_done"), msg)
 
     @Slot()

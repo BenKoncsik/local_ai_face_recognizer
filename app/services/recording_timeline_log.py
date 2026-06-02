@@ -1,21 +1,31 @@
-"""Image-file timeline ("subtitle") log for screen recordings.
+"""Image-file timeline log for screen recordings — SRT subtitle format.
 
-This is **not** speech recognition and not a real transcript.  It records,
-with recording-relative timestamps, which image file was active at each
-moment of the recording and which person was selected, e.g.::
+Not speech recognition, not a transcript.  Records, with recording-relative
+timestamps, which image file was active at each moment and which person was
+selected::
 
-    00:00:00 - 00:00:12 | 1984_PICT0346.JPG | kijelölt személy: Panni
-    00:00:12 - 00:00:31 | 1984_PICT0347.JPG | kijelölt személy: -
-    00:00:31 - 00:01:08 | 1984_PICT0348.JPG | kijelölt személy: Kati
+    1
+    00:00:00,000 --> 00:00:12,500
+    1984_PICT0346.JPG
+    Kijelölt személy: Panni
+
+    2
+    00:00:12,500 --> 00:00:31,200
+    1984_PICT0347.JPG
+
+    3
+    00:00:31,200 --> 00:01:08,000
+    1984_PICT0348.JPG
+    Kijelölt személy: Kati
 
 The writer is pure Python (no Qt / ffmpeg dependency) so it can be unit
-tested in isolation.  It is crash-safe: every time a new entry opens, an
-``.partial`` line is appended and flushed to disk immediately, so an
-interrupted recording still leaves a readable log.
+tested in isolation.  It is crash-safe: every time a new entry opens, the
+``.partial`` file is updated and flushed to disk immediately, so an
+interrupted recording still leaves a readable subtitle file.
 
 ``elapsed`` is the recording-relative time in seconds **excluding pauses**
-(the same clock the recorder uses for the video), so the timeline lines stay
-in sync with the final video.
+(the same clock the recorder uses for the video), so the subtitle timecodes
+stay in sync with the final video.
 """
 
 from __future__ import annotations
@@ -27,18 +37,17 @@ from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
-# Prefix and placeholder are configurable so the UI can localize them while
-# the formatting logic stays testable with fixed strings.
-DEFAULT_PERSON_PREFIX = "kijelölt személy:"
-DEFAULT_NONE_PLACEHOLDER = "-"
+DEFAULT_PERSON_PREFIX = "Kijelölt személy:"
 
 
 def format_timestamp(seconds: float) -> str:
-    """Format *seconds* as ``HH:MM:SS`` (clamped at zero)."""
-    total = int(max(0.0, seconds))
-    h, rem = divmod(total, 3600)
+    """Format *seconds* as SRT ``HH:MM:SS,mmm`` (clamped at zero)."""
+    total_ms = int(max(0.0, seconds) * 1000 + 0.5)  # round to nearest ms
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    h, rem = divmod(total_s, 3600)
     m, s = divmod(rem, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 @dataclass
@@ -52,27 +61,28 @@ class TimelineEntry:
 
 
 class RecordingTimelineLog:
-    """Accumulates timeline entries and writes the ``timeline.txt`` log.
+    """Accumulates timeline entries and writes an SRT subtitle file.
 
     Parameters
     ----------
     path:
-        Destination of the finalized log (``timeline.txt``).  A sibling
+        Destination of the finalized log (``timeline.srt``).  A sibling
         ``<path>.partial`` file receives crash-safe incremental writes.
-    person_prefix / none_placeholder:
-        Localizable strings used when formatting each line.
+    person_prefix:
+        Label prefix used in the person line (e.g. ``"Kijelölt személy:"``).
     """
 
     def __init__(
         self,
         path: str | Path,
         person_prefix: str = DEFAULT_PERSON_PREFIX,
-        none_placeholder: str = DEFAULT_NONE_PLACEHOLDER,
+        # none_placeholder kept for API compatibility but is no longer used in
+        # the SRT output (person line is simply omitted when name is absent).
+        none_placeholder: str = "-",
     ) -> None:
         self._path = Path(path)
         self._partial_path = self._path.with_name(self._path.name + ".partial")
         self._person_prefix = person_prefix
-        self._none_placeholder = none_placeholder
         self._entries: List[TimelineEntry] = []
 
     # ------------------------------------------------------------------
@@ -115,10 +125,10 @@ class RecordingTimelineLog:
     # ------------------------------------------------------------------
 
     def finalize(self, total_elapsed: float) -> Path:
-        """Close the last entry at *total_elapsed* and write ``timeline.txt``.
+        """Close the last entry at *total_elapsed* and write the SRT file.
 
-        Returns the path of the written log.  Removes the ``.partial`` file on
-        success.
+        Returns the path of the written file.  Removes the ``.partial`` file
+        on success.
         """
         if self._entries and self._entries[-1].end is None:
             self._entries[-1].end = max(self._entries[-1].start, total_elapsed)
@@ -128,36 +138,47 @@ class RecordingTimelineLog:
         try:
             if self._partial_path.exists():
                 self._partial_path.unlink()
-        except OSError:  # noqa: BLE001 — partial cleanup is best-effort
+        except OSError:  # noqa: BLE001
             log.debug("could not remove partial timeline %s", self._partial_path)
         return self._path
 
     def render(self, fallback_end: Optional[float] = None) -> str:
-        """Render all entries as the final multi-line log text."""
-        lines = [self._format_entry(e, fallback_end) for e in self._entries]
-        return "\n".join(lines) + ("\n" if lines else "")
+        """Render all entries as an SRT document."""
+        blocks = [
+            self._format_block(idx + 1, e, fallback_end)
+            for idx, e in enumerate(self._entries)
+        ]
+        # SRT: blocks separated by a blank line, trailing newline after last.
+        return "\n".join(blocks) + ("\n" if blocks else "")
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _format_entry(
-        self, entry: TimelineEntry, fallback_end: Optional[float]
+    def _format_block(
+        self,
+        index: int,
+        entry: TimelineEntry,
+        fallback_end: Optional[float],
     ) -> str:
         end = entry.end
         if end is None:
             end = fallback_end if fallback_end is not None else entry.start
-        image = entry.image_filename or self._none_placeholder
-        person = entry.person_name or self._none_placeholder
-        return (
-            f"{format_timestamp(entry.start)} - {format_timestamp(end)} "
-            f"| {image} | {self._person_prefix} {person}"
+        timecode = (
+            f"{format_timestamp(entry.start)} --> {format_timestamp(end)}"
         )
+        lines = [str(index), timecode]
+        lines.append(entry.image_filename or "")
+        if entry.person_name:
+            lines.append(f"{self._person_prefix} {entry.person_name}")
+        # Blank line terminates the SRT block.
+        lines.append("")
+        return "\n".join(lines)
 
     def _flush_partial(self) -> None:
         """Write a crash-safe snapshot of all entries to the partial file."""
         try:
             self._partial_path.parent.mkdir(parents=True, exist_ok=True)
             self._partial_path.write_text(self.render(), encoding="utf-8")
-        except OSError:  # noqa: BLE001 — never let logging break a recording
+        except OSError:  # noqa: BLE001
             log.warning("could not flush partial timeline %s", self._partial_path)

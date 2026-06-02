@@ -7,6 +7,7 @@ from typing import Optional
 
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSpinBox,
     QTabWidget,
@@ -344,8 +346,82 @@ class SettingsDialog(QDialog):
             cap_layout.addWidget(cb)
         layout.addWidget(cap_group)
 
+        # ── Screens to record ─────────────────────────────────────────────
+        layout.addWidget(self._build_recording_display_group(qs))
+
         layout.addStretch()
         return widget
+
+    def _build_recording_display_group(self, qs) -> QWidget:
+        """Display-mode radios + dynamic monitor checklist."""
+        from app.services.screen_recorder_service import (
+            RecordingDisplayMode,
+            format_display_label,
+        )
+        from app.ui.display_utils import enumerate_displays
+
+        group = QGroupBox(t("rec_set_display_group"))
+        vbox = QVBoxLayout(group)
+
+        cur_mode = qs.value("recording/display_mode", "all", type=str)
+        self._rec_mode_group = QButtonGroup(group)
+        self._rec_mode_active = QRadioButton(t("rec_set_mode_active"))
+        self._rec_mode_all = QRadioButton(t("rec_set_mode_all"))
+        self._rec_mode_selected = QRadioButton(t("rec_set_mode_selected"))
+        for btn, value in (
+            (self._rec_mode_active, RecordingDisplayMode.ACTIVE_WINDOW.value),
+            (self._rec_mode_all, RecordingDisplayMode.ALL_DISPLAYS.value),
+            (self._rec_mode_selected, RecordingDisplayMode.SELECTED_DISPLAYS.value),
+        ):
+            btn.setProperty("rec_mode", value)
+            self._rec_mode_group.addButton(btn)
+            vbox.addWidget(btn)
+            if value == cur_mode:
+                btn.setChecked(True)
+        if self._rec_mode_group.checkedButton() is None:
+            self._rec_mode_all.setChecked(True)
+
+        # Dynamic monitor checklist.
+        saved_ids = qs.value("recording/selected_display_ids", None)
+        if isinstance(saved_ids, str):
+            saved_ids = [saved_ids] if saved_ids else []
+        saved_set = {str(x) for x in (saved_ids or [])}
+
+        self._rec_display_checks: list[QCheckBox] = []
+        displays = enumerate_displays()
+        primary_marker = t("rec_set_primary_marker")
+        monitor_word = t("rec_set_monitor_word")
+        if displays:
+            for ordinal, info in enumerate(displays, start=1):
+                cb = QCheckBox(
+                    format_display_label(
+                        info, ordinal, monitor_word, primary_marker
+                    )
+                )
+                cb.setProperty("display_id", info.id)
+                cb.setChecked(info.id in saved_set)
+                self._rec_display_checks.append(cb)
+                vbox.addWidget(cb)
+        else:
+            vbox.addWidget(QLabel(t("rec_set_no_displays")))
+
+        self._rec_auto_fps_check = QCheckBox(t("rec_set_auto_fps"))
+        self._rec_auto_fps_check.setChecked(
+            qs.value("recording/auto_reduce_fps", True, type=bool)
+        )
+        vbox.addWidget(self._rec_auto_fps_check)
+
+        # Only enable the monitor checklist in "selected" mode.
+        def _sync_checklist_enabled() -> None:
+            enabled = self._rec_mode_selected.isChecked()
+            for cb in self._rec_display_checks:
+                cb.setEnabled(enabled)
+
+        self._rec_mode_group.buttonToggled.connect(
+            lambda *_: _sync_checklist_enabled()
+        )
+        _sync_checklist_enabled()
+        return group
 
     def _on_browse_recording_dir(self) -> None:
         start = self._rec_dir_edit.text() or str(Path.home())
@@ -704,6 +780,20 @@ class SettingsDialog(QDialog):
             "recording/capture_system_audio", self._rec_sysaudio_check.isChecked()
         )
         qs.setValue("recording/concat_on_stop", self._rec_concat_check.isChecked())
+        mode_btn = self._rec_mode_group.checkedButton()
+        if mode_btn is not None:
+            qs.setValue("recording/display_mode", mode_btn.property("rec_mode"))
+        qs.setValue(
+            "recording/selected_display_ids",
+            [
+                cb.property("display_id")
+                for cb in self._rec_display_checks
+                if cb.isChecked()
+            ],
+        )
+        qs.setValue(
+            "recording/auto_reduce_fps", self._rec_auto_fps_check.isChecked()
+        )
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)

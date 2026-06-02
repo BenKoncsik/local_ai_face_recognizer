@@ -117,6 +117,195 @@ def test_export_creates_facepack_with_expected_layout(project):
     assert manifest["images"]["count"] == 1
 
 
+def test_export_handles_pre_1980_timestamp(project):
+    """A source file dated before 1980 must not abort the ZIP export."""
+    import os
+
+    image_path = project["images_root"] / "sub" / "photo.jpg"
+    crop_file = project["crops_dir"] / "img000001_face000001.jpg"
+    # 1970-01-01 — earlier than the ZIP epoch (1980).
+    os.utime(image_path, (0, 0))
+    os.utime(crop_file, (0, 0))
+
+    target = project["tmp_path"] / "old.facepack"
+    result = _service(project).export_package(target)
+
+    assert result.package_path.exists()
+    assert result.image_count == 1
+    assert result.crop_count == 1
+
+    # Archive is still a valid ZIP and its entries carry the clamped 1980 date.
+    with zipfile.ZipFile(result.package_path) as zf:
+        assert zf.testzip() is None
+        info = zf.getinfo("images/sub/photo.jpg")
+        assert info.date_time == (1980, 1, 1, 0, 0, 0)
+        manifest = json.loads(zf.read(MANIFEST_NAME).decode("utf-8"))
+
+    # The real (pre-1980) mtime is still recorded in the manifest.
+    entry = manifest["images"]["entries"][0]
+    assert entry["mtime"] is not None
+    assert entry["mtime"].startswith("19")
+    assert entry["mtime_epoch"] == 0.0
+
+
+def test_import_restores_pre_1980_timestamp(project, tmp_path):
+    """A pre-1980 image's original mtime survives the export/import round-trip."""
+    import os
+
+    image_path = project["images_root"] / "sub" / "photo.jpg"
+    os.utime(image_path, (0, 0))  # 1970-01-01
+
+    target = project["tmp_path"] / "old.facepack"
+    _service(project).export_package(target)
+
+    dest = tmp_path / "restored"
+    result = ProjectPackageService.import_package(target, dest)
+
+    restored_img = result.images_dir / "sub" / "photo.jpg"
+    assert restored_img.exists()
+    # Original epoch-0 modification time is re-applied (not the clamped 1980).
+    assert restored_img.stat().st_mtime == 0.0
+
+
+def test_external_image_with_windows_path_and_long_name(project, tmp_path):
+    """An image with a Windows absolute path and a very long basename must
+    bundle under a sane, truncated, POSIX-safe archive name and import cleanly."""
+    long_name = (
+        "193X Szilvay Mária (1883-1966), Szilvay Géza (1920-1992), "
+        "Szilvay Mária (Kőmama) (1921-2011)-Balatonöszödi képeslap "
+        "Babától és Gézától, melyben kottákat kérnek.jpg"
+    )
+    # Real source on disk (outside the library root → no relative_path).
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    src = ext_dir / "src.jpg"
+    arr = np.zeros((8, 8, 3), dtype=np.uint8)
+    assert save_image_bgr(src, arr)
+
+    with session_scope() as session:
+        img = Image(
+            # A Windows-style absolute path stored in the DB.
+            file_path="D:\\Családi archiv képek\\_Táblák\\" + long_name,
+            relative_path=None,
+            file_hash="winhash",
+            file_mtime=0.0,
+            width=8, height=8,
+            detection_done=True,
+        )
+        session.add(img)
+
+    # The library service resolves DB images by file_path; redirect that single
+    # row's resolution by pointing file_path at the real temp file via a stub is
+    # overkill — instead verify archive-naming directly.
+    from app.services.project_package_service import (
+        _basename_any,
+        _safe_component,
+    )
+
+    base = _basename_any("D:\\Családi archiv képek\\_Táblák\\" + long_name)
+    assert base == long_name  # no backslashes survive
+    assert "\\" not in base and "/" not in base
+    safe = _safe_component(base)
+    assert len(safe.encode("utf-8")) <= 200
+    assert safe.endswith(".jpg")
+
+    # End-to-end: export then import must not raise ENAMETOOLONG.
+    target = tmp_path / "win.facepack"
+    _service(project).export_package(target)
+    with zipfile.ZipFile(target) as zf:
+        for name in zf.namelist():
+            # No archive member is an absolute / drive-letter path.
+            assert "\\" not in name
+            assert not (len(name) >= 2 and name[1] == ":")
+    dest = tmp_path / "restored_win"
+    result = ProjectPackageService.import_package(target, dest)
+    assert result.db_path.exists()
+
+
+def test_export_skips_foreign_windows_path_without_crashing(project, tmp_path):
+    """A Windows absolute path with a very long name must be skipped (not
+    crash with ENAMETOOLONG) when exporting on macOS/Linux."""
+    win_path = (
+        "D:\\Családi archiv képek\\Szemesi fényképválogatás\\_Táblák\\"
+        "Nagy1-1 (62[60]x140[138,5]) A\\Felhasználva\\"
+        "193X Szilvay Mária (1883-1966), Szilvay Géza (1920-1992), "
+        "Szilvay Mária (Kőmama) (1921-2011)-Balatonöszödi képeslap "
+        "Babától és Gézától, melyben kottákat kérnek.jpg"
+    )
+    with session_scope() as session:
+        session.add(
+            Image(
+                file_path=win_path,
+                relative_path=None,
+                file_hash="winhash-long",
+                file_mtime=0.0,
+                width=8, height=8,
+                detection_done=True,
+            )
+        )
+
+    target = tmp_path / "win.facepack"
+    # Must not raise OSError / ENAMETOOLONG.
+    result = _service(project).export_package(target)
+
+    assert result.package_path.exists()
+    # The fixture's real image is still bundled; the Windows-only one is skipped.
+    assert result.image_count == 1
+    assert any("Szilvay" in s for s in result.skipped_images)
+    assert any("Szilvay" in s for s in result.missing_images)
+    assert result.warning_count >= 1
+
+    with zipfile.ZipFile(result.package_path) as zf:
+        names = set(zf.namelist())
+        assert ARCHIVE_DB_PATH in names                       # db present
+        assert any(n.startswith(ARCHIVE_CROPS_DIR + "/") for n in names)  # crop present
+        manifest = json.loads(zf.read(MANIFEST_NAME).decode("utf-8"))
+
+    assert manifest["images"]["skipped_count"] >= 1
+    assert any("Szilvay" in s for s in manifest["images"]["skipped"])
+
+
+def test_is_foreign_windows_path_detection():
+    import os as _os
+
+    from app.services.project_package_service import _is_foreign_windows_path
+
+    if _os.name == "nt":
+        pytest.skip("Foreign-path detection only applies off Windows")
+
+    assert _is_foreign_windows_path("D:\\dir\\file.jpg")
+    assert _is_foreign_windows_path("C:/dir/file.jpg")
+    assert _is_foreign_windows_path("\\\\server\\share\\file.jpg")
+    # Genuine local POSIX paths must NOT be treated as foreign.
+    assert not _is_foreign_windows_path("/Users/me/photos/file.jpg")
+    assert not _is_foreign_windows_path("relative/file.jpg")
+    assert not _is_foreign_windows_path("")
+
+
+def test_safe_file_exists_swallows_oserror(monkeypatch):
+    from pathlib import Path as _Path
+
+    from app.services.project_package_service import _safe_file_exists
+
+    def boom(self):
+        raise OSError(63, "File name too long")
+
+    monkeypatch.setattr(_Path, "exists", boom)
+    # Must not raise — returns False instead.
+    assert _safe_file_exists("D:\\whatever\\x.jpg") is False
+
+
+def test_safe_component_truncates_to_byte_budget():
+    from app.services.project_package_service import _safe_component
+
+    name = ("á" * 300) + ".jpg"  # 600+ bytes of accented chars
+    out = _safe_component(name)
+    assert len(out.encode("utf-8")) <= 200
+    assert out.endswith(".jpg")
+    # Multi-byte char never split → still decodes cleanly.
+    out.encode("utf-8").decode("utf-8")
+
+
 def test_export_appends_extension_when_missing(project):
     target = project["tmp_path"] / "noext"
     result = _service(project).export_package(target)

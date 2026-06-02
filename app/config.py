@@ -329,6 +329,15 @@ class RecordingConfig:
     ffmpeg_path: Optional[str] = None
     # Concatenate the segments into a single final mp4 when recording stops.
     concat_on_stop: bool = True
+    # Which part of the screen to capture: ``"active_window"`` | ``"all"`` |
+    # ``"selected"`` (see ``RecordingDisplayMode``).
+    display_mode: str = "all"
+    # Monitor ids to record when ``display_mode == "selected"``.
+    selected_display_ids: list[str] = field(default_factory=list)
+    # Drop the frame rate automatically when capturing multiple monitors.
+    auto_reduce_fps: bool = True
+    # Frame-rate ceiling applied to multi-monitor captures.
+    multi_monitor_fps_cap: int = 15
 
 
 @dataclass

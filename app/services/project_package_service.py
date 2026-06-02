@@ -43,7 +43,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, List, Optional
 
 log = logging.getLogger(__name__)
@@ -66,6 +66,11 @@ ARCHIVE_LOCAL_CONFIG = f"{ARCHIVE_CONFIG_DIR}/project.local.json"
 # they remain restorable even without a configured library root.
 _EXTERNAL_IMAGE_PREFIX = "_external"
 
+# The ZIP format cannot represent timestamps before 1980-01-01.  Files older
+# than that (or with unreadable mtimes) get this fixed date in the archive so
+# the export never aborts.  The real mtime is preserved in the manifest.
+ZIP_MIN_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
 ProgressCb = Callable[[int, int, str], None]
 
 
@@ -80,12 +85,21 @@ class ExportResult:
     package_path: Path
     image_count: int = 0
     crop_count: int = 0
+    # Images that could not be bundled (missing / unreadable / foreign path).
     missing_images: List[str] = field(default_factory=list)
+    # Same set, exposed under the name the UI/callers consume for "skipped".
+    skipped_images: List[str] = field(default_factory=list)
+    # Subset with a relative path but no local file (Google-Drive-only / cache miss).
     drive_only_images: List[str] = field(default_factory=list)
 
     @property
+    def warning_count(self) -> int:
+        """Number of images that triggered a warning (were not bundled)."""
+        return len(self.skipped_images)
+
+    @property
     def has_warnings(self) -> bool:
-        return bool(self.missing_images or self.drive_only_images)
+        return bool(self.skipped_images or self.missing_images)
 
 
 @dataclass
@@ -227,8 +241,11 @@ class ProjectPackageService:
                     step += 1
                     _emit(progress_cb, step, total, f"Kivágás: {crop.name}")
                     arc = f"{ARCHIVE_CROPS_DIR}/{crop.name}"
-                    zf.write(crop, arc)
-                    result.crop_count += 1
+                    try:
+                        _write_file_to_zip_safe(zf, crop, arc)
+                        result.crop_count += 1
+                    except OSError as exc:
+                        log.warning("Export: failed to add crop %s: %s", crop, exc)
 
                 # --- images ---
                 image_manifest: List[dict] = []
@@ -305,7 +322,7 @@ class ProjectPackageService:
                 src.close()
 
             sha, size = _file_digest(tmp_db)
-            zf.write(tmp_db, ARCHIVE_DB_PATH)
+            _write_file_to_zip_safe(zf, tmp_db, ARCHIVE_DB_PATH)
             return sha, size
         finally:
             tmp_db.unlink(missing_ok=True)
@@ -328,7 +345,14 @@ class ProjectPackageService:
                 pass
 
         # Fall back to an id-keyed external bucket so the file is still bundled.
-        name = Path(file_path).name if file_path else f"image_{image.id}"
+        # The id prefix keeps names unique, so a too-long basename can be safely
+        # truncated.  Use a cross-platform basename: a Windows ``D:\a\b.jpg``
+        # path must not become one giant filename component when extracted on a
+        # POSIX host (that triggers ENAMETOOLONG).
+        if file_path:
+            name = _safe_component(_basename_any(file_path))
+        else:
+            name = f"image_{image.id}"
         return (
             f"{ARCHIVE_IMAGES_DIR}/{_EXTERNAL_IMAGE_PREFIX}/"
             f"{image.id}/{name}"
@@ -350,36 +374,76 @@ class ProjectPackageService:
     def _add_image(self, zf: zipfile.ZipFile, image, result: ExportResult) -> dict:
         archive_path = self._archive_image_path(image)
         source = self._resolve_image_source(image)
+        src_str = str(source) if source else ""
         entry: dict = {
             "id": image.id,
-            "source": str(source) if source else "",
+            "source": src_str,
             "archive_path": archive_path,
             "relative_path": getattr(image, "relative_path", None),
             "present": False,
             "size": None,
+            "mtime": None,
+            "mtime_epoch": None,
+            "skipped_reason": None,
         }
 
-        if source is None or not source.exists():
-            # Drive-only / cache-miss images have a relative path but no local
-            # file; everything else is simply missing.
-            label = str(source) if source else f"image_{image.id}"
-            if getattr(image, "relative_path", None):
-                result.drive_only_images.append(label)
-            result.missing_images.append(label)
+        # A Windows-only absolute path (``D:\…`` / ``\\server\share\…``) cannot
+        # exist on macOS/Linux; checking it with ``Path.exists()`` would raise
+        # ``OSError: [Errno 63] File name too long`` because it is treated as one
+        # huge local file name.  Detect and skip it *without* touching the
+        # filesystem.
+        foreign = bool(src_str) and _is_foreign_windows_path(src_str)
+        available = (
+            source is not None
+            and not foreign
+            and _safe_file_exists(source)
+        )
+
+        if not available:
+            label = src_str or f"image_{image.id}"
+            reason = "windows_path_on_non_windows" if foreign else "unavailable"
+            self._record_skipped_image(result, image, label, reason, foreign)
             entry["archive_path"] = None
-            log.warning("Export: image source missing, skipping: %s", label)
+            entry["skipped_reason"] = reason
+            log.warning(
+                "Export: skipping unavailable original image (%s): %s",
+                reason, label,
+            )
             return entry
 
         try:
-            zf.write(source, archive_path)
+            entry["mtime"] = _iso_mtime(source)
+            try:
+                entry["mtime_epoch"] = source.stat().st_mtime
+            except OSError:
+                entry["mtime_epoch"] = None
+            _write_file_to_zip_safe(zf, source, archive_path)
             entry["present"] = True
             entry["size"] = source.stat().st_size
             result.image_count += 1
         except OSError as exc:
-            result.missing_images.append(str(source))
+            self._record_skipped_image(result, image, src_str, "io_error", False)
             entry["archive_path"] = None
+            entry["skipped_reason"] = "io_error"
             log.warning("Export: failed to add image %s: %s", source, exc)
         return entry
+
+    @staticmethod
+    def _record_skipped_image(
+        result: ExportResult,
+        image,
+        label: str,
+        reason: str,
+        foreign: bool,
+    ) -> None:
+        """Record one un-exportable image into the result's warning lists."""
+        result.missing_images.append(label)
+        result.skipped_images.append(label)
+        # Images that have a portable relative path but no local file are the
+        # classic Google-Drive-only / cache-miss case.  A foreign Windows path
+        # is a different problem, so it is *not* flagged as drive-only.
+        if getattr(image, "relative_path", None) and not foreign:
+            result.drive_only_images.append(label)
 
     def _add_local_config(self, zf: zipfile.ZipFile) -> None:
         if self._local_config_path and self._local_config_path.exists():
@@ -426,7 +490,9 @@ class ProjectPackageService:
                 "archive_dir": ARCHIVE_IMAGES_DIR,
                 "count": result.image_count,
                 "missing_count": len(result.missing_images),
+                "skipped_count": len(result.skipped_images),
                 "drive_only_count": len(result.drive_only_images),
+                "skipped": list(result.skipped_images),
                 "entries": images,
             },
             "config": {
@@ -552,16 +618,31 @@ class ProjectPackageService:
             )
         dest.mkdir(parents=True, exist_ok=True)
 
+        skipped: List[str] = []
         with zipfile.ZipFile(package_path, "r") as zf:
             members = zf.infolist()
             total = len(members)
             for idx, member in enumerate(members, start=1):
                 if _is_unsafe_member(member.filename):
+                    # Security: a traversal / absolute-path member always aborts.
                     raise ProjectPackageError(
                         f"Path traversal kísérlet az archívumban: {member.filename}"
                     )
                 _emit(progress_cb, idx, total, f"Kibontás: {member.filename}")
-                _safe_extract_member(zf, member, dest)
+                try:
+                    _safe_extract_member(zf, member, dest)
+                except OSError as exc:
+                    # A single un-writable file (e.g. a name too long for the
+                    # target filesystem) must not abort the whole import; log it
+                    # and carry on.  Mandatory members are re-checked below.
+                    skipped.append(member.filename)
+                    log.warning(
+                        "Import: skipped unextractable member %r: %s",
+                        member.filename, exc,
+                    )
+
+        if skipped:
+            log.warning("Import: %d member(s) could not be extracted", len(skipped))
 
         db_path = dest / ARCHIVE_DB_DIR / ARCHIVE_DB_NAME
         images_dir = dest / ARCHIVE_IMAGES_DIR
@@ -574,6 +655,14 @@ class ProjectPackageService:
         crops_dir.mkdir(exist_ok=True)
 
         manifest = validation.manifest or {}
+
+        # Restore each image's original modification time from the manifest.
+        # The ZIP entry's own date was clamped to 1980 for pre-1980 files, but
+        # the real timestamp was preserved in the manifest so it survives the
+        # round-trip.
+        restored = _restore_image_mtimes(dest, manifest)
+        if restored:
+            log.info("Restored original mtime for %d image(s)", restored)
 
         # Rewrite the machine-local config so the library root points at the
         # extracted images directory (ignoring any stale absolute root that the
@@ -637,6 +726,76 @@ def _normalize_posix(rel: str) -> str:
     return "/".join(parts)
 
 
+# Most filesystems cap a single path component at 255 bytes; stay well under it
+# to leave room for any future suffixing and avoid edge cases.
+_MAX_COMPONENT_BYTES = 200
+
+
+def _safe_file_exists(path: Path | str) -> bool:
+    """Return whether *path* exists, swallowing filesystem errors.
+
+    ``Path.exists()`` can raise ``OSError`` (e.g. ``[Errno 63] File name too
+    long`` when a Windows absolute path is mis-handled as one giant local file
+    name on macOS/Linux).  Such failures must never abort the export, so they
+    are logged and treated as "does not exist".
+    """
+    try:
+        return Path(path).exists()
+    except OSError as exc:
+        log.warning("File existence check failed for %r: %s", str(path), exc)
+        return False
+
+
+def _is_foreign_windows_path(path_str: str) -> bool:
+    """True if *path_str* is a Windows-only absolute path on a non-Windows host.
+
+    Recognises drive-letter paths (``C:\\…`` / ``C:/…``) and UNC paths
+    (``\\\\server\\share\\…``) via :class:`pathlib.PureWindowsPath`.  Always
+    ``False`` on Windows, where such paths are genuinely local and checkable.
+    """
+    if os.name == "nt" or not path_str:
+        return False
+    try:
+        pw = PureWindowsPath(path_str)
+    except (TypeError, ValueError):
+        return False
+    # A drive letter or UNC root makes it an absolute Windows-only location.
+    return bool(pw.drive) and pw.is_absolute()
+
+
+def _basename_any(path_str: str) -> str:
+    """Return the file name from *path_str*, treating ``/`` and ``\\`` as separators.
+
+    ``pathlib.Path`` only honours the *host* OS separator, so a Windows path
+    such as ``D:\\dir\\file.jpg`` keeps its backslashes (and stays one giant
+    component) on POSIX.  This splits on both so the bare file name is always
+    recovered, regardless of which OS produced the path.
+    """
+    normalized = path_str.replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1].strip()
+    return name or "file"
+
+
+def _safe_component(name: str, max_bytes: int = _MAX_COMPONENT_BYTES) -> str:
+    """Clamp a single file-name component to *max_bytes* UTF-8 bytes.
+
+    The extension is preserved and multi-byte characters are never split.  Used
+    only for id-keyed external image names, where the surrounding ``<id>/``
+    folder already guarantees uniqueness, so truncation cannot collide.
+    """
+    name = name.strip() or "file"
+    if len(name.encode("utf-8")) <= max_bytes:
+        return name
+
+    stem, dot, ext = name.rpartition(".")
+    if not dot or len(ext) > 16:  # no usable extension
+        stem, ext = name, ""
+    ext_suffix = ("." + ext) if ext else ""
+    budget = max(max_bytes - len(ext_suffix.encode("utf-8")), 1)
+    truncated = stem.encode("utf-8")[:budget].decode("utf-8", "ignore").strip()
+    return (truncated or "file") + ext_suffix
+
+
 def _is_unsafe_member(name: str) -> bool:
     """Return ``True`` if a ZIP member name is absolute or escapes the root."""
     if not name:
@@ -681,6 +840,115 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _safe_zip_date_time(source_path: Path) -> tuple[tuple[int, int, int, int, int, int], bool]:
+    """Return a ZIP-compatible ``date_time`` tuple for *source_path*.
+
+    The ZIP format cannot encode timestamps before 1980.  When the file's
+    modification time is older than that — or cannot be read at all — the date
+    is clamped to :data:`ZIP_MIN_DATE_TIME` and the second tuple element is
+    ``True`` to signal the caller that a warning should be logged.
+    """
+    try:
+        dt = datetime.fromtimestamp(source_path.stat().st_mtime)
+        if dt.year < 1980:
+            return ZIP_MIN_DATE_TIME, True
+        return (dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second), False
+    except (OSError, OverflowError, ValueError):
+        # Negative / out-of-range timestamps raise on some platforms (notably
+        # Windows); fall back to the minimum supported date.
+        return ZIP_MIN_DATE_TIME, True
+
+
+def _restore_image_mtimes(dest: Path, manifest: dict) -> int:
+    """Re-apply each image's original modification time after extraction.
+
+    Uses ``mtime_epoch`` (a raw POSIX timestamp) when present — it round-trips
+    pre-1980 / pre-1970 dates without timezone or parsing pitfalls — and falls
+    back to parsing the ISO ``mtime`` string.  Best effort: a single failure
+    never aborts the import.
+
+    Returns the number of files whose timestamp was restored.
+    """
+    entries = (manifest.get("images") or {}).get("entries") or []
+    restored = 0
+    for entry in entries:
+        archive_path = entry.get("archive_path")
+        if not archive_path:
+            continue
+        epoch = _entry_mtime_epoch(entry)
+        if epoch is None:
+            continue
+        target = dest / archive_path
+        if not target.exists():
+            continue
+        try:
+            os.utime(target, (epoch, epoch))
+            restored += 1
+        except (OSError, OverflowError, ValueError):
+            # e.g. Windows cannot set negative (pre-1970) times — skip quietly.
+            log.debug("Could not restore mtime for %s", target, exc_info=True)
+    return restored
+
+
+def _entry_mtime_epoch(entry: dict) -> Optional[float]:
+    """Resolve a POSIX timestamp from a manifest image entry, if recorded."""
+    epoch = entry.get("mtime_epoch")
+    if isinstance(epoch, (int, float)):
+        return float(epoch)
+    iso = entry.get("mtime")
+    if isinstance(iso, str) and iso:
+        try:
+            return datetime.fromisoformat(iso).timestamp()
+        except (ValueError, OverflowError, OSError):
+            return None
+    return None
+
+
+def _iso_mtime(source_path: Path) -> Optional[str]:
+    """Return the file's modification time as an ISO-8601 string, or ``None``."""
+    try:
+        return datetime.fromtimestamp(source_path.stat().st_mtime).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _write_file_to_zip_safe(
+    zf: zipfile.ZipFile, source_path: Path | str, archive_path: str
+) -> bool:
+    """Stream *source_path* into *zf* with a ZIP-safe timestamp.
+
+    A :class:`zipfile.ZipInfo` is built by hand so a pre-1980 (or invalid)
+    modification time can be clamped to :data:`ZIP_MIN_DATE_TIME` instead of
+    raising ``ValueError: ZIP does not support timestamps before 1980``.  The
+    file content is copied in chunks so large images never load fully into
+    memory, and the archive stays a valid, ZIP-compatible ``.facepack``.
+
+    Returns ``True`` when the timestamp had to be clamped.
+    """
+    source_path = Path(source_path)
+    st = source_path.stat()
+    date_time, clamped = _safe_zip_date_time(source_path)
+
+    zinfo = zipfile.ZipInfo(filename=archive_path, date_time=date_time)
+    zinfo.compress_type = zipfile.ZIP_DEFLATED
+    # Preserve the unix permission bits in the high word of external_attr.
+    zinfo.external_attr = (st.st_mode & 0xFFFF) << 16
+
+    with source_path.open("rb") as src, zf.open(zinfo, "w") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+
+    if clamped:
+        log.warning(
+            "ZIP timestamp clamped to 1980 for %s (original mtime unsupported)",
+            source_path,
+        )
+    return clamped
 
 
 def _file_digest(path: Path) -> tuple[str, int]:

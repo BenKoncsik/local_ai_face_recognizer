@@ -101,8 +101,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "rec_state_paused":       {"en": "Paused", "hu": "Szüneteltetve"},
     "rec_state_finalizing":   {"en": "Saving…", "hu": "Mentés…"},
     "rec_state_error":        {"en": "Recording error", "hu": "Rögzítési hiba"},
-    "rec_person_prefix":      {"en": "selected person:", "hu": "kijelölt személy:"},
-    "rec_none_placeholder":   {"en": "-", "hu": "-"},
+    "rec_person_prefix":      {"en": "Selected person:", "hu": "Kijelölt személy:"},
     "rec_choose_dir":         {"en": "Choose recording folder",
                                "hu": "Rögzítési mappa kiválasztása"},
     "rec_ffmpeg_missing_title": {"en": "ffmpeg not found",
@@ -122,6 +121,18 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "rec_quality_low":        {"en": "Low", "hu": "Alacsony"},
     "rec_quality_normal":     {"en": "Normal", "hu": "Normál"},
     "rec_quality_better":     {"en": "Better", "hu": "Jobb"},
+    "rec_privacy_title":      {"en": "Recording is about to start",
+                               "hu": "A rögzítés mindjárt elindul"},
+    "rec_privacy_body": {
+        "en": "Screen and audio recording will begin. In an online meeting, "
+              "make sure the participants are aware that the session is being "
+              "recorded.",
+        "hu": "A képernyő és a hang rögzítése elindul. Online megbeszélés "
+              "esetén győződj meg róla, hogy a résztvevők tudnak a "
+              "rögzítésről.",
+    },
+    "rec_privacy_dont_ask":   {"en": "Don't show this again",
+                               "hu": "Ne jelenjen meg többször"},
     "tab_face_recognition": {"en": "Face Recognition", "hu": "Arcfelismerés"},
     "tab_image_browser":  {"en": "Image Browser", "hu": "Képböngésző"},
     "tab_family_search":  {"en": "Family Search", "hu": "Családi kereső"},
@@ -350,10 +361,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "pkg_export_done":   {"en": "Project package", "hu": "Projektcsomag"},
     "pkg_export_ok":     {"en": "Saved {images} image(s) and {crops} crop(s) to:\n{path}",
                           "hu": "{images} kép és {crops} kivágás mentve ide:\n{path}"},
-    "pkg_export_warn":   {"en": "\n\nWarning: {missing} image(s) were missing locally "
-                                "and could not be bundled (see log).",
-                          "hu": "\n\nFigyelem: {missing} kép lokálisan hiányzott és nem "
-                                "került a csomagba (részletek a logban)."},
+    "pkg_export_warn":   {"en": "\n\nThe export finished, but {missing} image(s) "
+                                "were not available and could not be bundled "
+                                "(see log).",
+                          "hu": "\n\nAz export elkészült, de {missing} kép nem volt "
+                                "elérhető, és nem került a csomagba (részletek a logban)."},
     "pkg_import_title":  {"en": "Import project", "hu": "Projekt importálása"},
     "pkg_import_confirm": {"en": "This will extract the project into:\n{dest}\n\n"
                                  "Your current project will not be overwritten. "
@@ -1306,6 +1318,17 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "rec_set_ffmpeg_path":    {"en": "ffmpeg path (optional):",
                                "hu": "ffmpeg útvonal (opcionális):"},
     "rec_set_unset":          {"en": "(ask each time)", "hu": "(kérdezzen rá mindig)"},
+    "rec_set_display_group":  {"en": "Screens to record", "hu": "Képernyők rögzítése"},
+    "rec_set_mode_active":    {"en": "Active application window",
+                               "hu": "Aktív alkalmazásablak"},
+    "rec_set_mode_all":       {"en": "All screens", "hu": "Összes képernyő"},
+    "rec_set_mode_selected":  {"en": "Selected screens", "hu": "Kiválasztott képernyők"},
+    "rec_set_primary_marker": {"en": "(primary)", "hu": "(elsődleges)"},
+    "rec_set_monitor_word":   {"en": "monitor", "hu": "monitor"},
+    "rec_set_no_displays":    {"en": "(no monitors detected)",
+                               "hu": "(nem észlelhető monitor)"},
+    "rec_set_auto_fps":       {"en": "Reduce frame rate for multi-monitor capture",
+                               "hu": "Képkockaszám csökkentése többmonitoros rögzítésnél"},
 
     "gdrive_account_group":   {"en": "Google account", "hu": "Google fiók"},
     "gdrive_account_none":    {"en": "(no account signed in)",
