@@ -453,6 +453,32 @@ class SuggestionDialog(QDialog):
         self._show_deferred.toggled.connect(lambda *_: self._reload())
         controls.addWidget(self._show_deferred)
 
+        # Auto-merge section
+        auto_merge_section = QHBoxLayout()
+        auto_merge_section.setSpacing(2)
+
+        self._auto_merge_btn = QPushButton(t("suggestions_auto_merge"))
+        self._auto_merge_btn.clicked.connect(self._on_auto_merge)
+        auto_merge_section.addWidget(self._auto_merge_btn)
+
+        auto_merge_section.addWidget(QLabel(t("suggestions_auto_merge_max_faces")))
+        self._auto_merge_max_faces = QDoubleSpinBox()
+        self._auto_merge_max_faces.setRange(1, 100)
+        self._auto_merge_max_faces.setSingleStep(1)
+        self._auto_merge_max_faces.setDecimals(0)
+        self._auto_merge_max_faces.setValue(float(self._matching.auto_merge_max_unknown_faces))
+        auto_merge_section.addWidget(self._auto_merge_max_faces)
+
+        auto_merge_section.addWidget(QLabel(t("suggestions_auto_merge_min_confidence")))
+        self._auto_merge_min_confidence = QDoubleSpinBox()
+        self._auto_merge_min_confidence.setRange(0.0, 1.0)
+        self._auto_merge_min_confidence.setSingleStep(0.05)
+        self._auto_merge_min_confidence.setDecimals(2)
+        self._auto_merge_min_confidence.setValue(float(self._matching.auto_merge_min_confidence))
+        auto_merge_section.addWidget(self._auto_merge_min_confidence)
+
+        controls.addLayout(auto_merge_section)
+
         controls.addStretch()
 
         self._count_label = QLabel("")
@@ -678,6 +704,37 @@ class SuggestionDialog(QDialog):
         self._worker_in_progress = True
         self._worker_label = label
         self._worker.run_decision(action, label)
+
+    def _on_auto_merge(self) -> None:
+        """Trigger automatic merging of high-confidence suggestions."""
+        min_conf = self._auto_merge_min_confidence.value()
+        max_faces = int(self._auto_merge_max_faces.value())
+
+        def run_auto_merge(svc):
+            return svc.auto_merge_suggestions(
+                min_confidence=min_conf,
+                max_unknown_faces=max_faces,
+            )
+
+        try:
+            with session_scope() as session:
+                merged_count = run_auto_merge(MergeSuggestionService(session, self._matching))
+            if merged_count > 0:
+                QMessageBox.information(
+                    self,
+                    t("suggestions_auto_merge"),
+                    t("suggestions_auto_merge_result", n=merged_count),
+                )
+                self._reload()
+            else:
+                QMessageBox.information(
+                    self,
+                    t("suggestions_auto_merge"),
+                    t("suggestions_auto_merge_none"),
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Auto-merge failed")
+            QMessageBox.warning(self, t("error"), str(exc))
 
     @Slot(bool)
     def _on_decision_finished(self, success: bool) -> None:

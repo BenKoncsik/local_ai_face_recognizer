@@ -616,6 +616,81 @@ class MergeSuggestionService:
         if row is not None:
             self._record_different(row.source_person_id, row.target_person_id)
 
+    def auto_merge_suggestions(
+        self,
+        min_confidence: Optional[float] = None,
+        max_unknown_faces: Optional[int] = None,
+    ) -> int:
+        """Automatically merge high-confidence suggestions for small unknown persons.
+
+        Args:
+            min_confidence: Minimum confidence threshold (defaults to config).
+            max_unknown_faces: Maximum faces in unknown person (defaults to config).
+
+        Returns:
+            Number of suggestions that were automatically merged.
+        """
+        if min_confidence is None:
+            min_confidence = self._config.auto_merge_min_confidence
+        if max_unknown_faces is None:
+            max_unknown_faces = self._config.auto_merge_max_unknown_faces
+
+        # Query all pending suggestions sorted by confidence (highest first)
+        rows = (
+            self._session.query(MergeSuggestion)
+            .filter(MergeSuggestion.status == MERGE_STATUS_PENDING)
+            .order_by(MergeSuggestion.confidence.desc())
+            .all()
+        )
+
+        merged_count = 0
+        for row in rows:
+            # Only auto-merge if confidence meets threshold
+            if row.confidence < min_confidence:
+                continue
+
+            # Determine which side is the auto-named (unknown) person
+            src = self._session.get(Person, row.source_person_id)
+            tgt = self._session.get(Person, row.target_person_id)
+
+            if src is None or tgt is None:
+                continue
+
+            # The auto-named person is the candidate; check face count
+            if src.is_auto_named and len(src.faces) <= max_unknown_faces:
+                candidate_id = row.source_person_id
+                target_id = row.target_person_id
+            elif tgt.is_auto_named and len(tgt.faces) <= max_unknown_faces:
+                candidate_id = row.target_person_id
+                target_id = row.source_person_id
+            else:
+                # Neither side qualifies for auto-merge
+                continue
+
+            # Accept this suggestion (merges the persons)
+            try:
+                log.info(
+                    "Auto-merging suggestion %d: %d → %d (confidence=%.2f)",
+                    row.id,
+                    candidate_id,
+                    target_id,
+                    row.confidence,
+                )
+                # The row will be cascade-deleted when the candidate person is deleted
+                self._session.expunge(row)
+                IdentityService(self._session).merge_persons(
+                    source_id=candidate_id, target_id=target_id
+                )
+                merged_count += 1
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "Failed to auto-merge suggestion %d: %s", row.id, exc
+                )
+                # Continue with the next suggestion
+                self._session.rollback()
+
+        return merged_count
+
     def _decide(self, suggestion_id: int, status: str) -> None:
         row = self._require(suggestion_id)
         row.status = status

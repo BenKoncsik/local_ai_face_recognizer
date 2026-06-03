@@ -263,6 +263,12 @@ class MatchingConfig:
     # Maximum ranked target suggestions kept per candidate person.
     max_suggestions_per_person: int = 3
 
+    # --- Auto-merge settings ---
+    # Minimum confidence threshold for automatic merging of unknown persons.
+    auto_merge_min_confidence: float = 0.60
+    # Maximum number of faces in an unknown person to allow automatic merging.
+    auto_merge_max_unknown_faces: int = 5
+
     # --- Background worker tuning ---
     # Persons scored per chunk handed to the thread pool.
     chunk_size: int = 64
