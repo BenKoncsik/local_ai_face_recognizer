@@ -6,7 +6,7 @@ import logging
 import threading
 from typing import Callable
 
-from PySide6.QtCore import QMetaObject, QObject, Qt, Signal
+from PySide6.QtCore import QObject, Signal
 
 from app.config import MatchingConfig
 from app.db.database import session_scope
@@ -19,12 +19,12 @@ class SuggestionWorker(QObject):
 	"""Worker that runs merge decisions on a background thread.
 
 	Signals:
-		decision_finished(bool): True if successful, False on error.
-		error_occurred(str): Error message if decision failed.
+		decision_finished(int, str, bool): suggestion_id, label, success
+		error_occurred(int, str): suggestion_id, error message
 	"""
 
-	decision_finished = Signal(bool)
-	error_occurred = Signal(str)
+	decision_finished = Signal(int, str, bool)
+	error_occurred = Signal(int, str)
 
 	def __init__(self, matching: MatchingConfig) -> None:
 		super().__init__()
@@ -34,11 +34,12 @@ class SuggestionWorker(QObject):
 		self,
 		action: Callable[[MergeSuggestionService], None],
 		label: str,
+		suggestion_id: int,
 	) -> None:
 		"""Queue a decision to run on a background thread (non-blocking)."""
 		thread = threading.Thread(
 			target=self._worker_run,
-			args=(action, label),
+			args=(action, label, suggestion_id),
 			daemon=True,
 		)
 		thread.start()
@@ -47,6 +48,7 @@ class SuggestionWorker(QObject):
 		self,
 		action: Callable[[MergeSuggestionService], None],
 		label: str,
+		suggestion_id: int,
 	) -> None:
 		"""Run the decision on the background thread, then emit signals on UI thread."""
 		success = False
@@ -61,28 +63,18 @@ class SuggestionWorker(QObject):
 			log.exception("Suggestion %s failed", label)
 			error_msg = str(exc)
 
-		# Emit signals on the UI thread using QMetaObject.invokeMethod
-		QMetaObject.invokeMethod(
-			self,
-			"_emit_decision_finished",
-			Qt.QueuedConnection,
-			success,
-		)
+		# Emit signals on the UI thread using QTimer.singleShot to schedule on the GUI thread.
+		from PySide6.QtCore import QTimer
+		QTimer.singleShot(0, lambda: self._emit_decision_finished(suggestion_id, label, success))
 		if error_msg:
-			QMetaObject.invokeMethod(
-				self,
-				"_emit_error_occurred",
-				Qt.QueuedConnection,
-				error_msg,
-			)
+			QTimer.singleShot(0, lambda: self._emit_error_occurred(suggestion_id, error_msg))
 
-	def _emit_decision_finished(self, success: bool) -> None:
+	def _emit_decision_finished(self, suggestion_id: int, label: str, success: bool) -> None:
 		"""Emit decision_finished signal (called on UI thread)."""
-		self.decision_finished.emit(success)
+		self.decision_finished.emit(suggestion_id, label, success)
 
-	def _emit_error_occurred(self, error_msg: str) -> None:
+	def _emit_error_occurred(self, suggestion_id: int, error_msg: str) -> None:
 		"""Emit error_occurred signal (called on UI thread)."""
-		self.error_occurred.emit(error_msg)
-
+		self.error_occurred.emit(suggestion_id, error_msg)
 
 

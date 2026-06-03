@@ -415,11 +415,12 @@ class SuggestionDialog(QDialog):
         self._rows: List[_SuggestionRow] = []
         self._focus_idx: int = -1
 
-        # Create worker thread for background merge decisions
+        # Create worker for background merge decisions (allows concurrent runs)
         self._worker = SuggestionWorker(self._matching)
         self._worker.decision_finished.connect(self._on_decision_finished)
         self._worker.error_occurred.connect(self._on_decision_error)
-        self._worker_in_progress = False
+        # Track running decisions by suggestion_id
+        self._worker_in_progress = set()
 
         self.setWindowTitle(t("suggestions_title"))
         self.setMinimumSize(900, 560)
@@ -582,6 +583,9 @@ class SuggestionDialog(QDialog):
             row.rejected.connect(self._on_reject)
             row.deferred.connect(self._on_defer)
             row.focused.connect(lambda idx=i: self._set_focus(idx))
+            # If a decision for this suggestion is currently running, disable the row
+            if self._suggestion_ids[i] in self._worker_in_progress:
+                row.setDisabled(True)
             self._rows.append(row)
             self._list_layout.insertWidget(self._list_layout.count() - 1, row)
 
@@ -670,19 +674,19 @@ class SuggestionDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
         self._run_decision_async(
-            lambda svc: svc.accept(suggestion_id), "approval"
+            lambda svc: svc.accept(suggestion_id), "approval", suggestion_id
         )
 
     @Slot(int)
     def _on_reject(self, suggestion_id: int) -> None:
         self._run_decision_async(
-            lambda svc: svc.reject(suggestion_id), "rejection"
+            lambda svc: svc.reject(suggestion_id), "rejection", suggestion_id
         )
 
     @Slot(int)
     def _on_defer(self, suggestion_id: int) -> None:
         self._run_decision_async(
-            lambda svc: svc.defer(suggestion_id), "defer"
+            lambda svc: svc.defer(suggestion_id), "defer", suggestion_id
         )
 
     def _run_decision(self, action, label: str) -> bool:
@@ -696,14 +700,20 @@ class SuggestionDialog(QDialog):
             QMessageBox.warning(self, t("error"), str(exc))
             return False
 
-    def _run_decision_async(self, action, label: str) -> None:
+    def _run_decision_async(self, action, label: str, suggestion_id: int) -> None:
         """Queue a decision to run in the thread pool (non-blocking)."""
-        if self._worker_in_progress:
-            log.warning("Decision already in progress, ignoring new request")
+        if suggestion_id in self._worker_in_progress:
+            log.warning("Decision for suggestion %d already in progress, ignoring new request", suggestion_id)
             return
-        self._worker_in_progress = True
-        self._worker_label = label
-        self._worker.run_decision(action, label)
+        self._worker_in_progress.add(suggestion_id)
+        # Disable the corresponding row UI while processing
+        try:
+            idx = self._suggestion_ids.index(suggestion_id)
+        except ValueError:
+            idx = None
+        if idx is not None:
+            self._rows[idx].setDisabled(True)
+        self._worker.run_decision(action, label, suggestion_id)
 
     def _on_auto_merge(self) -> None:
         """Trigger automatic merging of high-confidence suggestions."""
@@ -736,19 +746,74 @@ class SuggestionDialog(QDialog):
             log.exception("Auto-merge failed")
             QMessageBox.warning(self, t("error"), str(exc))
 
-    @Slot(bool)
-    def _on_decision_finished(self, success: bool) -> None:
-        """Handle worker completion."""
-        self._worker_in_progress = False
-        if success:
-            log.info("Merge suggestion %s completed", self._worker_label)
-            if self._worker_label == "approval":
-                self.data_changed.emit()
-            self._reload()
+    @Slot(int, str, bool)
+    def _on_decision_finished(self, suggestion_id: int, label: str, success: bool) -> None:
+        """Handle worker completion for a specific suggestion.
 
-    @Slot(str)
-    def _on_decision_error(self, error_msg: str) -> None:
-        """Handle worker error."""
-        self._worker_in_progress = False
-        log.exception("Suggestion %s failed: %s", self._worker_label, error_msg)
+        Remove the processed row from the UI immediately when possible. On
+        success the row is removed; on failure the row is re-enabled so the
+        user can try again.
+        """
+        # Mark done
+        self._worker_in_progress.discard(suggestion_id)
+
+        if not success:
+            # Re-enable the row if present; error message is delivered via
+            # _on_decision_error when available, but handle the generic case.
+            try:
+                idx = self._suggestion_ids.index(suggestion_id)
+                self._rows[idx].setDisabled(False)
+            except ValueError:
+                pass
+            return
+
+        # success path
+        log.info("Merge suggestion %s completed for %d", label, suggestion_id)
+        if label == "approval":
+            self.data_changed.emit()
+
+        # Try to remove the specific row from the list without a full reload.
+        try:
+            idx = self._suggestion_ids.index(suggestion_id)
+        except ValueError:
+            # If we can't find it locally, fall back to a full reload.
+            self._reload()
+            return
+
+        # Remove widget from layout and internal lists
+        row = self._rows.pop(idx)
+        self._suggestions.pop(idx)
+        self._suggestion_ids.pop(idx)
+        # Remove from layout and delete
+        try:
+            self._list_layout.removeWidget(row)
+            row.deleteLater()
+        except Exception:
+            log.debug("Failed to remove row widget cleanly", exc_info=True)
+
+        # Update count label
+        self._count_label.setText(t("suggestions_count", n=len(self._suggestions)))
+
+        # Adjust focus index
+        if self._focus_idx >= len(self._rows):
+            self._focus_idx = len(self._rows) - 1
+        if self._focus_idx >= 0:
+            # Ensure one row has focused styling
+            for i, r in enumerate(self._rows):
+                r.set_focused(i == self._focus_idx)
+        else:
+            # No rows left -> show empty label
+            self._empty_label.setVisible(len(self._rows) == 0)
+
+    @Slot(int, str)
+    def _on_decision_error(self, suggestion_id: int, error_msg: str) -> None:
+        """Handle worker error for a specific suggestion."""
+        self._worker_in_progress.discard(suggestion_id)
+        log.exception("Suggestion %d failed: %s", suggestion_id, error_msg)
+        # Re-enable row if present
+        try:
+            idx = self._suggestion_ids.index(suggestion_id)
+            self._rows[idx].setDisabled(False)
+        except ValueError:
+            pass
         QMessageBox.warning(self, t("error"), error_msg)
