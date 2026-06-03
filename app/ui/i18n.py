@@ -145,6 +145,26 @@ _STRINGS: Dict[str, Dict[str, str]] = {
               "(pl. BlackHole), és ki van-e választva a Beállítások → Rögzítés "
               "alatt.",
     },
+    "rec_no_audio_warning_windows": {
+        "en": "The recording contains NO audio track. Check that desktop apps "
+              "are allowed to use the microphone (Settings → Privacy & security "
+              "→ Microphone → \"Let desktop apps access your microphone\"), and "
+              "that a microphone is selected and not muted in Settings → "
+              "Recording. For system sound, enable \"Stereo Mix\" in the Sound "
+              "control panel (Recording tab → right-click → Show Disabled "
+              "Devices) or install a virtual loopback (e.g. VB-Audio Virtual "
+              "Cable), then select it in Settings → Recording.",
+        "hu": "A felvétel NEM tartalmaz hangsávot. Ellenőrizd, hogy az asztali "
+              "alkalmazások használhatják-e a mikrofont (Beállítások → "
+              "Adatvédelem és biztonság → Mikrofon → „Asztali alkalmazások "
+              "hozzáférhetnek a mikrofonhoz”), és hogy a Beállítások → Rögzítés "
+              "alatt ki van-e választva egy mikrofon, és nincs-e némítva. "
+              "Rendszerhanghoz engedélyezd a „Stereo Mix” eszközt a Hang "
+              "vezérlőpulton (Felvétel fül → jobb klikk → Letiltott eszközök "
+              "megjelenítése), vagy telepíts egy virtuális loopback eszközt "
+              "(pl. VB-Audio Virtual Cable), majd válaszd ki a Beállítások → "
+              "Rögzítés alatt.",
+    },
     "rec_audio_input_device": {"en": "Audio input device (microphone)",
                                "hu": "Hangbemeneti eszköz (mikrofon)"},
     "rec_system_audio_device": {"en": "System audio device (loopback)",

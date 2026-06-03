@@ -1714,11 +1714,18 @@ class MainWindow(QMainWindow):
             body = t("rec_saved_body", path=str(target))
             validation = self._last_audio_validation
             if validation is not None and not validation.has_audio:
-                # Make a silent recording impossible to miss.
+                # Make a silent recording impossible to miss.  The remedy is
+                # platform-specific (BlackHole/TCC on macOS vs. Stereo Mix /
+                # Windows mic-privacy on Windows), so pick the right guidance.
+                warn_key = (
+                    "rec_no_audio_warning_windows"
+                    if sys.platform.startswith("win")
+                    else "rec_no_audio_warning"
+                )
                 QMessageBox.warning(
                     self,
                     t("rec_saved_title"),
-                    f"{body}\n\n⚠ {t('rec_no_audio_warning')}",
+                    f"{body}\n\n⚠ {t(warn_key)}",
                 )
             else:
                 QMessageBox.information(self, t("rec_saved_title"), body)
