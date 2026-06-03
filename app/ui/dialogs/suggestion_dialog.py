@@ -51,6 +51,7 @@ from app.ui.dialogs.suggestion_viewer import (
     get_other_bboxes,
 )
 from app.ui.i18n import t
+from app.ui.workers.suggestion_worker import SuggestionWorker
 
 log = logging.getLogger(__name__)
 
@@ -414,6 +415,12 @@ class SuggestionDialog(QDialog):
         self._rows: List[_SuggestionRow] = []
         self._focus_idx: int = -1
 
+        # Create worker thread for background merge decisions
+        self._worker = SuggestionWorker(self._matching)
+        self._worker.decision_finished.connect(self._on_decision_finished)
+        self._worker.error_occurred.connect(self._on_decision_error)
+        self._worker_in_progress = False
+
         self.setWindowTitle(t("suggestions_title"))
         self.setMinimumSize(900, 560)
         self._build_ui()
@@ -636,22 +643,21 @@ class SuggestionDialog(QDialog):
         )
         if reply != QMessageBox.Yes:
             return
-        if self._run_decision(lambda svc: svc.accept(suggestion_id), "approval"):
-            log.info("Merge suggestion %d approved", suggestion_id)
-            self.data_changed.emit()
-            self._reload()
+        self._run_decision_async(
+            lambda svc: svc.accept(suggestion_id), "approval"
+        )
 
     @Slot(int)
     def _on_reject(self, suggestion_id: int) -> None:
-        if self._run_decision(lambda svc: svc.reject(suggestion_id), "rejection"):
-            log.info("Merge suggestion %d rejected", suggestion_id)
-            self._reload()
+        self._run_decision_async(
+            lambda svc: svc.reject(suggestion_id), "rejection"
+        )
 
     @Slot(int)
     def _on_defer(self, suggestion_id: int) -> None:
-        if self._run_decision(lambda svc: svc.defer(suggestion_id), "defer"):
-            log.info("Merge suggestion %d deferred", suggestion_id)
-            self._reload()
+        self._run_decision_async(
+            lambda svc: svc.defer(suggestion_id), "defer"
+        )
 
     def _run_decision(self, action, label: str) -> bool:
         """Execute *action(service)* inside a session; report failures."""
@@ -663,3 +669,29 @@ class SuggestionDialog(QDialog):
             log.exception("Suggestion %s failed", label)
             QMessageBox.warning(self, t("error"), str(exc))
             return False
+
+    def _run_decision_async(self, action, label: str) -> None:
+        """Queue a decision to run in the thread pool (non-blocking)."""
+        if self._worker_in_progress:
+            log.warning("Decision already in progress, ignoring new request")
+            return
+        self._worker_in_progress = True
+        self._worker_label = label
+        self._worker.run_decision(action, label)
+
+    @Slot(bool)
+    def _on_decision_finished(self, success: bool) -> None:
+        """Handle worker completion."""
+        self._worker_in_progress = False
+        if success:
+            log.info("Merge suggestion %s completed", self._worker_label)
+            if self._worker_label == "approval":
+                self.data_changed.emit()
+            self._reload()
+
+    @Slot(str)
+    def _on_decision_error(self, error_msg: str) -> None:
+        """Handle worker error."""
+        self._worker_in_progress = False
+        log.exception("Suggestion %s failed: %s", self._worker_label, error_msg)
+        QMessageBox.warning(self, t("error"), error_msg)
