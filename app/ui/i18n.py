@@ -133,6 +133,30 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     },
     "rec_privacy_dont_ask":   {"en": "Don't show this again",
                                "hu": "Ne jelenjen meg többször"},
+    "rec_audio_meter_label":  {"en": "Audio", "hu": "Hang"},
+    "rec_no_audio_warning": {
+        "en": "The recording contains NO audio track. Check the microphone "
+              "permission (System Settings → Privacy → Microphone) and, for "
+              "system sound, that a loopback device (e.g. BlackHole) is "
+              "installed and selected in Settings → Recording.",
+        "hu": "A felvétel NEM tartalmaz hangsávot. Ellenőrizd a mikrofon "
+              "jogosultságot (Rendszerbeállítások → Adatvédelem → Mikrofon), "
+              "rendszerhanghoz pedig azt, hogy van-e telepített loopback eszköz "
+              "(pl. BlackHole), és ki van-e választva a Beállítások → Rögzítés "
+              "alatt.",
+    },
+    "rec_audio_input_device": {"en": "Audio input device (microphone)",
+                               "hu": "Hangbemeneti eszköz (mikrofon)"},
+    "rec_system_audio_device": {"en": "System audio device (loopback)",
+                                "hu": "Rendszerhang eszköz (loopback)"},
+    "rec_audio_auto":         {"en": "Automatic", "hu": "Automatikus"},
+    "rec_mic_volume":         {"en": "Microphone volume", "hu": "Mikrofon hangereje"},
+    "rec_system_volume":      {"en": "System audio volume",
+                               "hu": "Rendszerhang hangereje"},
+    "rec_mute_microphone":    {"en": "Mute microphone", "hu": "Mikrofon némítása"},
+    "rec_mute_system_audio":  {"en": "Mute system audio",
+                               "hu": "Rendszerhang némítása"},
+    "rec_audio_group":        {"en": "Audio", "hu": "Hang"},
     "tab_face_recognition": {"en": "Face Recognition", "hu": "Arcfelismerés"},
     "tab_image_browser":  {"en": "Image Browser", "hu": "Képböngésző"},
     "tab_family_search":  {"en": "Family Search", "hu": "Családi kereső"},

@@ -331,6 +331,16 @@ class RecordingConfig:
     capture_microphone: bool = True
     # Best-effort system/speaker audio (needs a virtual loopback device).
     capture_system_audio: bool = True
+    # Explicit audio device names (``None`` → auto-pick).  ``audio_input_device``
+    # selects the microphone; ``system_audio_device`` selects the loopback.
+    audio_input_device: Optional[str] = None
+    system_audio_device: Optional[str] = None
+    # Linear gain applied to each source before mixing (1.0 = unity).
+    mic_volume: float = 1.0
+    system_volume: float = 1.0
+    # Drop a source from the mix without changing device selection.
+    mute_microphone: bool = False
+    mute_system_audio: bool = False
     # Explicit ffmpeg path; ``None`` → resolve from PATH.
     ffmpeg_path: Optional[str] = None
     # Concatenate the segments into a single final mp4 when recording stops.
@@ -624,6 +634,22 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
             capture_system_audio=rec.get(
                 "capture_system_audio", cfg.recording.capture_system_audio
+            ),
+            audio_input_device=rec.get(
+                "audio_input_device", cfg.recording.audio_input_device
+            ),
+            system_audio_device=rec.get(
+                "system_audio_device", cfg.recording.system_audio_device
+            ),
+            mic_volume=rec.get("mic_volume", cfg.recording.mic_volume),
+            system_volume=rec.get(
+                "system_volume", cfg.recording.system_volume
+            ),
+            mute_microphone=rec.get(
+                "mute_microphone", cfg.recording.mute_microphone
+            ),
+            mute_system_audio=rec.get(
+                "mute_system_audio", cfg.recording.mute_system_audio
             ),
             ffmpeg_path=rec.get("ffmpeg_path", cfg.recording.ffmpeg_path),
             concat_on_stop=rec.get(

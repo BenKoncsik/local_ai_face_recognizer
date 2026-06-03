@@ -58,12 +58,21 @@ class CaptureDevices:
     """Resolved capture device identifiers for the current platform.
 
     ``screen`` is the avfoundation video index (macOS) or ``"desktop"``
-    (Windows gdigrab).  Audio fields are ``None`` when unavailable.
+    (Windows gdigrab).  Audio fields are ``None`` when unavailable.  The
+    ``*_name`` fields carry the human-readable device names purely for
+    diagnostics/logging (the ``microphone``/``system_audio`` ids are what
+    actually get passed to ffmpeg).
     """
 
     screen: str
     microphone: Optional[str] = None
     system_audio: Optional[str] = None
+    microphone_name: Optional[str] = None
+    system_audio_name: Optional[str] = None
+    # Why a system-audio device could not be found (no loopback installed,
+    # disabled by config, …) — surfaced in diagnostics so "no system sound"
+    # is never silent.
+    system_audio_note: Optional[str] = None
 
 
 @dataclass
@@ -74,6 +83,17 @@ class RecordingOptions:
     quality: str = "normal"
     segment_seconds: int = 8
     capture_cursor: bool = True
+    # Audio mix controls.  Volumes are linear gain multipliers (1.0 = unity);
+    # mutes drop the source from the mix entirely.  Output is always coerced to
+    # ``audio_sample_rate`` / ``audio_channels`` (48 kHz stereo by default).
+    mic_volume: float = 1.0
+    system_volume: float = 1.0
+    mute_microphone: bool = False
+    mute_system_audio: bool = False
+    audio_sample_rate: int = 48000
+    audio_channels: int = 2
+    # Emit live peak-level metering on ffmpeg's stdout (drives the VU meter).
+    meter_audio: bool = False
 
 
 class RecordingDisplayMode(Enum):
@@ -287,6 +307,98 @@ def effective_fps(
     return base_fps
 
 
+@dataclass
+class AudioSource:
+    """One audio leg feeding the mixer.
+
+    ``label`` is the ffmpeg input pad (e.g. ``"[0:a]"``); ``volume`` is the
+    linear gain; ``kind`` is ``"mic"`` or ``"sys"`` (diagnostics only).
+    """
+
+    label: str
+    volume: float
+    kind: str
+
+
+# Peak-level metering tap appended to the mix bus.  ``astats`` recomputes the
+# peak every ~0.1 s and ``ametadata`` prints it to ffmpeg's *stdout* (``file=-``)
+# independently of ``-loglevel`` so the GUI can drive a live VU meter.  The
+# parser looks for ``METER_KEY=<dBFS>`` lines.
+METER_KEY = "lavfi.astats.Overall.Peak_level"
+_METER_TAP = (
+    "astats=metadata=1:reset=1:length=0.1,"
+    f"ametadata=mode=print:key={METER_KEY}:file=-,"
+    "anullsink"
+)
+
+
+def build_audio_filtergraph(
+    sources: List[AudioSource],
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    meter: bool = False,
+) -> tuple:
+    """Build the ``-filter_complex`` graph for the audio mix.
+
+    Returns ``(graph, out_label)`` where *graph* is the filter_complex string
+    (or ``None`` when there is no audio) and *out_label* is the pad to map into
+    the encoder (``"[aout]"`` normally, ``"[aenc]"`` when *meter* splits off a
+    metering tap).
+
+    Each source is volume-adjusted, resampled to *sample_rate* and coerced to a
+    *channels*-channel layout; two or more sources are mixed with ``amix`` and
+    then run through ``alimiter`` so summed peaks cannot clip.
+    """
+    if not sources:
+        return None, None
+
+    layout = "stereo" if channels == 2 else "mono"
+    legs: List[str] = []
+    mixed_labels: List[str] = []
+    for i, src in enumerate(sources):
+        chain = [
+            f"aresample={sample_rate}",
+            f"aformat=sample_fmts=fltp:channel_layouts={layout}",
+        ]
+        if abs(src.volume - 1.0) > 1e-3:
+            chain.insert(0, f"volume={src.volume:g}")
+        out = f"[a{i}]"
+        legs.append(f"{src.label}{','.join(chain)}{out}")
+        mixed_labels.append(out)
+
+    if len(sources) == 1:
+        # Rename the single leg's output pad to the mix-bus label.
+        legs[0] = legs[0][: -len(mixed_labels[0])] + "[aout]"
+    else:
+        # normalize=0 keeps user volumes intact; alimiter prevents the summed
+        # signal from clipping past full scale.
+        legs.append(
+            f"{''.join(mixed_labels)}"
+            f"amix=inputs={len(sources)}:duration=longest:normalize=0,"
+            "alimiter=limit=0.95[aout]"
+        )
+
+    out_label = "[aout]"
+    if meter:
+        legs.append(f"[aout]asplit=2[aenc][amet];[amet]{_METER_TAP}")
+        out_label = "[aenc]"
+    return ";".join(legs), out_label
+
+
+def parse_meter_peak_db(text: str) -> Optional[float]:
+    """Extract the most recent peak level (dBFS) from metering stdout, if any."""
+    last: Optional[float] = None
+    for line in text.splitlines():
+        if line.startswith(METER_KEY):
+            _, _, value = line.partition("=")
+            try:
+                last = float(value.strip())
+            except ValueError:
+                continue
+    return last
+
+
 def build_ffmpeg_args(
     platform: str,
     devices: CaptureDevices,
@@ -308,8 +420,14 @@ def build_ffmpeg_args(
 
     args: List[str] = ["-hide_banner", "-loglevel", "warning", "-y"]
 
-    # Count audio inputs so we know whether to mix.
-    audio_inputs: List[str] = []
+    # Resolve which audio sources are actually mixed in.  A muted source is
+    # dropped before opening it so we neither capture nor pay for it.
+    use_mic = devices.microphone is not None and not options.mute_microphone
+    use_sys = devices.system_audio is not None and not options.mute_system_audio
+
+    # Audio legs feeding the mixer, with the ffmpeg input pad each maps to.
+    audio_sources: List[AudioSource] = []
+    input_index = 0  # advances for every ``-i`` we append
 
     if is_macos(platform):
         cursor = "1" if options.capture_cursor else "0"
@@ -317,19 +435,25 @@ def build_ffmpeg_args(
         screen = devices.screen
         if region is not None and region.screen_index:
             screen = region.screen_index
-        video_audio = screen
-        if devices.microphone is not None:
-            video_audio = f"{screen}:{devices.microphone}"
-            audio_inputs.append("mic")
+        # On avfoundation the microphone shares input 0 with the screen video.
+        video_audio = f"{screen}:{devices.microphone}" if use_mic else screen
         args += [
             "-f", "avfoundation",
             "-capture_cursor", cursor,
             "-framerate", str(options.fps),
             "-i", video_audio,
         ]
-        if devices.system_audio is not None:
+        if use_mic:
+            audio_sources.append(
+                AudioSource(f"[{input_index}:a]", options.mic_volume, "mic")
+            )
+        input_index += 1
+        if use_sys:
             args += ["-f", "avfoundation", "-i", f":{devices.system_audio}"]
-            audio_inputs.append("sys")
+            audio_sources.append(
+                AudioSource(f"[{input_index}:a]", options.system_volume, "sys")
+            )
+            input_index += 1
     elif is_windows(platform):
         draw_mouse = "1" if options.capture_cursor else "0"
         # gdigrab input options (crop offset / size) must precede ``-i``.
@@ -349,12 +473,19 @@ def build_ffmpeg_args(
             ]
         else:
             args += grab + ["-i", "desktop"]
-        if devices.microphone is not None:
+        input_index += 1  # gdigrab desktop is input 0 (video only)
+        if use_mic:
             args += ["-f", "dshow", "-i", f"audio={devices.microphone}"]
-            audio_inputs.append("mic")
-        if devices.system_audio is not None:
+            audio_sources.append(
+                AudioSource(f"[{input_index}:a]", options.mic_volume, "mic")
+            )
+            input_index += 1
+        if use_sys:
             args += ["-f", "dshow", "-i", f"audio={devices.system_audio}"]
-            audio_inputs.append("sys")
+            audio_sources.append(
+                AudioSource(f"[{input_index}:a]", options.system_volume, "sys")
+            )
+            input_index += 1
     else:
         raise ValueError(f"unsupported platform for recording: {platform!r}")
 
@@ -373,30 +504,25 @@ def build_ffmpeg_args(
         f"expr:gte(t,n_forced*{options.segment_seconds})",
     ]
 
-    # Audio mapping.  On macOS the mic shares input 0 with the video; the
-    # system-audio device (when present) is a separate input.  On Windows each
-    # audio device is its own input.  When two audio sources exist we mix them.
-    if len(audio_inputs) >= 2:
-        if is_macos(platform):
-            mix = "[0:a][1:a]amix=inputs=2:duration=longest[aout]"
-        else:  # windows: video=0, mic=1, sys=2
-            mix = "[1:a][2:a]amix=inputs=2:duration=longest[aout]"
+    # Audio mapping.  Every present source is volume-adjusted, resampled and
+    # (when >1) mixed with clipping protection into a single ``[aout]`` bus that
+    # is encoded as one AAC track at the configured sample-rate/channels.  When
+    # there is no audio at all we mux video only (``-an``).
+    graph, out_label = build_audio_filtergraph(
+        audio_sources,
+        sample_rate=options.audio_sample_rate,
+        channels=options.audio_channels,
+        meter=options.meter_audio,
+    )
+    if graph is not None:
         args += [
-            "-filter_complex", mix,
+            "-filter_complex", graph,
             "-map", "0:v",
-            "-map", "[aout]",
+            "-map", out_label,
             "-c:a", "aac",
             "-b:a", str(audio_bitrate),
-        ]
-    elif len(audio_inputs) == 1:
-        # Single audio source: explicit mapping keeps Windows (separate input)
-        # and macOS (audio on input 0) both correct.
-        audio_index = 0 if is_macos(platform) else 1
-        args += [
-            "-map", "0:v",
-            "-map", f"{audio_index}:a",
-            "-c:a", "aac",
-            "-b:a", str(audio_bitrate),
+            "-ar", str(options.audio_sample_rate),
+            "-ac", str(options.audio_channels),
         ]
     else:
         args += ["-map", "0:v", "-an"]
@@ -548,6 +674,191 @@ def pick_microphone(audio: List[tuple]) -> Optional[str]:
     return audio[0][0]
 
 
+def audio_diagnostics(
+    devices: CaptureDevices,
+    options: RecordingOptions,
+    platform: str = sys.platform,
+) -> List[str]:
+    """Build the ``[Audio] …`` diagnostic lines for *devices*/*options*.
+
+    Returned as a list so callers can log each line; this makes a silent
+    "no audio" outcome explainable (which devices were chosen, what was
+    skipped and why, the mix format).
+    """
+    lines: List[str] = []
+    plat = "macOS avfoundation" if is_macos(platform) else (
+        "Windows dshow" if is_windows(platform) else platform
+    )
+    lines.append(f"[Audio] Platform: {plat}")
+
+    if devices.microphone is not None:
+        name = devices.microphone_name or devices.microphone
+        if options.mute_microphone:
+            lines.append(f"[Audio] Microphone MUTED (would use: {name})")
+        else:
+            lines.append(
+                f"[Audio] Microphone capture: {name} "
+                f"(volume {options.mic_volume:g})"
+            )
+    else:
+        lines.append("[Audio] Microphone: none detected / disabled")
+
+    if devices.system_audio is not None:
+        name = devices.system_audio_name or devices.system_audio
+        if options.mute_system_audio:
+            lines.append(f"[Audio] System audio MUTED (would use: {name})")
+        else:
+            lines.append(
+                f"[Audio] System audio capture: {name} "
+                f"(volume {options.system_volume:g})"
+            )
+    else:
+        note = devices.system_audio_note or "no loopback device available"
+        lines.append(f"[Audio] System audio: NOT captured — {note}")
+
+    n = sum(
+        1
+        for present, muted in (
+            (devices.microphone is not None, options.mute_microphone),
+            (devices.system_audio is not None, options.mute_system_audio),
+        )
+        if present and not muted
+    )
+    if n >= 2:
+        lines.append("[Audio] Mixer initialized: 2 sources → 1 track")
+    elif n == 1:
+        lines.append("[Audio] Mixer initialized: 1 source → 1 track")
+    else:
+        lines.append("[Audio] Mixer initialized: NO audio sources → silent video")
+    lines.append(
+        f"[Audio] Output format: {options.audio_sample_rate} Hz, "
+        f"{options.audio_channels} ch, AAC"
+    )
+    return lines
+
+
+@dataclass
+class AudioValidation:
+    """Result of inspecting the final recording for a usable audio track."""
+
+    has_audio: bool
+    codec: Optional[str] = None
+    duration: Optional[float] = None
+    bit_rate: Optional[int] = None
+    channels: Optional[int] = None
+    sample_rate: Optional[int] = None
+    error: Optional[str] = None
+
+    def summary(self) -> str:
+        if self.error:
+            return f"[Audio] Final mux validation failed: {self.error}"
+        if not self.has_audio:
+            return "[Audio] Final mux contains audio=false — NO audio track"
+        return (
+            "[Audio] Final mux contains audio=true "
+            f"(codec={self.codec}, {self.sample_rate} Hz, {self.channels} ch, "
+            f"{self.duration:.1f}s, {self.bit_rate or 0} bit/s)"
+        )
+
+
+def resolve_ffprobe(ffmpeg_path: Optional[str]) -> Optional[str]:
+    """Locate ``ffprobe`` — next to *ffmpeg_path* first, then on PATH."""
+    if ffmpeg_path:
+        cand = Path(ffmpeg_path).with_name(
+            "ffprobe.exe" if ffmpeg_path.lower().endswith(".exe") else "ffprobe"
+        )
+        if cand.exists():
+            return str(cand)
+    return shutil.which("ffprobe")
+
+
+def parse_ffprobe_audio(stdout_text: str) -> AudioValidation:
+    """Parse ``ffprobe -show_streams`` flat key=value output for the audio track.
+
+    Looks for an ``audio`` stream and reports its codec, duration, bitrate,
+    channels and sample-rate.  ``has_audio`` is ``True`` only when an audio
+    stream exists *and* its duration is greater than zero.
+    """
+    streams: List[Dict[str, str]] = []
+    current: Optional[Dict[str, str]] = None
+    for raw in stdout_text.splitlines():
+        line = raw.strip()
+        if line == "[STREAM]":
+            current = {}
+            continue
+        if line == "[/STREAM]":
+            if current is not None:
+                streams.append(current)
+            current = None
+            continue
+        if current is not None and "=" in line:
+            key, _, value = line.partition("=")
+            current[key.strip()] = value.strip()
+
+    def _to_float(value: Optional[str]) -> Optional[float]:
+        try:
+            return float(value) if value not in (None, "", "N/A") else None
+        except ValueError:
+            return None
+
+    def _to_int(value: Optional[str]) -> Optional[int]:
+        f = _to_float(value)
+        return int(f) if f is not None else None
+
+    for st in streams:
+        if st.get("codec_type") != "audio":
+            continue
+        duration = _to_float(st.get("duration"))
+        return AudioValidation(
+            has_audio=duration is not None and duration > 0,
+            codec=st.get("codec_name"),
+            duration=duration,
+            bit_rate=_to_int(st.get("bit_rate")),
+            channels=_to_int(st.get("channels")),
+            sample_rate=_to_int(st.get("sample_rate")),
+        )
+    return AudioValidation(has_audio=False)
+
+
+def validate_recording_audio(
+    ffprobe_path: Optional[str], mp4_path: Path
+) -> AudioValidation:
+    """Probe *mp4_path* and report whether it carries a usable audio track.
+
+    Never raises — a missing ffprobe / probe failure is returned as an
+    ``AudioValidation`` with ``error`` set so the caller can log it.
+    """
+    if not ffprobe_path:
+        return AudioValidation(has_audio=False, error="ffprobe not available")
+    if not Path(mp4_path).exists():
+        return AudioValidation(has_audio=False, error=f"file missing: {mp4_path}")
+    import subprocess  # local import: only needed at validation time
+
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe_path,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-show_streams",
+                "-show_entries",
+                "stream=codec_type,codec_name,duration,bit_rate,channels,sample_rate",
+                str(mp4_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return AudioValidation(has_audio=False, error=str(exc))
+    if proc.returncode != 0:
+        return AudioValidation(
+            has_audio=False,
+            error=(proc.stderr or "ffprobe failed").strip()[:200],
+        )
+    return parse_ffprobe_audio(proc.stdout or "")
+
+
 # ---------------------------------------------------------------------------
 # Qt-backed recorder service
 # ---------------------------------------------------------------------------
@@ -575,12 +886,19 @@ def probe_devices(
     platform: str = sys.platform,
     *,
     want_system_audio: bool = True,
+    mic_name: Optional[str] = None,
+    system_audio_name: Optional[str] = None,
 ) -> CaptureDevices:
     """Probe ffmpeg for the screen + microphone (+ best-effort loopback).
 
     Runs ``ffmpeg -list_devices true`` and parses stderr.  Falls back to
     sensible defaults when probing yields nothing.  Never raises — capture
     can still be attempted with the defaults.
+
+    ``mic_name`` / ``system_audio_name`` request a specific device by name (or
+    name substring); when given and matched they override the auto-pick.  The
+    returned :class:`CaptureDevices` carries device names + a ``system_audio_note``
+    for diagnostics.
     """
     import subprocess  # local import: only needed at probe time
 
@@ -605,29 +923,97 @@ def probe_devices(
             "1",  # avfoundation screen is commonly index 1
         )
         audio = parsed["audio"]
-        mic = pick_microphone(audio) or "0"
-        sys_audio = None
-        if want_system_audio:
-            loop_name = pick_system_audio([name for _, name in audio])
-            if loop_name is not None:
-                sys_audio = next(
-                    (idx for idx, name in audio if name == loop_name), None
-                )
-        return CaptureDevices(screen=screen, microphone=mic, system_audio=sys_audio)
+        # Explicit override by name → its index; else the auto-pick.
+        mic = _match_av_index(audio, mic_name) or pick_microphone(audio) or "0"
+        mic_label = next((n for i, n in audio if i == mic), mic_name)
+        sys_audio, sys_label, note = _resolve_system_audio_macos(
+            audio, want_system_audio, system_audio_name
+        )
+        return CaptureDevices(
+            screen=screen,
+            microphone=mic,
+            system_audio=sys_audio,
+            microphone_name=mic_label,
+            system_audio_name=sys_label,
+            system_audio_note=note,
+        )
 
     if is_windows(platform):
         text = _list(["-f", "dshow", "-list_devices", "true", "-i", "dummy"])
         names = parse_dshow_audio_devices(text)
-        mic = next(
+        mic = _match_name(names, mic_name) or next(
             (n for n in names if not _is_loopback(n)),
             names[0] if names else None,
         )
-        sys_audio = pick_system_audio(names) if want_system_audio else None
+        sys_audio: Optional[str] = None
+        note: Optional[str] = None
+        if want_system_audio:
+            sys_audio = _match_name(names, system_audio_name) or pick_system_audio(
+                names
+            )
+            if sys_audio is None:
+                note = (
+                    "no WASAPI loopback / 'Stereo Mix' / 'virtual-audio-capturer' "
+                    "device found"
+                )
+        else:
+            note = "disabled in settings"
         return CaptureDevices(
-            screen="desktop", microphone=mic, system_audio=sys_audio
+            screen="desktop",
+            microphone=mic,
+            system_audio=sys_audio,
+            microphone_name=mic,
+            system_audio_name=sys_audio,
+            system_audio_note=note,
         )
 
     return CaptureDevices(screen="0")
+
+
+def _match_name(names: List[str], wanted: Optional[str]) -> Optional[str]:
+    """Return the device name matching *wanted* (exact, then substring)."""
+    if not wanted:
+        return None
+    if wanted in names:
+        return wanted
+    low = wanted.lower()
+    return next((n for n in names if low in n.lower()), None)
+
+
+def _match_av_index(
+    audio: List[tuple], wanted: Optional[str]
+) -> Optional[str]:
+    """Return the avfoundation index whose name matches *wanted*."""
+    if not wanted:
+        return None
+    low = wanted.lower()
+    for idx, name in audio:
+        if name == wanted or low in name.lower():
+            return idx
+    return None
+
+
+def _resolve_system_audio_macos(
+    audio: List[tuple],
+    want_system_audio: bool,
+    system_audio_name: Optional[str],
+) -> tuple:
+    """Resolve (index, name, note) for the macOS system-audio loopback."""
+    if not want_system_audio:
+        return None, None, "disabled in settings"
+    if system_audio_name:
+        idx = _match_av_index(audio, system_audio_name)
+        if idx is not None:
+            name = next((n for i, n in audio if i == idx), system_audio_name)
+            return idx, name, None
+    loop_name = pick_system_audio([name for _, name in audio])
+    if loop_name is not None:
+        idx = next((i for i, n in audio if n == loop_name), None)
+        return idx, loop_name, None
+    return None, None, (
+        "no loopback device (install BlackHole or Loopback and route output "
+        "through it)"
+    )
 
 
 def probe_screen_indices(
@@ -661,6 +1047,40 @@ def _is_loopback(name: str) -> bool:
     return any(hint in low for hint in _LOOPBACK_HINTS)
 
 
+def list_audio_devices(
+    ffmpeg_path: Optional[str], platform: str = sys.platform
+) -> List[str]:
+    """Return the audio capture device names for the settings UI.
+
+    Best-effort: returns ``[]`` when ffmpeg is unavailable or probing fails so
+    the caller can fall back to the "Automatic" option.
+    """
+    if not ffmpeg_path:
+        return []
+    import subprocess  # local import: only needed when populating settings
+
+    def _list(args: List[str]) -> str:
+        try:
+            proc = subprocess.run(
+                [ffmpeg_path, *args],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return (proc.stderr or "") + (proc.stdout or "")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("audio device list failed: %s", exc)
+            return ""
+
+    if is_macos(platform):
+        text = _list(["-f", "avfoundation", "-list_devices", "true", "-i", ""])
+        return [name for _, name in parse_avfoundation_devices(text)["audio"]]
+    if is_windows(platform):
+        text = _list(["-f", "dshow", "-list_devices", "true", "-i", "dummy"])
+        return parse_dshow_audio_devices(text)
+    return []
+
+
 try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
     from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
@@ -670,10 +1090,15 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
         state_changed = Signal(object)   # RecorderState
         elapsed_changed = Signal(int)    # whole seconds, excluding pauses
         error = Signal(str)
+        audio_level = Signal(float)      # live mix peak level in dBFS
+        audio_validated = Signal(object) # AudioValidation for the final mp4
 
         def __init__(self, ffmpeg_path: Optional[str], parent=None) -> None:
             super().__init__(parent)
             self._ffmpeg = ffmpeg_path
+            self._ffprobe = resolve_ffprobe(ffmpeg_path)
+            self._meter_buf = ""             # partial metering stdout line
+            self._last_validation: Optional[AudioValidation] = None
             self._state = RecorderState.IDLE
             self._proc: Optional[QProcess] = None
             self._output_dir: Optional[Path] = None
@@ -705,6 +1130,10 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
         def output_dir(self) -> Optional[Path]:
             return self._output_dir
 
+        @property
+        def last_validation(self) -> Optional["AudioValidation"]:
+            return self._last_validation
+
         def start(
             self,
             output_dir: Path,
@@ -724,6 +1153,12 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
             self._segment_index = 0
             self._elapsed_seconds = 0
             self._stopping = False
+            self._meter_buf = ""
+            self._last_validation = None
+            # Surface exactly which audio sources were resolved (and why any are
+            # missing) so a silent recording is never a mystery.
+            for line in audio_diagnostics(devices, options, sys.platform):
+                log.info(line)
             self._spawn_ffmpeg()
             if self._state is RecorderState.RECORDING:
                 self._timer.start()
@@ -753,9 +1188,37 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
             final = None
             if self._concat_on_stop:
                 final = self._concatenate_segments()
+            # Validate that the produced file actually carries audio; if not,
+            # log at ERROR so a silent recording is loud in the logs/UI.
+            self._validate_audio(final)
             self._set_state(RecorderState.IDLE)
             self._stopping = False
             return final
+
+        def _validate_audio(self, final: Optional[Path]) -> None:
+            """Probe the final mp4 (or first segment) for a usable audio track."""
+            target = final
+            if target is None:
+                segs = self.segment_paths()
+                target = segs[0] if segs else None
+            if target is None:
+                return
+            # No audio sources were requested → nothing to validate.
+            opts = self._options
+            dev = self._devices
+            wanted_audio = dev is not None and (
+                (dev.microphone is not None and not opts.mute_microphone)
+                or (dev.system_audio is not None and not opts.mute_system_audio)
+            )
+            result = validate_recording_audio(self._ffprobe, target)
+            self._last_validation = result
+            if result.error:
+                log.warning("recorder: %s", result.summary())
+            elif not result.has_audio and wanted_audio:
+                log.error("recorder: %s", result.summary())
+            else:
+                log.info("recorder: %s", result.summary())
+            self.audio_validated.emit(result)
 
         def segment_paths(self) -> List[Path]:
             if self._output_dir is None:
@@ -793,6 +1256,8 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
             proc.setArguments(args)
             proc.setProcessChannelMode(QProcess.SeparateChannels)
             proc.readyReadStandardError.connect(self._on_proc_stderr)
+            if self._options.meter_audio:
+                proc.readyReadStandardOutput.connect(self._on_proc_stdout)
             proc.errorOccurred.connect(self._on_proc_error)
             proc.finished.connect(self._on_proc_finished)
             proc.start()
@@ -818,6 +1283,29 @@ try:  # Qt is optional for importing the pure helpers (e.g. in unit tests).
             # Keep only the last ~4 KB so a long-running capture stays bounded.
             self._stderr_tail = (self._stderr_tail + chunk)[-4096:]
             log.debug("ffmpeg: %s", chunk.rstrip())
+
+        def _on_proc_stdout(self) -> None:
+            """Parse the metering tap on ffmpeg's stdout → ``audio_level``."""
+            proc = self.sender()
+            if proc is None:
+                return
+            try:
+                chunk = bytes(proc.readAllStandardOutput()).decode(
+                    "utf-8", errors="replace"
+                )
+            except Exception:  # noqa: BLE001
+                return
+            if not chunk:
+                return
+            # Buffer until we have whole lines (the peak prints ~10×/s).
+            buf = self._meter_buf + chunk
+            buf, _, tail = buf.rpartition("\n")
+            self._meter_buf = tail[-512:]
+            if not buf:
+                return
+            peak = parse_meter_peak_db(buf)
+            if peak is not None:
+                self.audio_level.emit(peak)
 
         def _terminate_proc(self) -> None:
             proc = self._proc

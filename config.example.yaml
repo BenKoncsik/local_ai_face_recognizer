@@ -223,9 +223,24 @@ recording:
   capture_microphone: true
 
   # Best-effort system/speaker audio.  Requires a virtual loopback device
-  # (macOS: BlackHole/Loopback, Windows: a WASAPI virtual-audio-capturer).
-  # Silently skipped when no such device is detected.
+  # (macOS: BlackHole/Loopback, Windows: WASAPI loopback / "Stereo Mix" /
+  # virtual-audio-capturer).  When no such device is found it is skipped, but
+  # the reason is logged (see the [Audio] diagnostics) rather than silently.
   capture_system_audio: true
+
+  # Explicit audio devices by name (null → auto-pick).  audio_input_device
+  # selects the microphone; system_audio_device selects the loopback.
+  audio_input_device: null
+  system_audio_device: null
+
+  # Per-source linear gain applied before mixing (1.0 = unity).  Both sources
+  # are mixed into a single 48 kHz stereo AAC track with clipping protection.
+  mic_volume: 1.0
+  system_volume: 1.0
+
+  # Drop a source from the mix without changing the device selection.
+  mute_microphone: false
+  mute_system_audio: false
 
   # Explicit ffmpeg path; null → resolve from PATH.
   ffmpeg_path: null

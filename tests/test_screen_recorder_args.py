@@ -61,8 +61,14 @@ def test_macos_args_mic_only() -> None:
     # Single combined video:audio input.
     i = args.index("-i")
     assert args[i + 1] == "0:1"
-    # Single audio source → mapped from input 0.
-    assert "0:a" in args
+    # Single audio source → routed through the filter graph and mapped to the
+    # mix bus, encoded at 48 kHz stereo.
+    fc = args[args.index("-filter_complex") + 1]
+    assert fc.startswith("[0:a]")
+    assert fc.endswith("[aout]")
+    assert "[aout]" in args
+    assert args[args.index("-ar") + 1] == "48000"
+    assert args[args.index("-ac") + 1] == "2"
     assert "-f" in args and "segment" in args
     assert args[-1] == "/out/seg_%05d.mp4"
 
@@ -77,6 +83,7 @@ def test_macos_args_with_system_audio_mixes() -> None:
     assert "-filter_complex" in args
     fc = args[args.index("-filter_complex") + 1]
     assert "amix=inputs=2" in fc
+    assert "alimiter" in fc  # clipping protection on the summed signal
     assert "[aout]" in args
 
 
@@ -90,8 +97,9 @@ def test_windows_args_mic_only() -> None:
     assert "gdigrab" in args
     assert "-draw_mouse" in args
     assert "audio=Mic (USB)" in args
-    # Windows mic is a separate input → mapped from input 1.
-    assert "1:a" in args
+    # Windows mic is a separate input (1) → its pad feeds the mix bus.
+    fc = args[args.index("-filter_complex") + 1]
+    assert fc.startswith("[1:a]")
 
 
 def test_windows_args_with_system_audio_mixes() -> None:
@@ -106,7 +114,48 @@ def test_windows_args_with_system_audio_mixes() -> None:
         r"C:\out\seg_%05d.mp4",
     )
     fc = args[args.index("-filter_complex") + 1]
-    assert fc.startswith("[1:a][2:a]amix")
+    assert fc.startswith("[1:a]")
+    assert "[1:a]" in fc and "[2:a]" in fc
+    assert "amix=inputs=2" in fc
+
+
+def test_volume_and_mute_controls() -> None:
+    # Mic muted → only the system source remains, single-source graph.
+    args = build_ffmpeg_args(
+        "darwin",
+        CaptureDevices(screen="0", microphone="1", system_audio="2"),
+        RecordingOptions(mute_microphone=True, system_volume=0.5),
+        "/out/seg_%05d.mp4",
+    )
+    fc = args[args.index("-filter_complex") + 1]
+    assert "amix" not in fc  # only one source left
+    assert "volume=0.5" in fc
+    # The muted mic is not combined into the avfoundation video input.
+    assert args[args.index("-i") + 1] == "0"
+
+    # Both muted → no audio at all.
+    silent = build_ffmpeg_args(
+        "darwin",
+        CaptureDevices(screen="0", microphone="1", system_audio="2"),
+        RecordingOptions(mute_microphone=True, mute_system_audio=True),
+        "/out/seg_%05d.mp4",
+    )
+    assert "-an" in silent
+    assert "-filter_complex" not in silent
+
+
+def test_meter_adds_stdout_tap() -> None:
+    args = build_ffmpeg_args(
+        "darwin",
+        CaptureDevices(screen="0", microphone="1"),
+        RecordingOptions(meter_audio=True),
+        "/out/seg_%05d.mp4",
+    )
+    fc = args[args.index("-filter_complex") + 1]
+    assert "asplit=2[aenc][amet]" in fc
+    assert "ametadata=mode=print" in fc
+    # The encoder maps the metering-split branch, not the raw bus.
+    assert "[aenc]" in args
 
 
 def test_no_audio_uses_an() -> None:
@@ -392,6 +441,111 @@ def test_build_args_macos_region_overrides_screen_index() -> None:
     )
     # Video:audio input uses the region's screen index, not the probed one.
     assert args[args.index("-i") + 1] == "2:0"
+
+
+def test_parse_meter_peak_db() -> None:
+    from app.services.screen_recorder_service import parse_meter_peak_db
+    text = (
+        "frame:0    pts:0       pts_time:0\n"
+        "lavfi.astats.Overall.Peak_level=-30.5\n"
+        "frame:1    pts:1024    pts_time:0.02\n"
+        "lavfi.astats.Overall.Peak_level=-12.25\n"
+    )
+    # Returns the most recent peak.
+    assert parse_meter_peak_db(text) == -12.25
+    assert parse_meter_peak_db("no meter lines here") is None
+
+
+def test_parse_ffprobe_audio_present() -> None:
+    from app.services.screen_recorder_service import parse_ffprobe_audio
+    out = (
+        "[STREAM]\ncodec_type=video\ncodec_name=h264\n[/STREAM]\n"
+        "[STREAM]\ncodec_type=audio\ncodec_name=aac\nsample_rate=48000\n"
+        "channels=2\nduration=12.5\nbit_rate=128000\n[/STREAM]\n"
+    )
+    v = parse_ffprobe_audio(out)
+    assert v.has_audio is True
+    assert v.codec == "aac"
+    assert v.sample_rate == 48000 and v.channels == 2
+    assert v.bit_rate == 128000
+    assert "audio=true" in v.summary()
+
+
+def test_parse_ffprobe_audio_missing_and_zero_duration() -> None:
+    from app.services.screen_recorder_service import parse_ffprobe_audio
+    # No audio stream at all.
+    v = parse_ffprobe_audio("[STREAM]\ncodec_type=video\n[/STREAM]\n")
+    assert v.has_audio is False
+    assert "audio=false" in v.summary()
+    # Audio stream present but zero-length → not usable.
+    v0 = parse_ffprobe_audio(
+        "[STREAM]\ncodec_type=audio\ncodec_name=aac\nduration=0\n[/STREAM]\n"
+    )
+    assert v0.has_audio is False
+
+
+def test_audio_diagnostics_explains_missing_system_audio() -> None:
+    from app.services.screen_recorder_service import audio_diagnostics
+    devices = CaptureDevices(
+        screen="3",
+        microphone="2",
+        microphone_name="MacBook Air mikrofon",
+        system_audio=None,
+        system_audio_note="no loopback device",
+    )
+    lines = audio_diagnostics(devices, RecordingOptions(), "darwin")
+    joined = "\n".join(lines)
+    assert "MacBook Air mikrofon" in joined
+    assert "NOT captured" in joined and "no loopback device" in joined
+    assert "1 source" in joined
+
+
+def test_audio_diagnostics_reports_mute() -> None:
+    from app.services.screen_recorder_service import audio_diagnostics
+    devices = CaptureDevices(
+        screen="3", microphone="2", system_audio="5",
+        microphone_name="Mic", system_audio_name="BlackHole 2ch",
+    )
+    lines = audio_diagnostics(
+        devices, RecordingOptions(mute_microphone=True), "darwin"
+    )
+    joined = "\n".join(lines)
+    assert "Microphone MUTED" in joined
+    assert "BlackHole 2ch" in joined
+    assert "1 source" in joined  # only system audio mixed
+
+
+def test_probe_devices_honors_explicit_mic_override() -> None:
+    # Drive probe_devices with a fake ffmpeg that prints a device list.
+    import subprocess
+    from app.services import screen_recorder_service as srs
+
+    fake_stderr = (
+        "[AVFoundation indev] AVFoundation video devices:\n"
+        "[AVFoundation indev] [3] Capture screen 0\n"
+        "[AVFoundation indev] AVFoundation audio devices:\n"
+        "[AVFoundation indev] [0] iPhone mic\n"
+        "[AVFoundation indev] [1] AirPods Pro\n"
+        "[AVFoundation indev] [2] MacBook Air mikrofon\n"
+    )
+
+    class _Result:
+        stderr = fake_stderr
+        stdout = ""
+
+    orig = subprocess.run
+    subprocess.run = lambda *a, **k: _Result()  # type: ignore
+    try:
+        dev = srs.probe_devices(
+            "ffmpeg", platform="darwin", mic_name="AirPods"
+        )
+    finally:
+        subprocess.run = orig
+    assert dev.microphone == "1"  # AirPods, not the auto-picked built-in
+    assert dev.microphone_name == "AirPods Pro"
+    # No loopback in the list → explained, not silent.
+    assert dev.system_audio is None
+    assert dev.system_audio_note
 
 
 def test_format_display_label() -> None:

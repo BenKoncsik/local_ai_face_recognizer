@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self._recorder = None  # ScreenRecorderService, lazily created on start
         self._recording_log = None  # RecordingTimelineLog while recording
         self._recording_metadata = None  # RecordingMetadataWriter while recording
+        self._last_audio_validation = None  # AudioValidation of the last stop
         # Active image/person context shown in the image-browser tab (for the
         # recording timeline log).
         self._browser_image_name: Optional[str] = None
@@ -1532,10 +1533,14 @@ class MainWindow(QMainWindow):
         session_dir = Path(chosen) / f"recording_{stamp}"
 
         devices: CaptureDevices = probe_devices(
-            ffmpeg, want_system_audio=rec_cfg.capture_system_audio
+            ffmpeg,
+            want_system_audio=rec_cfg.capture_system_audio,
+            mic_name=rec_cfg.audio_input_device,
+            system_audio_name=rec_cfg.system_audio_device,
         )
         if not rec_cfg.capture_microphone:
             devices.microphone = None
+            devices.microphone_name = None
 
         # Resolve which monitors / window to capture, and cap the fps for
         # multi-monitor captures.
@@ -1581,12 +1586,19 @@ class MainWindow(QMainWindow):
             quality=rec_cfg.quality,
             segment_seconds=rec_cfg.segment_seconds,
             capture_cursor=rec_cfg.capture_cursor,
+            mic_volume=rec_cfg.mic_volume,
+            system_volume=rec_cfg.system_volume,
+            mute_microphone=rec_cfg.mute_microphone,
+            mute_system_audio=rec_cfg.mute_system_audio,
+            meter_audio=True,  # drive the live VU meter
         )
 
         self._recorder = ScreenRecorderService(ffmpeg, parent=self)
         self._recorder.state_changed.connect(self._on_recorder_state)
         self._recorder.elapsed_changed.connect(self._on_recorder_elapsed)
         self._recorder.error.connect(self._on_recorder_error)
+        self._recorder.audio_level.connect(self._on_recorder_audio_level)
+        self._recorder.audio_validated.connect(self._on_recorder_audio_validated)
 
         from app.services.recording_timeline_log import RecordingTimelineLog
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -1686,7 +1698,10 @@ class MainWindow(QMainWindow):
     def _on_record_stop(self) -> None:
         if self._recorder is None:
             return
+        self._last_audio_validation = None
         elapsed = self._recorder.elapsed_seconds
+        # stop() validates the final file and emits ``audio_validated``
+        # synchronously, so ``_last_audio_validation`` is populated below.
         final = self._recorder.stop()
         if self._recording_log is not None:
             self._recording_log.finalize(elapsed)
@@ -1696,15 +1711,35 @@ class MainWindow(QMainWindow):
         self._recorder = None
         target = final or out_dir
         if target is not None:
-            QMessageBox.information(
-                self, t("rec_saved_title"), t("rec_saved_body", path=str(target))
-            )
+            body = t("rec_saved_body", path=str(target))
+            validation = self._last_audio_validation
+            if validation is not None and not validation.has_audio:
+                # Make a silent recording impossible to miss.
+                QMessageBox.warning(
+                    self,
+                    t("rec_saved_title"),
+                    f"{body}\n\n⚠ {t('rec_no_audio_warning')}",
+                )
+            else:
+                QMessageBox.information(self, t("rec_saved_title"), body)
 
     def _on_recorder_state(self, state) -> None:
         self._recording_controls.set_state(state)
 
     def _on_recorder_elapsed(self, seconds: int) -> None:
         self._recording_controls.set_elapsed(seconds)
+
+    def _on_recorder_audio_level(self, db: float) -> None:
+        self._recording_controls.set_audio_level(db)
+
+    def _on_recorder_audio_validated(self, validation) -> None:
+        """Remember the final-mux audio check so stop() can warn if silent."""
+        self._last_audio_validation = validation
+        if not validation.has_audio:
+            log.warning("recording finished with no usable audio track")
+            # Persist into the (still-open) crash-safe metadata for post-mortem.
+            if self._recording_metadata is not None:
+                self._recording_metadata.add_error(validation.summary())
 
     def _on_recorder_error(self, message: str) -> None:
         QMessageBox.critical(self, t("rec_error_title"), message)
@@ -1870,6 +1905,25 @@ class MainWindow(QMainWindow):
             )
             rec.capture_system_audio = qs.value(
                 "recording/capture_system_audio", rec.capture_system_audio, type=bool
+            )
+            # Empty string → keep the auto-pick (None), not a literal "".
+            rec.audio_input_device = (
+                qs.value("recording/audio_input_device", "", type=str) or None
+            )
+            rec.system_audio_device = (
+                qs.value("recording/system_audio_device", "", type=str) or None
+            )
+            rec.mic_volume = qs.value(
+                "recording/mic_volume", rec.mic_volume, type=float
+            )
+            rec.system_volume = qs.value(
+                "recording/system_volume", rec.system_volume, type=float
+            )
+            rec.mute_microphone = qs.value(
+                "recording/mute_microphone", rec.mute_microphone, type=bool
+            )
+            rec.mute_system_audio = qs.value(
+                "recording/mute_system_audio", rec.mute_system_audio, type=bool
             )
             rec.concat_on_stop = qs.value(
                 "recording/concat_on_stop", rec.concat_on_stop, type=bool

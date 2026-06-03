@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from app.services.screen_recorder_service import RecorderState
 from app.ui.i18n import t
+from app.ui.widgets.audio_level_meter import AudioLevelMeter
 
 
 class RecordingControls(QWidget):
@@ -51,7 +52,17 @@ class RecordingControls(QWidget):
         self._status_lbl = QLabel()
         layout.addWidget(self._status_lbl)
 
+        # Live input-level VU meter (mixed mic + system bus).  Hidden until a
+        # recording starts.
+        self._meter = AudioLevelMeter(t("rec_audio_meter_label"))
+        self._meter.setVisible(False)
+        layout.addWidget(self._meter)
+
     # ------------------------------------------------------------------
+
+    def set_audio_level(self, db: float) -> None:
+        """Feed a peak dBFS reading from the recorder into the VU meter."""
+        self._meter.set_level_db(db)
 
     def set_state(self, state: RecorderState) -> None:
         """Reflect the recorder *state* in button enablement and the label."""
@@ -78,6 +89,15 @@ class RecordingControls(QWidget):
         }[state]
         self._status_lbl.setText(text)
         self._status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        # The VU meter is only meaningful while frames are flowing.
+        if recording:
+            if not self._meter.isVisible():
+                self._meter.setVisible(True)
+            self._meter.start()
+        else:
+            self._meter.stop()
+            self._meter.setVisible(active)  # keep visible (idle) while paused
         # Avoid an unused-var lint while keeping intent explicit.
         _ = finalizing
 

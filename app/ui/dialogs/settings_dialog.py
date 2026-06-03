@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -266,6 +267,11 @@ class SettingsDialog(QDialog):
     def _build_tab_recording(self) -> QWidget:
         """Build the screen-recording settings tab."""
         qs = _qsettings()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -346,11 +352,78 @@ class SettingsDialog(QDialog):
             cap_layout.addWidget(cb)
         layout.addWidget(cap_group)
 
+        # ── Audio devices / mix ───────────────────────────────────────────
+        layout.addWidget(self._build_recording_audio_group(qs))
+
         # ── Screens to record ─────────────────────────────────────────────
         layout.addWidget(self._build_recording_display_group(qs))
 
         layout.addStretch()
-        return widget
+        scroll.setWidget(widget)
+        return scroll
+
+    def _build_recording_audio_group(self, qs) -> QWidget:
+        """Audio device selection, per-source volume sliders and mute toggles."""
+        from app.services.screen_recorder_service import (
+            list_audio_devices,
+            resolve_ffmpeg,
+        )
+
+        group = QGroupBox(t("rec_audio_group"))
+        form = QFormLayout(group)
+
+        # Best-effort device enumeration; an empty list just leaves "Automatic".
+        ffmpeg = resolve_ffmpeg(
+            qs.value("recording/ffmpeg_path", "", type=str) or None
+        )
+        try:
+            devices = list_audio_devices(ffmpeg)
+        except Exception:  # noqa: BLE001 — never let probing break Settings
+            devices = []
+
+        def _device_combo(stored_key: str) -> QComboBox:
+            combo = QComboBox()
+            combo.addItem(t("rec_audio_auto"), userData="")
+            for name in devices:
+                combo.addItem(name, userData=name)
+            stored = qs.value(stored_key, "", type=str) or ""
+            idx = combo.findData(stored)
+            # Keep a stored device even if it is not currently present.
+            if idx < 0 and stored:
+                combo.addItem(stored, userData=stored)
+                idx = combo.findData(stored)
+            combo.setCurrentIndex(max(0, idx))
+            return combo
+
+        self._rec_audio_input_combo = _device_combo("recording/audio_input_device")
+        form.addRow(t("rec_audio_input_device"), self._rec_audio_input_combo)
+        self._rec_system_audio_combo = _device_combo("recording/system_audio_device")
+        form.addRow(t("rec_system_audio_device"), self._rec_system_audio_combo)
+
+        def _volume_slider(stored_key: str) -> QSlider:
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 200)  # percent of unity gain
+            slider.setSingleStep(5)
+            stored = qs.value(stored_key, 1.0, type=float)
+            slider.setValue(int(round(stored * 100)))
+            return slider
+
+        self._rec_mic_volume_slider = _volume_slider("recording/mic_volume")
+        form.addRow(t("rec_mic_volume"), self._rec_mic_volume_slider)
+        self._rec_system_volume_slider = _volume_slider("recording/system_volume")
+        form.addRow(t("rec_system_volume"), self._rec_system_volume_slider)
+
+        self._rec_mute_mic_check = QCheckBox(t("rec_mute_microphone"))
+        self._rec_mute_mic_check.setChecked(
+            qs.value("recording/mute_microphone", False, type=bool)
+        )
+        form.addRow(self._rec_mute_mic_check)
+        self._rec_mute_system_check = QCheckBox(t("rec_mute_system_audio"))
+        self._rec_mute_system_check.setChecked(
+            qs.value("recording/mute_system_audio", False, type=bool)
+        )
+        form.addRow(self._rec_mute_system_check)
+        return group
 
     def _build_recording_display_group(self, qs) -> QWidget:
         """Display-mode radios + dynamic monitor checklist."""
@@ -780,6 +853,27 @@ class SettingsDialog(QDialog):
             "recording/capture_system_audio", self._rec_sysaudio_check.isChecked()
         )
         qs.setValue("recording/concat_on_stop", self._rec_concat_check.isChecked())
+        qs.setValue(
+            "recording/audio_input_device",
+            self._rec_audio_input_combo.currentData() or "",
+        )
+        qs.setValue(
+            "recording/system_audio_device",
+            self._rec_system_audio_combo.currentData() or "",
+        )
+        qs.setValue(
+            "recording/mic_volume", self._rec_mic_volume_slider.value() / 100.0
+        )
+        qs.setValue(
+            "recording/system_volume",
+            self._rec_system_volume_slider.value() / 100.0,
+        )
+        qs.setValue(
+            "recording/mute_microphone", self._rec_mute_mic_check.isChecked()
+        )
+        qs.setValue(
+            "recording/mute_system_audio", self._rec_mute_system_check.isChecked()
+        )
         mode_btn = self._rec_mode_group.checkedButton()
         if mode_btn is not None:
             qs.setValue("recording/display_mode", mode_btn.property("rec_mode"))
