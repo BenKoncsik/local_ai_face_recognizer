@@ -87,10 +87,16 @@ class PlaceService:
         clean = name.strip()
         if not clean:
             return None
+        # Accent-insensitive match ("Pecs" → "Pécs") still needs a Python-side
+        # normalize comparison, but scan only the id/name columns instead of
+        # hydrating a full Place ORM object per row — with many (e.g. anonymous
+        # GPS) places the old full-object load made every add noticeably slow.
         wanted = normalize(clean)
-        for place in self._session.query(Place).order_by(Place.id).all():
-            if normalize(place.name) == wanted:
-                return place
+        for place_id, place_name in (
+            self._session.query(Place.id, Place.name).order_by(Place.id)
+        ):
+            if normalize(place_name) == wanted:
+                return self._session.get(Place, place_id)
         return None
 
     def get_or_create_by_name(self, name: str) -> Place:

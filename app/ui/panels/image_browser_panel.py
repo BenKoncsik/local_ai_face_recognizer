@@ -1058,6 +1058,7 @@ class ImageBrowserPanel(QWidget):
         # Thumbnail / tree state
         self._thumb_cache: Dict[str, QPixmap] = {}
         self._tree_items: Dict[str, QTreeWidgetItem] = {}  # cache_key → image tree item
+        self._search_result_items: Dict[str, QListWidgetItem] = {}  # cache_key → search list item
         self._current_tree_item: Optional[QTreeWidgetItem] = None
 
         # Drive mode — set by main window when a Drive project is open
@@ -1113,7 +1114,9 @@ class ImageBrowserPanel(QWidget):
             suggest_fn=self._tree_suggest,
             parent=self._tree_panel,
         )
-        self._tree_search_bar.tokens_changed.connect(self._on_tree_search_changed)
+        # NB: only wire search_requested — the search bar emits both
+        # tokens_changed AND search_requested on every chip add/remove, so
+        # connecting both would run the (expensive) search twice per change.
         self._tree_search_bar.search_requested.connect(self._on_tree_search_changed)
         tp_layout.addWidget(self._tree_search_bar)
 
@@ -1473,6 +1476,10 @@ class ImageBrowserPanel(QWidget):
         self._place_search = PlaceSearchSelect()
         self._place_search.place_selected.connect(self._on_place_selected)
         self._place_search.place_double_clicked.connect(self._on_place_selected)
+        # Enter on a non-matching query creates the place (same as the button).
+        self._place_search.create_requested.connect(
+            lambda _name: self._create_or_assign_place_by_text()
+        )
         info_layout.addWidget(self._place_search)
 
         place_btns = QHBoxLayout()
@@ -2238,9 +2245,13 @@ class ImageBrowserPanel(QWidget):
     def _on_thumbnail_ready(self, cache_key: str, qimage: QImage) -> None:
         pixmap = QPixmap.fromImage(qimage)
         self._thumb_cache[cache_key] = pixmap
+        icon = QIcon(pixmap)
         tree_item = self._tree_items.get(cache_key)
         if tree_item is not None:
-            tree_item.setIcon(0, QIcon(pixmap))
+            tree_item.setIcon(0, icon)
+        search_item = self._search_result_items.get(cache_key)
+        if search_item is not None:
+            search_item.setIcon(icon)
 
     @Slot(str)
     def _on_thumbnail_failed(self, cache_key: str) -> None:
@@ -3456,31 +3467,48 @@ class ImageBrowserPanel(QWidget):
         self._reload_gps_panel()
 
     def _create_or_assign_place_by_text(self) -> None:
-        if self._current_image_id is None:
-            return
+        # Read the name from the search box, falling back to the rename field so
+        # a name typed in either input works.  Empty input used to fail silently
+        # (the button "did nothing"); now we tell the user instead.
         name = self._place_search.current_query()
         if not name:
+            name = self._place_rename_edit.text().strip()
+        if not name:
+            QMessageBox.information(
+                self, t("ibp_place_create_btn"), t("ibp_place_need_name")
+            )
             return
         with session_scope() as session:
-            place = PlaceService(session).assign_place_to_image_by_name(
-                self._current_image_id,
-                name,
-            )
+            svc = PlaceService(session)
+            if self._current_image_id is not None:
+                # Image open → create (if new) and assign to it.
+                place = svc.assign_place_to_image_by_name(self._current_image_id, name)
+            else:
+                # No image selected → still create the place so it exists and
+                # shows up in the list, rather than silently doing nothing.
+                place = svc.get_or_create_by_name(name)
             place_id = place.id
             place_name = place.name
             anon = place.is_anonymous
             source = place.source
             place_lat = place.latitude
             place_lon = place.longitude
-            img = session.get(Image, self._current_image_id)
+            img = (
+                session.get(Image, self._current_image_id)
+                if self._current_image_id is not None
+                else None
+            )
             img_exif_lat = img.exif_latitude if img else None
             img_image_lat = img.image_latitude if img else None
-        log.info("Place created/assigned to image %d: %r", self._current_image_id, name)
+        log.info(
+            "Place created/assigned: image=%s name=%r", self._current_image_id, name
+        )
         self._reload_places()
         self._update_place_panel(place_id, place_name, anon, source, place_lat, place_lon)
         # Requirement #4: write place GPS to EXIF if no EXIF GPS and no image-level coords
         if (
-            img_exif_lat is None
+            img is not None
+            and img_exif_lat is None
             and img_image_lat is None
             and place_lat is not None
             and place_lon is not None
@@ -3748,23 +3776,33 @@ class ImageBrowserPanel(QWidget):
             results, total = [], 0
 
         self._search_results_list.clear()
+        self._search_result_items.clear()
+        pool = QThreadPool.globalInstance()
+        placeholder_icon = self._make_placeholder_icon()
         for result in results:
             item = QListWidgetItem(result.filename)
             item.setData(Qt.UserRole, result.image_id)
             item.setToolTip(result.file_path)
-            pix = QPixmap(result.file_path)
-            if not pix.isNull():
-                item.setIcon(
-                    QIcon(
-                        pix.scaled(
-                            _TREE_THUMB_SIZE,
-                            _TREE_THUMB_SIZE,
-                            Qt.KeepAspectRatio,
-                            Qt.SmoothTransformation,
-                        )
-                    )
-                )
+            item.setIcon(placeholder_icon)
             self._search_results_list.addItem(item)
+
+            # Async thumbnail — never decode the full-resolution image on the
+            # GUI thread (that froze the UI with many large photos).  Reuse the
+            # shared thumbnail cache and the same worker pattern as the tree.
+            cache_key = f"thumb_{result.image_id}"
+            self._search_result_items[cache_key] = item
+            cached = self._thumb_cache.get(cache_key)
+            if cached is not None:
+                item.setIcon(QIcon(cached))
+            elif Path(result.file_path).exists():
+                worker = ThumbnailRunnable(
+                    file_path=result.file_path,
+                    cache_key=cache_key,
+                    size=_TREE_THUMB_SIZE,
+                )
+                worker.signals.ready.connect(self._on_thumbnail_ready)
+                worker.signals.failed.connect(self._on_thumbnail_failed)
+                pool.start(worker)
 
         if not results:
             placeholder = QListWidgetItem(t("ibp_search_no_results"))

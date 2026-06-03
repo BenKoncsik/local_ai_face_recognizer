@@ -830,6 +830,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_place_none": {"en": "No place assigned", "hu": "Nincs hely hozzárendelve"},
     "ibp_place_assign_btn": {"en": "Assign", "hu": "Hozzárendel"},
     "ibp_place_create_btn": {"en": "Create / assign typed", "hu": "Beírt létrehozása"},
+    "ibp_place_need_name": {"en": "Type a place name first.",
+                            "hu": "Először írj be egy helynevet."},
     "ibp_place_rename_placeholder": {"en": "Name anonymous GPS place…",
                                      "hu": "Névtelen GPS-hely neve…"},
     "ibp_place_rename_btn": {"en": "Rename place", "hu": "Hely átnevezése"},

@@ -2937,9 +2937,19 @@ class MainWindow(QMainWindow):
             dlg.exec()
 
     def _refresh_persons(self) -> None:
+        from sqlalchemy.orm import selectinload
         with session_scope() as session:
+            # Eager-load faces and each face's image in two batched queries.
+            # The old code lazy-loaded them, which meant a SELECT per person
+            # for .faces plus a SELECT per face for .image (the explicit
+            # prewarm loop below).  With many persons/faces that N+1 fan-out
+            # blocked the UI thread for seconds on every refresh — e.g. after
+            # each single face assignment, which is what froze the browser.
             persons: List[Person] = (
-                session.query(Person).order_by(Person.name).all()
+                session.query(Person)
+                .order_by(Person.name)
+                .options(selectinload(Person.faces).selectinload(Face.image))
+                .all()
             )
             from app.services.face_crop_service import ensure_unique_face_crops
             all_faces = [
@@ -2954,9 +2964,6 @@ class MainWindow(QMainWindow):
                 self._config.crops_dir_resolved,
                 self._config.scan.thumbnail_size,
             )
-            for p in persons:
-                for f in p.faces:
-                    _ = f.image  # noqa: F841
             self._sidebar.populate(persons)
         if hasattr(self, "_family_search"):
             self._family_search.refresh()

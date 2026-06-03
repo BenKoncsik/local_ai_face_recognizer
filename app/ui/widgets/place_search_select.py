@@ -51,6 +51,9 @@ def search_places(query: str, entries: List[PlaceEntry], max_results: int = 50) 
 class PlaceSearchSelect(QWidget):
     place_selected: Signal = Signal(int)
     place_double_clicked: Signal = Signal(int)
+    # Emitted when the user presses Enter on a query that matches no existing
+    # place — carries the typed text so the caller can create a new place.
+    create_requested: Signal = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -164,9 +167,16 @@ class PlaceSearchSelect(QWidget):
                         self._list.setCurrentRow(0)
                     return True
                 if key in (Qt.Key_Return, Qt.Key_Enter):
-                    if self._list.count() > 0 and self._list.currentRow() < 0:
-                        self._list.setCurrentRow(0)
-                    self._commit_current()
+                    if self._list.count() > 0:
+                        if self._list.currentRow() < 0:
+                            self._list.setCurrentRow(0)
+                        self._commit_current()
+                    else:
+                        # No existing place matches the typed text — offer to
+                        # create it instead of silently doing nothing.
+                        text = self._search.text().strip()
+                        if text:
+                            self.create_requested.emit(text)
                     return True
                 if key == Qt.Key_Escape:
                     self._search.clear()

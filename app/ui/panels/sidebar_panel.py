@@ -90,6 +90,17 @@ def _build_face_data(person: Person) -> _FaceData:
     )
 
 
+def _crop_mtime(crop_path: Optional[str]) -> Optional[float]:
+    """Return a crop file's mtime so an in-place regenerated crop (same path,
+    new pixels — e.g. after a bbox edit) still invalidates a reused thumbnail."""
+    if not crop_path:
+        return None
+    try:
+        return Path(crop_path).stat().st_mtime
+    except OSError:
+        return None
+
+
 def _load_crop_pixmap(
     crop_path: Optional[str],
     size: int,
@@ -285,6 +296,11 @@ class SidebarPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._all_persons: list[Person] = []
+        # Incremental thumb-grid state: person_id → live widget, and the
+        # signature that widget was built from (so unchanged persons keep
+        # their existing widget instead of being re-created on every refresh).
+        self._thumbs: dict[int, _PersonThumb] = {}
+        self._thumb_sigs: dict[int, tuple] = {}
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -355,17 +371,51 @@ class SidebarPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _rebuild_thumb_grid(self, persons: list[Person]) -> None:
-        while self._thumb_grid.count():
-            item = self._thumb_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
+        """Refresh the thumbnail grid, reusing widgets for unchanged persons.
 
+        Re-creating every ``_PersonThumb`` reads a crop file from disk per
+        person, so a full teardown froze the UI with many persons on every
+        refresh (e.g. after a single face assignment).  Instead we diff against
+        the live widgets: persons whose representative face/crop/name is
+        unchanged keep their existing widget; only new or changed persons build
+        a fresh one, and removed persons are deleted.
+        """
         visible = [p for p in persons if not p.is_protected]
-        for i, person in enumerate(visible):
+
+        # Compute the desired order and a change-signature per person.
+        desired_ids: list[int] = []
+        desired_sig: dict[int, tuple] = {}
+        person_by_id: dict[int, Person] = {}
+        for p in visible:
+            fd = _build_face_data(p)
+            desired_ids.append(p.id)
+            desired_sig[p.id] = (
+                fd.face_id, fd.crop_path, fd.image_path, fd.bbox,
+                p.name, p.is_protected, _crop_mtime(fd.crop_path),
+            )
+            person_by_id[p.id] = p
+
+        # Detach every widget from the layout (cheap — no pixmap reload); kept
+        # widgets are re-added below in the new order.
+        while self._thumb_grid.count():
+            self._thumb_grid.takeAt(0)
+
+        # Drop widgets for persons that vanished or whose signature changed.
+        desired_set = set(desired_ids)
+        for pid in list(self._thumbs.keys()):
+            if pid not in desired_set or self._thumb_sigs.get(pid) != desired_sig[pid]:
+                self._thumbs.pop(pid).deleteLater()
+                self._thumb_sigs.pop(pid, None)
+
+        # Place every desired person, creating widgets only where missing.
+        for i, pid in enumerate(desired_ids):
+            thumb = self._thumbs.get(pid)
+            if thumb is None:
+                thumb = _PersonThumb(person_by_id[pid])
+                thumb.clicked.connect(self.person_selected.emit)
+                self._thumbs[pid] = thumb
+                self._thumb_sigs[pid] = desired_sig[pid]
             row, col = divmod(i, _FACE_COLS)
-            thumb = _PersonThumb(person)
-            thumb.clicked.connect(self.person_selected.emit)
             self._thumb_grid.addWidget(thumb, row, col)
 
     # ------------------------------------------------------------------
