@@ -94,6 +94,7 @@ class LocationsPanel(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.ExtendedSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        self._table.itemChanged.connect(self._on_table_item_changed)
         splitter.addWidget(self._table)
 
         detail_inner = QWidget()
@@ -245,6 +246,56 @@ class LocationsPanel(QWidget):
         item = self._table.item(rows[0], 0)
         place_id = item.data(_ROLE_ID) if item else None
         if place_id is not None:
+            self._load_detail(int(place_id))
+
+    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
+        """Handle when a table item is edited by the user."""
+        # Only process changes to the name column (column 0)
+        if item.column() != 0:
+            return
+
+        place_id = item.data(_ROLE_ID)
+        if place_id is None:
+            return
+
+        new_name = item.text().strip()
+
+        # Validate that the new name is not empty
+        if not new_name:
+            QMessageBox.warning(self, t("empty_name_title"), t("empty_name_msg"))
+            # Restore the old value
+            with session_scope() as session:
+                place = session.get(Place, place_id)
+                if place is not None:
+                    item.setText(place.name)
+            return
+
+        # Check if the name actually changed
+        with session_scope() as session:
+            place = session.get(Place, place_id)
+            if place is not None and place.name == new_name:
+                # No change, nothing to do
+                return
+
+        # Save the new name to the database
+        try:
+            with session_scope() as session:
+                PlaceService(session).name_place(int(place_id), new_name)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                t("places_rename_title", default="Rename Place"),
+                t("places_rename_error", error=str(exc), default="Failed to rename place: {error}"),
+            )
+            # Restore the old value
+            with session_scope() as session:
+                place = session.get(Place, place_id)
+                if place is not None:
+                    item.setText(place.name)
+            return
+
+        # Reload the detail pane to show updated data if this place is currently selected
+        if self._current_place_id == place_id:
             self._load_detail(int(place_id))
 
     def _load_detail(self, place_id: int) -> None:
