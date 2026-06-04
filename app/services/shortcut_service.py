@@ -1,7 +1,16 @@
 """Central keyboard shortcut service.
 
 All configurable key bindings live here.  Other modules register handlers;
-the MainWindow's app-level event filter dispatches them.
+the service binds each registered shortcut to a QShortcut on a host widget
+(the MainWindow) so Qt dispatches it natively.
+
+Historically a single application-wide event filter installed on the
+QApplication dispatched these shortcuts.  That crashes PySide6 with a SIGSEGV
+(in PySide::getWrapperForQObject, via the QMainWindow event-filter wrapper)
+as soon as a QWebEngineView is alive — WebEngine hands the filter native
+QObjects whose Python wrappers fail to marshal.  QShortcut avoids the global
+filter entirely, and its native ShortcutOverride handling preserves the old
+behaviour of letting text fields keep editing keys (Ctrl+Z, etc.).
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import QKeyCombination, Qt
-from PySide6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
 
 # On macOS F11 is grabbed by Mission Control ("Show Desktop") before Qt
 # sees it, so we use Ctrl+Shift+F (⌘⇧F) as the fullscreen default instead.
@@ -110,6 +119,8 @@ class ShortcutService:
     def __init__(self) -> None:
         self._shortcuts: Dict[str, ShortcutDef] = {}
         self._handlers: Dict[str, Callable[[], None]] = {}
+        self._qshortcuts: Dict[str, QShortcut] = {}
+        self._host = None  # QWidget that owns the QShortcut objects
         self._enabled: bool = True
         self._capturing: bool = False   # True while settings capture mode is active
         self._init_defaults()
@@ -150,6 +161,7 @@ class ShortcutService:
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
         self.save()
+        self._refresh_enabled()
 
     def all_shortcuts(self) -> List[ShortcutDef]:
         return list(self._shortcuts.values())
@@ -163,6 +175,7 @@ class ShortcutService:
             return
         self._shortcuts[sc_id].current_key = key
         self.save()
+        self._sync_shortcut(sc_id)
 
     def find_conflict(self, key: str, exclude_id: str = "") -> Optional[ShortcutDef]:
         """Return the first shortcut already mapped to *key*, or None."""
@@ -177,17 +190,84 @@ class ShortcutService:
 
     def set_capturing(self, capturing: bool) -> None:
         self._capturing = capturing
+        # While the settings dialog is capturing a new key combination, our own
+        # QShortcuts must not swallow it — disable them all for the duration.
+        self._refresh_enabled()
 
     def is_capturing(self) -> bool:
         return self._capturing
+
+    # ── Host / QShortcut wiring ───────────────────────────────────────────
+
+    def set_host(self, host) -> None:
+        """Set the QWidget that owns the QShortcut objects (the MainWindow).
+
+        Creates QShortcuts for every already-registered handler; later
+        register() calls create theirs on demand.
+        """
+        self._host = host
+        for sc_id in list(self._handlers):
+            self._sync_shortcut(sc_id)
 
     # ── Handler registry ──────────────────────────────────────────────────
 
     def register(self, sc_id: str, handler: Callable[[], None]) -> None:
         self._handlers[sc_id] = handler
+        self._sync_shortcut(sc_id)
 
     def unregister(self, sc_id: str) -> None:
         self._handlers.pop(sc_id, None)
+        qsc = self._qshortcuts.pop(sc_id, None)
+        if qsc is not None:
+            qsc.setParent(None)
+            qsc.deleteLater()
+
+    # ── QShortcut management ──────────────────────────────────────────────
+
+    def _sync_shortcut(self, sc_id: str) -> None:
+        """Create / update / drop the QShortcut backing *sc_id*."""
+        if self._host is None:
+            return
+        sc = self._shortcuts.get(sc_id)
+        handler = self._handlers.get(sc_id)
+        qsc = self._qshortcuts.get(sc_id)
+
+        # No handler or no key → no live shortcut.
+        if sc is None or handler is None or not sc.current_key:
+            if qsc is not None:
+                qsc.setParent(None)
+                qsc.deleteLater()
+                self._qshortcuts.pop(sc_id, None)
+            return
+
+        seq = QKeySequence(sc.current_key)
+        if qsc is None:
+            qsc = QShortcut(seq, self._host)
+            qsc.setContext(Qt.WindowShortcut)
+            qsc.activated.connect(lambda _id=sc_id: self._fire(_id))
+            self._qshortcuts[sc_id] = qsc
+        else:
+            qsc.setKey(seq)
+        qsc.setEnabled(self._active())
+
+    def _active(self) -> bool:
+        return self._enabled and not self._capturing
+
+    def _refresh_enabled(self) -> None:
+        active = self._active()
+        for qsc in self._qshortcuts.values():
+            qsc.setEnabled(active)
+
+    def _fire(self, sc_id: str) -> None:
+        if not self._active():
+            return
+        handler = self._handlers.get(sc_id)
+        if handler is None:
+            return
+        try:
+            handler()
+        except Exception:
+            log.exception("Shortcut handler %r raised", sc_id)
 
     # ── Dispatch ──────────────────────────────────────────────────────────
 

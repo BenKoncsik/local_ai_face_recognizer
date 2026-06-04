@@ -92,8 +92,13 @@ def main() -> None:
     load_prefs()
 
     # --- Qt application ---
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
+
+    # QtWebEngine (used by the Places map widget) requires shared OpenGL
+    # contexts to be enabled *before* the QApplication is constructed.
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 
     app = QApplication(sys.argv)
     app.setApplicationName("Face-Local")

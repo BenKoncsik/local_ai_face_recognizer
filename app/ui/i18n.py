@@ -910,6 +910,21 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_merge_keep_thumbnail": {"en": "Keep thumbnail:", "hu": "Maradó bélyegkép:"},
     "places_merge_error": {"en": "Failed to save changes: {error}",
                            "hu": "Nem sikerült menteni: {error}"},
+    "places_map_no_gps": {
+        "en": "No valid GPS coordinates for this location.",
+        "hu": "Ehhez a helyhez nincs érvényes GPS-koordináta.",
+    },
+    "places_map_offline": {
+        "en": "Offline — map tiles unavailable",
+        "hu": "Offline — térképcsempék nem elérhetők",
+    },
+    "places_map_no_webengine": {
+        "en": "Map not available (WebEngine module missing).",
+        "hu": "Térkép nem elérhető (WebEngine modul hiányzik).",
+    },
+    "places_gallery_no_images": {"en": "No images", "hu": "Nincs kép"},
+    "places_gallery_dbl_click":  {"en": "Double-click to view full size", "hu": "Dupla kattintás a teljes mérethez"},
+    "places_gallery_click_to_close": {"en": "Click to close", "hu": "Kattints a bezáráshoz"},
 
     # ── 3-column image browser (ib3_*) ────────────────────────────────────
     "ib3_folders_hdr":         {"en": "Folders",           "hu": "Mappák"},

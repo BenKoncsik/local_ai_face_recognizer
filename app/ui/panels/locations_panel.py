@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -34,8 +34,14 @@ from app.services.place_service import (
 )
 from app.ui.dialogs.place_merge_dialog import PlaceMergeDialog
 from app.ui.i18n import t
+from app.ui.widgets.place_gallery_widget import PlaceGalleryWidget
+from app.ui.widgets.place_map_widget import PlaceMapWidget
 
 _ROLE_ID = Qt.UserRole
+
+# Collect per-image GPS only if the coordinate differs from the place centre by
+# more than this threshold (degrees) — avoids duplicating the main marker.
+_MIN_GPS_DIFF = 5e-5
 
 
 class LocationsPanel(QWidget):
@@ -46,6 +52,10 @@ class LocationsPanel(QWidget):
         self._current_place_id: Optional[int] = None
         self._build_ui()
         self.refresh()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -78,38 +88,59 @@ class LocationsPanel(QWidget):
         root.addLayout(filters)
 
         splitter = QSplitter(Qt.Horizontal)
+
         self._table = QTableWidget(0, 5)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.ExtendedSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         splitter.addWidget(self._table)
 
-        detail = QWidget()
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(8, 0, 0, 0)
+        detail_inner = QWidget()
+        detail_layout = QVBoxLayout(detail_inner)
+        detail_layout.setContentsMargins(8, 4, 4, 4)
+        detail_layout.setSpacing(8)
+
+        # Thumbnail
         self._thumb = QLabel()
         self._thumb.setFixedSize(220, 150)
         self._thumb.setAlignment(Qt.AlignCenter)
-        self._thumb.setStyleSheet("background: #181825; color: #888;")
+        self._thumb.setStyleSheet("background:#181825;color:#888;border-radius:4px;")
         detail_layout.addWidget(self._thumb)
 
+        # Metadata form
         form = QFormLayout()
+        form.setSpacing(4)
         self._name = QLabel()
+        self._name.setWordWrap(True)
         self._coords = QLabel()
         self._image_count = QLabel()
+        self._person_count_lbl = QLabel()
         form.addRow(t("places_name"), self._name)
         form.addRow(t("places_coords"), self._coords)
         form.addRow(t("places_image_count"), self._image_count)
+        form.addRow(t("places_person_count"), self._person_count_lbl)
         detail_layout.addLayout(form)
 
-        detail_layout.addWidget(QLabel(t("places_images")))
-        self._images = QListWidget()
-        detail_layout.addWidget(self._images, 2)
+        # Interactive map
+        self._map_widget = PlaceMapWidget()
+        self._map_widget.setFixedHeight(240)
+        detail_layout.addWidget(self._map_widget)
 
+        # Visual gallery (replaces plain file-name list as primary view)
+        gallery_hdr = QLabel()
+        gallery_hdr.setObjectName("gallery_hdr")
+        detail_layout.addWidget(gallery_hdr)
+
+        self._gallery = PlaceGalleryWidget()
+        detail_layout.addWidget(self._gallery)
+
+        # Persons
         detail_layout.addWidget(QLabel(t("places_persons")))
         self._persons = QListWidget()
-        detail_layout.addWidget(self._persons, 1)
+        self._persons.setMaximumHeight(120)
+        detail_layout.addWidget(self._persons)
 
+        # Action buttons
         actions = QHBoxLayout()
         self._merge_btn = QPushButton()
         self._merge_btn.clicked.connect(self._merge_selected)
@@ -118,10 +149,21 @@ class LocationsPanel(QWidget):
         self._refresh_btn.clicked.connect(self.refresh)
         actions.addWidget(self._refresh_btn)
         detail_layout.addLayout(actions)
-        splitter.addWidget(detail)
+
+        detail_layout.addStretch()
+
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidget(detail_inner)
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        detail_scroll.setFrameShape(QScrollArea.NoFrame)
+
+        splitter.addWidget(detail_scroll)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, 1)
+
+        self._gallery_hdr = gallery_hdr
         self.retranslate()
 
     def retranslate(self) -> None:
@@ -143,8 +185,13 @@ class LocationsPanel(QWidget):
             t("places_person_count"),
             t("places_source"),
         ])
+        self._gallery_hdr.setText(t("places_images"))
         self._merge_btn.setText(t("places_merge_btn"))
         self._refresh_btn.setText(t("places_refresh_btn"))
+
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
 
     def refresh(self) -> None:
         person_id = None
@@ -208,39 +255,57 @@ class LocationsPanel(QWidget):
                 return
             images = PlaceService(session).list_images_for_place(place_id)
             persons = PlaceService(session).list_persons_for_place(place_id)
+
             name = place.name
             if place.is_anonymous and place.source == "exif":
                 name = f"{ANONYMOUS_GPS_PLACE_NAME} #{place.id}"
+
+            lat = place.latitude
+            lon = place.longitude
             coords = (
-                f"{place.latitude:.6f}, {place.longitude:.6f}"
-                if place.latitude is not None and place.longitude is not None
+                f"{lat:.6f}, {lon:.6f}"
+                if lat is not None and lon is not None
                 else t("places_no_coords")
             )
             thumb = place.thumbnail_path
 
+            image_paths = [img.file_path for img in images]
+            person_names = [p.name for p in persons]
+            image_count = len(images)
+            person_count = len(persons)
+            nearby = _collect_nearby_points(images, lat, lon)
+
         self._name.setText(name)
         self._coords.setText(coords)
-        self._image_count.setText(str(len(images)))
-        self._images.clear()
-        for image in images:
-            self._images.addItem(f"{Path(image.file_path).name}  {image.photo_date or ''}")
+        self._image_count.setText(str(image_count))
+        self._person_count_lbl.setText(str(person_count))
+
         self._persons.clear()
-        for person in persons:
-            self._persons.addItem(person.name)
+        for pname in person_names:
+            self._persons.addItem(pname)
+
         self._set_thumbnail(thumb)
+        self._map_widget.set_place(name, lat, lon, image_count, person_count, nearby)
+        self._gallery.set_images(image_paths)
 
     def _clear_detail(self) -> None:
         self._name.clear()
         self._coords.clear()
         self._image_count.clear()
-        self._images.clear()
+        self._person_count_lbl.clear()
         self._persons.clear()
         self._thumb.setPixmap(QPixmap())
         self._thumb.setText(t("places_no_thumbnail"))
+        self._map_widget.clear()
+        self._gallery.clear()
 
     def _set_thumbnail(self, path: Optional[str]) -> None:
         self._thumb.setPixmap(QPixmap())
-        if not path or not Path(path).exists():
+        if not path:
+            self._thumb.setText(t("places_no_thumbnail"))
+            return
+        from pathlib import Path as _Path
+        if not _Path(path).exists():
             self._thumb.setText(t("places_no_thumbnail"))
             return
         pixmap = QPixmap(path)
@@ -251,6 +316,10 @@ class LocationsPanel(QWidget):
         self._thumb.setPixmap(
             pixmap.scaled(self._thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+
+    # ------------------------------------------------------------------
+    # Merge
+    # ------------------------------------------------------------------
 
     def _merge_selected(self) -> None:
         rows = sorted({i.row() for i in self._table.selectedItems()})
@@ -263,8 +332,6 @@ class LocationsPanel(QWidget):
             if item is not None:
                 ids.append(int(item.data(_ROLE_ID)))
 
-        # Prefer a named (non-anonymous) place as the merge target so that
-        # the named place's ID survives and the anonymous one is absorbed.
         target_id = self._current_place_id or ids[0]
         with session_scope() as session:
             places = session.query(Place).filter(Place.id.in_(ids)).order_by(Place.id).all()
@@ -298,3 +365,35 @@ class LocationsPanel(QWidget):
             return
         self.refresh()
         self._load_detail(target_id)
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _collect_nearby_points(
+    images: list,
+    place_lat: Optional[float],
+    place_lon: Optional[float],
+) -> List[Tuple[float, float]]:
+    """Return unique per-image GPS coordinates that differ from the place centre."""
+    seen: set = set()
+    result: List[Tuple[float, float]] = []
+    for img in images:
+        for lat, lon in (
+            (img.image_latitude, img.image_longitude),
+            (img.exif_latitude, img.exif_longitude),
+        ):
+            if lat is None or lon is None:
+                continue
+            if place_lat is not None and place_lon is not None:
+                if (
+                    abs(lat - place_lat) < _MIN_GPS_DIFF
+                    and abs(lon - place_lon) < _MIN_GPS_DIFF
+                ):
+                    continue
+            key = (round(lat, 5), round(lon, 5))
+            if key not in seen:
+                seen.add(key)
+                result.append((lat, lon))
+    return result
