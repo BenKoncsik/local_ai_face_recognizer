@@ -14,7 +14,7 @@ clustering:
   min_samples: 2
   metric: cosine
 storage:
-  db_path: D:/Családi archiv képek/faces.db
+  db_path: /Users/koncsikbenedek/Downloads/faces.db
   crops_dir: data/crops
 scan:
   image_extensions:

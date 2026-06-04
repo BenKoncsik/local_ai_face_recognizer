@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -23,7 +24,9 @@ from PySide6.QtWidgets import (
 from app.db.database import session_scope
 from app.db.models import Person
 from app.services.family_service import FamilyService
+from app.services.person_group_service import PersonGroupService
 from app.ui.i18n import t
+from app.ui.widgets.group_chip_select import GroupChipSelect
 
 log = logging.getLogger(__name__)
 
@@ -34,15 +37,36 @@ class PersonInfoDialog(QDialog):
     def __init__(self, person: Person, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._person_id = person.id
+        self._is_protected = person.is_protected
         self.setWindowTitle(t("person_info_title", name=person.name))
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(460)
+        self.setMinimumHeight(420)
+        self.resize(460, 680)
 
-        layout = QVBoxLayout(self)
+        # Outer layout: scroll area fills space, buttons pinned at bottom
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 8)
+        outer.setSpacing(0)
 
+        # --- Scroll area wraps all editable content ---
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 8)
+        layout.setSpacing(4)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, stretch=1)
+
+        # --- Title ---
         title = QLabel(f"<b>{person.name}</b>")
         title.setStyleSheet("font-size: 14px; margin-bottom: 6px;")
         layout.addWidget(title)
 
+        # --- Form fields ---
         form = QFormLayout()
         form.setLabelAlignment(form.labelAlignment())
         form.setRowWrapPolicy(QFormLayout.DontWrapRows)
@@ -108,21 +132,43 @@ class PersonInfoDialog(QDialog):
 
         layout.addLayout(form)
 
+        # --- Notes ---
         notes_label = QLabel(t("notes"))
         notes_label.setStyleSheet("margin-top: 8px;")
         layout.addWidget(notes_label)
 
         self._notes = QTextEdit(person.notes or "")
         self._notes.setPlaceholderText(t("free_notes"))
-        self._notes.setMaximumHeight(100)
+        self._notes.setFixedHeight(80)
         layout.addWidget(self._notes)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        # --- Groups ---
+        groups_label = QLabel(t("person_groups"))
+        groups_label.setStyleSheet("margin-top: 8px;")
+        layout.addWidget(groups_label)
+
+        self._groups = GroupChipSelect()
+        if self._is_protected:
+            self._groups.setEnabled(False)
+            self._groups.setToolTip(t("person_groups_protected_tip"))
+        layout.addWidget(self._groups)
+        layout.addStretch()
+
+        # --- Buttons pinned outside the scroll area ---
+        from PySide6.QtWidgets import QFrame
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        outer.addWidget(line)
+
+        btn_row = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btn_row.accepted.connect(self.accept)
+        btn_row.rejected.connect(self.reject)
+        btn_row.setContentsMargins(12, 4, 12, 4)
+        outer.addWidget(btn_row)
 
         self._setup_completers()
+        self._load_groups()
 
     def accept(self) -> None:
         try:
@@ -135,6 +181,17 @@ class PersonInfoDialog(QDialog):
             QMessageBox.warning(self, t("family_code_invalid_title"), str(exc))
             return
         self._family_code.setText(canonical or "")
+
+        # Save group memberships (skipped for protected persons)
+        if not self._is_protected:
+            try:
+                with session_scope() as session:
+                    PersonGroupService(session).set_person_groups(
+                        self._person_id, self._groups.selected_group_ids()
+                    )
+            except Exception:
+                log.exception("Failed to save groups for person id=%d", self._person_id)
+
         super().accept()
 
     # ------------------------------------------------------------------
@@ -175,6 +232,25 @@ class PersonInfoDialog(QDialog):
         self._first_name.setCompleter(
             self._make_completer(self._fetch_person_values("first_name"))
         )
+
+    def _load_groups(self) -> None:
+        """Populate the GroupChipSelect with all existing groups and this person's groups."""
+        from app.db.models import PersonGroup as _PG
+        try:
+            with session_scope() as session:
+                svc = PersonGroupService(session)
+                all_groups = [
+                    (g.id, g.name)
+                    for g in session.query(_PG).order_by(_PG.name).all()
+                ]
+                person_groups = [
+                    (g.id, g.name) for g in svc.get_person_groups(self._person_id)
+                ]
+        except Exception:
+            log.exception("Failed to load groups for person id=%d", self._person_id)
+            return
+        self._groups.set_available_groups(all_groups)
+        self._groups.set_selected_groups(person_groups)
 
     # ------------------------------------------------------------------
     # Accessors

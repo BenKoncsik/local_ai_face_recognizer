@@ -131,6 +131,7 @@ def _migrate_add_columns(engine: Engine) -> None:
                     log.info("Migration: added column %s.%s", table, col_name)
         conn.commit()
     _migrate_add_indexes(engine)
+    _migrate_person_groups(engine)
     _migrate_collage_locations_to_places(engine)
 
 
@@ -164,6 +165,50 @@ def _migrate_add_indexes(engine: Engine) -> None:
             if "relationships" in stmt and "relationships" not in tables:
                 continue
             conn.execute(text(stmt))
+
+
+def _migrate_person_groups(engine: Engine) -> None:
+    """Create person_groups and person_group_memberships tables if missing (idempotent)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS person_groups (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name      VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    color     VARCHAR(32),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_person_groups_name "
+                "ON person_groups(name)"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS person_group_memberships (
+                    person_id INTEGER NOT NULL
+                        REFERENCES persons(id) ON DELETE CASCADE,
+                    group_id  INTEGER NOT NULL
+                        REFERENCES person_groups(id) ON DELETE CASCADE,
+                    PRIMARY KEY (person_id, group_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_pgm_group_id "
+                "ON person_group_memberships(group_id)"
+            )
+        )
+    log.debug("Migration: person_groups tables ensured")
 
 
 def _migrate_collage_locations_to_places(engine: Engine) -> None:

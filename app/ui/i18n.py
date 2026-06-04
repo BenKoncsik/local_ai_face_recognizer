@@ -599,6 +599,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                            "hu": "pl. 2001 vagy 2001.11.23"},
     "example_death_place": {"en": "e.g. Debrecen", "hu": "pl. Debrecen"},
     "free_notes":        {"en": "Free-text notes …", "hu": "Szabad szöveges megjegyzések…"},
+    "person_groups":     {"en": "Groups / communities:", "hu": "Társaságok / közösségek:"},
+    "person_groups_protected_tip": {
+        "en": "Groups cannot be assigned to the protected 'Unknown' person.",
+        "hu": "A védett 'Ismeretlen' személyhez nem rendelhető kategória.",
+    },
 
     # ── Collage ──────────────────────────────────────────────────────────
     "collage_label":     {"en": "Collage:", "hu": "Kollázs:"},

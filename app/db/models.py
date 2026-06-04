@@ -229,9 +229,72 @@ class Person(Base):
         back_populates="person_b",
         cascade="all, delete-orphan",
     )
+    group_memberships: Mapped[List["PersonGroupMembership"]] = relationship(
+        "PersonGroupMembership",
+        back_populates="person",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Person id={self.id} name={self.name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# PersonGroup / PersonGroupMembership
+# ---------------------------------------------------------------------------
+
+class PersonGroup(Base):
+    """A user-defined community/category that persons can belong to.
+
+    Examples: Kórus, Munkahely, Iskolai osztály, Szomszéd, Egyesület.
+    A person can belong to multiple groups (many-to-many via PersonGroupMembership).
+    """
+
+    __tablename__ = "person_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    color: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    memberships: Mapped[List["PersonGroupMembership"]] = relationship(
+        "PersonGroupMembership",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<PersonGroup id={self.id} name={self.name!r}>"
+
+
+class PersonGroupMembership(Base):
+    """Join table linking persons to person_groups (many-to-many)."""
+
+    __tablename__ = "person_group_memberships"
+    __table_args__ = (
+        UniqueConstraint("person_id", "group_id", name="uq_pgm_person_group"),
+        Index("ix_pgm_group_id", "group_id"),
+    )
+
+    person_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("persons.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    group_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("person_groups.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+
+    person: Mapped["Person"] = relationship("Person", back_populates="group_memberships")
+    group: Mapped["PersonGroup"] = relationship("PersonGroup", back_populates="memberships")
+
+    def __repr__(self) -> str:
+        return f"<PersonGroupMembership person={self.person_id} group={self.group_id}>"
 
 
 # ---------------------------------------------------------------------------

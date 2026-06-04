@@ -105,7 +105,7 @@ class ExportService:
         out.parent.mkdir(parents=True, exist_ok=True)
 
         fieldnames = [
-            "person_id", "person_name", "face_id",
+            "person_id", "person_name", "groups", "face_id",
             "image_path", "bbox_x", "bbox_y", "bbox_w", "bbox_h",
             "confidence", "detector_backend", "crop_path",
         ]
@@ -146,6 +146,8 @@ class ExportService:
               ...
             ]
         """
+        from app.services.person_group_service import PersonGroupService
+        group_svc = PersonGroupService(self._session)
         persons = self._get_persons(person_id)
         records = []
 
@@ -163,10 +165,12 @@ class ExportService:
                         "crop_path": f.crop_path,
                     }
                 )
+            groups = [g.name for g in group_svc.get_person_groups(person.id)]
             records.append(
                 {
                     "person_id": person.id,
                     "person_name": person.name,
+                    "groups": groups,
                     "faces": face_records,
                 }
             )
@@ -479,14 +483,20 @@ class ExportService:
         return None
 
     def _build_rows(self, person_id: Optional[int]) -> List[dict]:
+        from app.services.person_group_service import PersonGroupService
+        svc = PersonGroupService(self._session)
         persons = self._get_persons(person_id)
         rows = []
         for person in persons:
+            groups_csv = ", ".join(
+                g.name for g in svc.get_person_groups(person.id)
+            )
             for face in self._get_faces(person.id):
                 rows.append(
                     {
                         "person_id": person.id,
                         "person_name": person.name,
+                        "groups": groups_csv,
                         "face_id": face.id,
                         "image_path": face.image.file_path if face.image else "",
                         "bbox_x": face.bbox_x,
