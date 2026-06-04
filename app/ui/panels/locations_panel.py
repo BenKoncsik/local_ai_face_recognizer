@@ -9,6 +9,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -343,7 +344,7 @@ class LocationsPanel(QWidget):
                 if target_id not in {p.id for p in named}:
                     target_id = named_id
             dlg = PlaceMergeDialog(places, target_id, self)
-            if dlg.exec() != dlg.Accepted:
+            if dlg.exec() != QDialog.Accepted:
                 return
             choice = dlg.choice()
         try:
