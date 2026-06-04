@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QTabWidget,
+    QTextEdit,
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
@@ -1539,6 +1540,24 @@ class ImageBrowserPanel(QWidget):
 
         info_layout.addWidget(_hline())
 
+        # ── Image note ────────────────────────────────────────────────
+        self._note_hdr = QLabel()
+        self._note_hdr.setStyleSheet("font-weight: bold; color: #888; font-size: 11px;")
+        info_layout.addWidget(self._note_hdr)
+
+        self._note_edit = QTextEdit()
+        self._note_edit.setFixedHeight(72)
+        self._note_edit.setAcceptRichText(False)
+        info_layout.addWidget(self._note_edit)
+
+        self._note_save_timer = QTimer(self)
+        self._note_save_timer.setSingleShot(True)
+        self._note_save_timer.setInterval(600)
+        self._note_save_timer.timeout.connect(self._save_note)
+        self._note_edit.textChanged.connect(self._note_save_timer.start)
+
+        info_layout.addWidget(_hline())
+
         self._face_hdr = QLabel()
         self._face_hdr.setStyleSheet(
             "font-weight: bold; color: #888; font-size: 11px;"
@@ -1683,6 +1702,9 @@ class ImageBrowserPanel(QWidget):
         self._gps_write_place_btn.setToolTip(t("ibp_gps_write_exif_place_tip"))
         self._update_exif_date_btn.setText(t("ibp_update_exif_date_btn"))
         self._update_exif_date_btn.setToolTip(t("ibp_update_exif_date_tip"))
+        self._note_hdr.setText(t("ibp_note_hdr"))
+        self._note_edit.setPlaceholderText(t("ibp_note_placeholder"))
+        self._note_edit.setToolTip(t("ibp_note_tooltip"))
         self._face_hdr.setText(t("ibp_face_hdr"))
         self._face_status_label.setText(t("ibp_click_face"))
         self._rename_btn.setText(t("ibp_rename_btn"))
@@ -2387,6 +2409,7 @@ class ImageBrowserPanel(QWidget):
             self.image_displayed.emit(image_id, img.file_path)
             self._detection_done = img.detection_done
             photo_date = img.photo_date or ""
+            note = img.note or ""
             current_place_id = img.place_id
             current_place_name = img.place.name if img.place else ""
             current_place_is_anonymous = bool(img.place and img.place.is_anonymous)
@@ -2450,6 +2473,9 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.blockSignals(True)
         self._photo_date_edit.setText(photo_date)
         self._photo_date_edit.blockSignals(False)
+        self._note_edit.blockSignals(True)
+        self._note_edit.setPlainText(note)
+        self._note_edit.blockSignals(False)
         self._update_place_panel(
             current_place_id,
             current_place_name,
@@ -2533,6 +2559,9 @@ class ImageBrowserPanel(QWidget):
         self._image_label.setText(t("ib3_select_image_hint"))
         self._folder_label.setText("")
         self._filename_label.setText("")
+        self._note_edit.blockSignals(True)
+        self._note_edit.clear()
+        self._note_edit.blockSignals(False)
         self._exif_row_widget.setVisible(False)
         self._update_place_panel(None, "", False, None)
         self._load_image_coords(None, None, None, None, None, None, None)
@@ -3372,6 +3401,18 @@ class ImageBrowserPanel(QWidget):
                 return
             img.photo_date = value
         log.debug("photo_date saved for image %d: %r", target_id, value)
+
+    def _save_note(self) -> None:
+        target_id = self._deol_pair_orig_id or self._current_image_id
+        if target_id is None:
+            return
+        value = self._note_edit.toPlainText().strip() or None
+        with session_scope() as session:
+            img = session.get(Image, target_id)
+            if img is None:
+                return
+            img.note = value
+        log.debug("note saved for image %d: %r", target_id, value)
 
     def _load_exif_suggestion(self, path: str) -> None:
         """Read EXIF DateTimeOriginal and show as a suggestion (not auto-fill)."""

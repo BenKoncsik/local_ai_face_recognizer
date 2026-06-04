@@ -866,6 +866,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "A hozzárendelt helyszín koordinátájának beírása a kép EXIF GPS mezőibe",
     },
 
+    # ── Image note ──────────────────────────────────────────────────────
+    "ibp_note_hdr":         {"en": "Note:",                "hu": "Megjegyzés:"},
+    "ibp_note_placeholder": {"en": "Add a note…",          "hu": "Megjegyzés hozzáadása…"},
+    "ibp_note_tooltip":     {"en": "Free-text note attached to this image",
+                             "hu": "Szabad szöveges megjegyzés a képhez"},
+
     # ── EXIF date update button ─────────────────────────────────────────
     "ibp_update_exif_date_btn":  {"en": "Update EXIF date from photo date",
                                   "hu": "EXIF készítési dátum frissítése a kép dátuma alapján"},

@@ -70,6 +70,9 @@ class Image(Base):
     # e.g. "1930-as évek", "1954", "1954.03.12", "kb. 1930"
     photo_date: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
+    # Free-text note attached to the image by the user.
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     place_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("places.id", ondelete="SET NULL"), nullable=True, index=True
     )

@@ -16,7 +16,7 @@ Scans a folder tree of images, detects faces, groups identical people into clust
 6. **Export** — CSV, JSON reports, or copy face images to a folder.
 7. **Record** — a built-in screen recorder (toolbar ● / ⏸ / ■) captures the app
    window, cursor and microphone for documenting meetings or image
-   walk-throughs, alongside a `timeline.txt` "subtitle" log of which image and
+   walk-throughs, alongside a same-named `.srt` subtitle log of which image and
    selected person was active at each moment.
 
 Everything is persisted in a local SQLite database. No network calls are made.

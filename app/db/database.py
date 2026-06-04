@@ -106,6 +106,7 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("exif_longitude", "FLOAT"),
             ("image_latitude", "FLOAT"),
             ("image_longitude", "FLOAT"),
+            ("note", "TEXT"),
         ],
         "faces": [
             ("assignment_source", "VARCHAR(32)"),

@@ -66,7 +66,7 @@ class RecordingTimelineLog:
     Parameters
     ----------
     path:
-        Destination of the finalized log (``timeline.srt``).  A sibling
+        Destination of the finalized log (for example ``recording.srt``).  A sibling
         ``<path>.partial`` file receives crash-safe incremental writes.
     person_prefix:
         Label prefix used in the person line (e.g. ``"Kijelölt személy:"``).

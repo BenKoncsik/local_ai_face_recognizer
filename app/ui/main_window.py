@@ -1601,9 +1601,10 @@ class MainWindow(QMainWindow):
         self._recorder.audio_validated.connect(self._on_recorder_audio_validated)
 
         from app.services.recording_timeline_log import RecordingTimelineLog
+        from app.services.subtitle_service import subtitle_path_for_video
         session_dir.mkdir(parents=True, exist_ok=True)
         self._recording_log = RecordingTimelineLog(
-            session_dir / "timeline.srt",
+            subtitle_path_for_video(session_dir / "recording.mp4"),
             person_prefix=t("rec_person_prefix"),
         )
 

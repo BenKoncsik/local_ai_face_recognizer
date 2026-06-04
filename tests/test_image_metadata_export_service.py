@@ -70,6 +70,11 @@ def _read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def _read_csv_headers(path: Path) -> list[str]:
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        return next(csv.reader(fh))
+
+
 # ---------------------------------------------------------------------------
 # CSV tests
 # ---------------------------------------------------------------------------
@@ -173,8 +178,8 @@ def test_export_csv_no_gps_exports_empty(db, tmp_path):
         ImageMetadataExportService(session).export_csv(out, ALL_FIELDS, PERSON_MODE_LIST)
 
     rows = _read_csv(out)
-    assert rows[0]["Latitude"] == ""
-    assert rows[0]["Longitude"] == ""
+    assert rows[0]["Lat"] == ""
+    assert rows[0]["Lon"] == ""
 
 
 def test_export_csv_gps_from_exif(db, tmp_path):
@@ -190,8 +195,8 @@ def test_export_csv_gps_from_exif(db, tmp_path):
         ImageMetadataExportService(session).export_csv(out, ALL_FIELDS, PERSON_MODE_LIST)
 
     rows = _read_csv(out)
-    assert float(rows[0]["Latitude"]) == pytest.approx(46.253010, abs=1e-5)
-    assert float(rows[0]["Longitude"]) == pytest.approx(20.141425, abs=1e-5)
+    assert float(rows[0]["Lat"]) == pytest.approx(46.253010, abs=1e-5)
+    assert float(rows[0]["Lon"]) == pytest.approx(20.141425, abs=1e-5)
 
 
 def test_export_csv_gps_image_coords_take_priority_over_exif(db, tmp_path):
@@ -209,8 +214,8 @@ def test_export_csv_gps_image_coords_take_priority_over_exif(db, tmp_path):
         ImageMetadataExportService(session).export_csv(out, ALL_FIELDS, PERSON_MODE_LIST)
 
     rows = _read_csv(out)
-    assert float(rows[0]["Latitude"]) == pytest.approx(47.5)
-    assert float(rows[0]["Longitude"]) == pytest.approx(19.0)
+    assert float(rows[0]["Lat"]) == pytest.approx(47.5)
+    assert float(rows[0]["Lon"]) == pytest.approx(19.0)
 
 
 def test_export_csv_no_exif_fallback_to_filename_date(db, tmp_path):
@@ -307,7 +312,33 @@ def test_export_csv_selective_fields(db, tmp_path):
     assert "Date" in rows[0]
     assert "Persons" not in rows[0]
     assert "Path" not in rows[0]
-    assert "Latitude" not in rows[0]
+    assert "Lat" not in rows[0]
+
+
+def test_export_csv_places_date_location_gps_before_person_columns(db, tmp_path):
+    with session_scope() as session:
+        alice = _make_person(session, "Alice")
+        place = Place(name="Budapest", is_anonymous=False)
+        session.add(place)
+        session.flush()
+        img = _make_image(
+            session,
+            tmp_path / "ordered.jpg",
+            photo_date="2023-04-05",
+            place_id=place.id,
+            image_latitude=47.4979,
+            image_longitude=19.0402,
+        )
+        _make_face(session, img, alice)
+
+    out = tmp_path / "out.csv"
+    with session_scope() as session:
+        ImageMetadataExportService(session).export_csv(out, ALL_FIELDS, PERSON_MODE_COLS)
+
+    headers = _read_csv_headers(out)
+    assert headers == ["Filename", "Path", "Date", "Location", "Lat", "Lon", "Person1"]
+    assert "Latitude" not in headers
+    assert "Longitude" not in headers
 
 
 def test_export_csv_multiple_images(db, tmp_path):
@@ -369,7 +400,7 @@ def test_export_xlsx_basic(db, tmp_path):
     headers = [cell.value for cell in ws[1]]
     assert "Filename" in headers
     assert "Persons" in headers
-    assert "Latitude" in headers
+    assert "Lat" in headers
 
     data_row = [cell.value for cell in ws[2]]
     row_dict = dict(zip(headers, data_row))
@@ -397,9 +428,9 @@ def test_export_xlsx_gps_numeric(db, tmp_path):
     data_row = [cell.value for cell in ws[2]]
     row_dict = dict(zip(headers, data_row))
 
-    assert isinstance(row_dict["Latitude"], float)
-    assert isinstance(row_dict["Longitude"], float)
-    assert row_dict["Latitude"] == pytest.approx(46.253010, abs=1e-5)
+    assert isinstance(row_dict["Lat"], float)
+    assert isinstance(row_dict["Lon"], float)
+    assert row_dict["Lat"] == pytest.approx(46.253010, abs=1e-5)
 
 
 def test_export_xlsx_utf8_accents(db, tmp_path):
@@ -440,6 +471,52 @@ def test_export_xlsx_cols_mode_separate_person_columns(db, tmp_path):
     assert "Person1" in headers
     assert "Person2" in headers
     assert "Persons" not in headers
+
+
+def test_export_xlsx_uses_same_column_order_as_csv(db, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    with session_scope() as session:
+        alice = _make_person(session, "Alice")
+        place = Place(name="Szeged", is_anonymous=False)
+        session.add(place)
+        session.flush()
+        img = _make_image(
+            session,
+            tmp_path / "ordered.xlsx.jpg",
+            photo_date="2024-01-02",
+            place_id=place.id,
+            image_latitude=46.253,
+            image_longitude=20.141,
+        )
+        _make_face(session, img, alice)
+
+    out = tmp_path / "out.xlsx"
+    with session_scope() as session:
+        ImageMetadataExportService(session).export_xlsx(out, ALL_FIELDS, PERSON_MODE_COLS)
+
+    wb = openpyxl.load_workbook(out)
+    ws = wb.active
+    headers = [cell.value for cell in ws[1]]
+    assert headers == ["Filename", "Path", "Date", "Location", "Lat", "Lon", "Person1"]
+    assert "Latitude" not in headers
+    assert "Longitude" not in headers
+
+
+def test_export_xlsx_normalizes_extension(db, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    with session_scope() as session:
+        _make_image(session, tmp_path / "photo.jpg")
+
+    requested = tmp_path / "metadata.csv"
+    with session_scope() as session:
+        out = ImageMetadataExportService(session).export_xlsx(
+            requested, ALL_FIELDS, PERSON_MODE_LIST
+        )
+
+    assert out == tmp_path / "metadata.xlsx"
+    assert out.exists()
+    assert not requested.exists()
+    openpyxl.load_workbook(out)
 
 
 def test_export_xlsx_large_batch(db, tmp_path):

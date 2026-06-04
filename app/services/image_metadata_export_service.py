@@ -29,6 +29,14 @@ FIELD_DATE = "date"
 FIELD_LOCATION = "location"
 FIELD_GPS = "gps"
 
+COL_FILENAME = "Filename"
+COL_PATH = "Path"
+COL_PERSONS = "Persons"
+COL_DATE = "Date"
+COL_LOCATION = "Location"
+COL_LAT = "Lat"
+COL_LON = "Lon"
+
 ALL_FIELDS: Set[str] = {
     FIELD_FILENAME,
     FIELD_RELPATH,
@@ -85,7 +93,7 @@ class ImageMetadataExportService:
         Returns:
             Path to the written file.
         """
-        out = Path(target_path)
+        out = _with_suffix(target_path, ".csv")
         out.parent.mkdir(parents=True, exist_ok=True)
 
         images = self._all_images()
@@ -132,7 +140,7 @@ class ImageMetadataExportService:
                 "Install it with: pip install openpyxl"
             ) from exc
 
-        out = Path(target_path)
+        out = _with_suffix(target_path, ".xlsx")
         out.parent.mkdir(parents=True, exist_ok=True)
 
         images = self._all_images()
@@ -153,7 +161,7 @@ class ImageMetadataExportService:
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
 
-        gps_headers = {"Latitude", "Longitude"}
+        gps_headers = {COL_LAT, COL_LON}
 
         for row_dict in rows:
             data = []
@@ -283,22 +291,22 @@ class ImageMetadataExportService:
     ) -> dict:
         d: dict = {}
         if FIELD_FILENAME in fields:
-            d["Filename"] = row.filename
+            d[COL_FILENAME] = row.filename
         if FIELD_RELPATH in fields:
-            d["Path"] = row.relative_path
+            d[COL_PATH] = row.relative_path
+        if FIELD_DATE in fields:
+            d[COL_DATE] = row.date
+        if FIELD_LOCATION in fields:
+            d[COL_LOCATION] = row.location
+        if FIELD_GPS in fields:
+            d[COL_LAT] = row.latitude if row.latitude is not None else ""
+            d[COL_LON] = row.longitude if row.longitude is not None else ""
         if FIELD_PERSONS in fields:
             if person_mode == PERSON_MODE_LIST:
-                d["Persons"] = ", ".join(row.persons)
+                d[COL_PERSONS] = ", ".join(row.persons)
             else:
                 for i, name in enumerate(row.persons, start=1):
                     d[f"Person{i}"] = name
-        if FIELD_DATE in fields:
-            d["Date"] = row.date
-        if FIELD_LOCATION in fields:
-            d["Location"] = row.location
-        if FIELD_GPS in fields:
-            d["Latitude"] = row.latitude if row.latitude is not None else ""
-            d["Longitude"] = row.longitude if row.longitude is not None else ""
         return d
 
     def _build_headers(
@@ -309,20 +317,29 @@ class ImageMetadataExportService:
     ) -> list[str]:
         headers: list[str] = []
         if FIELD_FILENAME in fields:
-            headers.append("Filename")
+            headers.append(COL_FILENAME)
         if FIELD_RELPATH in fields:
-            headers.append("Path")
+            headers.append(COL_PATH)
+        if FIELD_DATE in fields:
+            headers.append(COL_DATE)
+        if FIELD_LOCATION in fields:
+            headers.append(COL_LOCATION)
+        if FIELD_GPS in fields:
+            headers.append(COL_LAT)
+            headers.append(COL_LON)
         if FIELD_PERSONS in fields:
             if person_mode == PERSON_MODE_LIST:
-                headers.append("Persons")
+                headers.append(COL_PERSONS)
             else:
                 for i in range(1, max(max_persons, 1) + 1):
                     headers.append(f"Person{i}")
-        if FIELD_DATE in fields:
-            headers.append("Date")
-        if FIELD_LOCATION in fields:
-            headers.append("Location")
-        if FIELD_GPS in fields:
-            headers.append("Latitude")
-            headers.append("Longitude")
         return headers
+
+
+def _with_suffix(target_path: str | Path, suffix: str) -> Path:
+    path = Path(target_path)
+    if path.suffix.lower() == suffix:
+        return path
+    if path.suffix:
+        return path.with_suffix(suffix)
+    return path.with_suffix(suffix)

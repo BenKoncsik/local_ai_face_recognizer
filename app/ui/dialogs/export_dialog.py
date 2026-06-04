@@ -386,12 +386,16 @@ class ExportDialog(QDialog):
 
         person_mode = PERSON_MODE_COLS if self._meta_persons_cols.isChecked() else PERSON_MODE_LIST
 
-        with session_scope() as session:
-            svc = ImageMetadataExportService(session)
-            if use_xlsx:
-                out = svc.export_xlsx(path, fields, person_mode)
-            else:
-                out = svc.export_csv(path, fields, person_mode)
+        try:
+            with session_scope() as session:
+                svc = ImageMetadataExportService(session)
+                if use_xlsx:
+                    out = svc.export_xlsx(path, fields, person_mode)
+                else:
+                    out = svc.export_csv(path, fields, person_mode)
+        except ImportError as exc:
+            QMessageBox.critical(self, t("export_error"), str(exc))
+            return
 
         QMessageBox.information(
             self, t("export_metadata_done"), t("export_metadata_saved", path=out)
