@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -247,6 +248,7 @@ class ExportService:
         # --- export normalized originals and HTML overlay metadata ---
         image_records: Dict[str, dict] = {}
         map_records: List[dict] = []
+        tour_records: List[dict] = []
         image_order: List[str] = []
         for img_path, face_list in image_faces.items():
             img = load_image_bgr(img_path)
@@ -259,6 +261,8 @@ class ExportService:
                 continue
 
             face_records = []
+            persons_in_image: List[str] = []
+            has_identified = False
             for person, face in face_list:
                 bbox = _face_bbox_for_export(face, img_w, img_h)
                 if bbox is None:
@@ -272,6 +276,9 @@ class ExportService:
                     }
                 )
                 _append_unique(person_images.setdefault(person.name, []), dst_name)
+                _append_unique(persons_in_image, person.name)
+                if not person.is_auto_named:
+                    has_identified = True
 
             if img_path in faceless_image_paths:
                 _append_unique(person_images.setdefault("Arc nélküli képek", []), dst_name)
@@ -290,6 +297,12 @@ class ExportService:
             map_record = _build_map_export_record(db_image, dst_name, source, face_records)
             if map_record is not None:
                 map_records.append(map_record)
+            tour_records.append(
+                _build_tour_export_record(
+                    db_image, dst_name, source, face_records,
+                    persons_in_image, has_identified, img_w, img_h,
+                )
+            )
             image_order.append(dst_name)
 
         # --- build JS data ---
@@ -313,6 +326,7 @@ class ExportService:
         )
         (out / "index.html").write_text(html, encoding="utf-8")
         _write_map_export_files(out, map_records)
+        _write_tour_export_files(out, tour_records)
 
         log.info("HTML export: %d person(s) → %s", len(persons), out)
         return out
@@ -642,6 +656,87 @@ def _write_map_export_files(out: Path, records: List[dict]) -> None:
     (out / "map.js").write_text(_MAP_JS, encoding="utf-8")
 
 
+_YEAR_RE = re.compile(r"(\d{4})")
+
+
+def _extract_year(date_str: Optional[str]) -> str:
+    """Pull a 4-digit year out of a free-text date string, or '' if none."""
+    if not date_str:
+        return ""
+    match = _YEAR_RE.search(str(date_str))
+    return match.group(1) if match else ""
+
+
+def _decade_label(year: str) -> str:
+    """Return a Hungarian decade label like '1980-as évek' for a year, or ''."""
+    if not year or len(year) < 4:
+        return ""
+    return f"{year[:3]}0-as évek"
+
+
+def _build_tour_export_record(
+    image: Optional[Image],
+    exported_name: str,
+    source: Path,
+    face_records: List[dict],
+    persons: List[str],
+    has_identified: bool,
+    width: int,
+    height: int,
+) -> dict:
+    """Build one rich per-image record for the slideshow / image-tour page.
+
+    Every field has a defined fallback so the front-end never has to guard
+    against a missing key — absent data is represented as ``""``/``None``/
+    ``[]``/``False`` rather than being omitted.
+    """
+    coords = _effective_image_gps(image) if image is not None else None
+    latitude, longitude = coords if coords is not None else (None, None)
+
+    date = (image.photo_date if image is not None else "") or ""
+    year = _extract_year(date)
+    place_name = image.place.name if (image is not None and image.place) else ""
+    note = (image.note if image is not None else "") or ""
+
+    return {
+        "id": exported_name,
+        "imagePath": f"images/{exported_name}",
+        "thumbnailPath": f"images/{exported_name}",
+        "fileName": source.name,
+        "folder": source.parent.name,
+        "title": source.stem,
+        "caption": note,
+        "description": note,
+        "date": date,
+        "year": year,
+        "decade": _decade_label(year),
+        "locationName": place_name,
+        "city": place_name,
+        "gpsLatitude": round(latitude, 8) if latitude is not None else None,
+        "gpsLongitude": round(longitude, 8) if longitude is not None else None,
+        "persons": persons,
+        "faces": face_records,
+        "width": width,
+        "height": height,
+        "isFavorite": False,
+        "hasCaption": bool(note),
+        "hasIdentifiedPersons": has_identified,
+        "hasLocation": latitude is not None and longitude is not None,
+    }
+
+
+def _write_tour_export_files(out: Path, records: List[dict]) -> None:
+    data_json = json.dumps(records, ensure_ascii=False, indent=2)
+    (out / "slideshow-data.json").write_text(data_json + "\n", encoding="utf-8")
+    (out / "slideshow-data.js").write_text(
+        "window.TOUR_DATA = " + _json_for_script(records, indent=2) + ";\n",
+        encoding="utf-8",
+    )
+    (out / "slideshow.html").write_text(_TOUR_HTML_TEMPLATE, encoding="utf-8")
+    (out / "slideshow.css").write_text(_TOUR_CSS, encoding="utf-8")
+    (out / "slideshow.js").write_text(_TOUR_JS, encoding="utf-8")
+
+
 def _json_for_script(value, *, indent: Optional[int] = None) -> str:
     """Serialize JSON safely for an inline script tag."""
     return (
@@ -737,6 +832,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
 <header>
   <h1>Face Gallery</h1>
+  <a class="nav-link" href="slideshow.html">Diavetítés</a>
   <a class="nav-link" href="map.html">Térkép</a>
   <input id="search" type="text" placeholder="Keresés / Search…" oninput="filter()">
   <span id="count"></span>
@@ -1008,6 +1104,7 @@ _MAP_HTML_TEMPLATE = """<!DOCTYPE html>
   <h1>Face Gallery</h1>
   <nav>
     <a href="index.html">Galéria</a>
+    <a href="slideshow.html">Diavetítés</a>
     <a aria-current="page" href="map.html">Térkép</a>
   </nav>
   <span id="map-count"></span>
@@ -1292,8 +1389,622 @@ applyFilters();
 """
 
 
+_TOUR_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Gallery - Képtúra</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="slideshow.css">
+</head>
+<body>
+<header>
+  <h1>Képtúra</h1>
+  <nav>
+    <a href="index.html">Galéria</a>
+    <a aria-current="page" href="slideshow.html">Diavetítés</a>
+    <a href="map.html">Térkép</a>
+  </nav>
+  <button id="filters-toggle" type="button" aria-expanded="false">Szűrők</button>
+  <span id="tour-count"></span>
+</header>
+
+<section id="filters" hidden aria-label="Szűrők">
+  <div class="filter-grid">
+    <label>Év
+      <select id="f-year"><option value="">Minden év</option></select>
+    </label>
+    <label>Évtized
+      <select id="f-decade"><option value="">Minden évtized</option></select>
+    </label>
+    <label>Évtől
+      <input id="f-year-from" type="number" inputmode="numeric" placeholder="pl. 1950">
+    </label>
+    <label>Évig
+      <input id="f-year-to" type="number" inputmode="numeric" placeholder="pl. 1990">
+    </label>
+    <label>Település
+      <select id="f-city"><option value="">Minden település</option></select>
+    </label>
+    <label>Helyszín
+      <select id="f-location"><option value="">Minden helyszín</option></select>
+    </label>
+    <label>Mappa
+      <select id="f-folder"><option value="">Minden mappa</option></select>
+    </label>
+  </div>
+
+  <div class="filter-persons">
+    <div class="filter-persons-head">
+      <span>Személyek</span>
+      <span class="person-mode">
+        <label><input type="radio" name="person-mode" value="any" checked> bármelyik</label>
+        <label><input type="radio" name="person-mode" value="all"> mindegyik</label>
+      </span>
+    </div>
+    <div id="f-persons" class="person-list"></div>
+  </div>
+
+  <div class="filter-flags">
+    <label><input id="f-identified" type="checkbox"> csak azonosított személyekkel</label>
+    <label><input id="f-favorite" type="checkbox"> csak kedvencek</label>
+    <label><input id="f-caption" type="checkbox"> csak feliratozott</label>
+    <button id="f-reset" type="button">Szűrők törlése</button>
+  </div>
+</section>
+
+<main>
+  <section id="stage-col">
+    <div id="stage" class="labels-full">
+      <div id="stage-media" class="stage-media">
+        <img id="tour-img" src="" alt="">
+        <div id="tour-overlay" class="bbox-overlay"></div>
+        <button id="nav-prev" class="nav-zone nav-prev" type="button" aria-label="Előző kép">‹</button>
+        <button id="nav-next" class="nav-zone nav-next" type="button" aria-label="Következő kép">›</button>
+      </div>
+      <div id="empty-msg" hidden>A szűrés nem adott találatot.</div>
+    </div>
+
+    <div id="controls">
+      <button id="btn-prev" type="button" title="Előző (←)">⏮</button>
+      <button id="btn-play" type="button" title="Lejátszás / Szünet (szóköz)">▶</button>
+      <button id="btn-next" type="button" title="Következő (→)">⏭</button>
+      <span id="position">0 / 0</span>
+      <label class="speed">Sebesség
+        <select id="speed">
+          <option value="2000">2 mp</option>
+          <option value="4000" selected>4 mp</option>
+          <option value="6000">6 mp</option>
+          <option value="10000">10 mp</option>
+        </select>
+      </label>
+      <span class="label-modes">Névfeliratok:
+        <button data-mode="full" class="lm active" type="button">Teljes</button>
+        <button data-mode="dim" class="lm" type="button">Halvány</button>
+        <button data-mode="off" class="lm" type="button">Kikapcsolva</button>
+      </span>
+      <button id="btn-fullscreen" type="button" title="Teljes képernyő">⛶</button>
+    </div>
+
+    <div id="info"></div>
+  </section>
+
+  <aside id="side">
+    <div id="map-panel">
+      <div class="panel-head">
+        <span>Térkép</span>
+        <button id="map-toggle" type="button" aria-expanded="true">Összecsukás</button>
+      </div>
+      <div id="map-body">
+        <div id="map" role="region" aria-label="GPS térkép"></div>
+        <div id="map-status"></div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="slideshow-data.js"></script>
+<script src="slideshow.js"></script>
+</body>
+</html>
+"""
+
+
+_TOUR_CSS = """*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;background:#111;color:#ddd;font-family:system-ui,sans-serif}
+button,input,select{font:inherit}
+header{background:#1a1a1a;padding:12px 18px;border-bottom:1px solid #333;
+       display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
+nav{display:flex;gap:8px;flex-wrap:wrap}
+nav a{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;border-radius:6px;
+      padding:7px 10px;background:#1d2b45;white-space:nowrap}
+nav a:hover,nav a:focus,nav a[aria-current="page"]{border-color:#88aaff;background:#26385a;outline:none}
+#filters-toggle{padding:7px 12px;border:1px solid #3e5f9c;border-radius:6px;color:#eaf0ff;
+                background:#1d2b45;cursor:pointer}
+#filters-toggle:hover{border-color:#88aaff;background:#26385a}
+#tour-count{margin-left:auto;color:#aaa;font-size:.9rem;white-space:nowrap}
+
+#filters{background:#171717;border-bottom:1px solid #333;padding:14px 18px;
+         display:flex;flex-direction:column;gap:14px}
+#filters[hidden]{display:none}
+.filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+label{display:flex;flex-direction:column;gap:5px;color:#aaa;font-size:.76rem;font-weight:700}
+select,input[type=number],input[type=text]{width:100%;padding:7px 9px;background:#222;
+       border:1px solid #444;border-radius:6px;color:#fff;min-width:0}
+select:focus,input:focus{outline:none;border-color:#88aaff}
+.filter-persons-head{display:flex;justify-content:space-between;align-items:center;gap:10px;
+                     color:#aaa;font-size:.76rem;font-weight:700;margin-bottom:6px;flex-wrap:wrap}
+.person-mode{display:flex;gap:12px;font-weight:400}
+.person-mode label{flex-direction:row;align-items:center;gap:5px;color:#ccc}
+.person-list{display:flex;flex-wrap:wrap;gap:6px;max-height:140px;overflow:auto;
+             border:1px solid #333;border-radius:6px;padding:8px;background:#141414}
+.person-list label{flex-direction:row;align-items:center;gap:6px;color:#ddd;font-weight:400;
+                   font-size:.82rem;background:#1e1e1e;border:1px solid #333;border-radius:14px;
+                   padding:4px 10px;cursor:pointer}
+.person-list label:hover{border-color:#88aaff}
+.filter-flags{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+.filter-flags label{flex-direction:row;align-items:center;gap:6px;color:#ddd;font-weight:400;font-size:.85rem}
+#f-reset{margin-left:auto;padding:7px 12px;border:1px solid #555;border-radius:6px;
+         background:#222;color:#ddd;cursor:pointer}
+#f-reset:hover{border-color:#88aaff}
+
+main{display:grid;grid-template-columns:1fr 360px;gap:14px;padding:14px;align-items:start;position:relative}
+main.no-map,main.map-collapsed{grid-template-columns:1fr}
+main.map-collapsed #map-panel{box-shadow:0 4px 14px rgba(0,0,0,.5)}
+main:fullscreen{background:#111;width:100vw;height:100vh;overflow:auto}
+main:fullscreen #side{position:sticky;top:0}
+main:fullscreen #stage .stage-media>img{max-height:92vh}
+/* Fullscreen: hide the control bar; keep only the map show/hide button.
+   Esc exits, arrows/space still navigate. */
+main:fullscreen #controls{display:none}
+/* Collapsed (incl. fullscreen): float the map panel's show/hide button to the
+   top-right instead of dropping it below the full-width image. Declared after
+   the fullscreen rules so it wins on equal specificity in fullscreen too. */
+main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-index:5}
+#stage-col{min-width:0;display:flex;flex-direction:column;gap:12px}
+#stage{position:relative;display:flex;align-items:center;justify-content:center;
+       background:#050505;border:1px solid #2a2a2a;border-radius:8px;min-height:50vh;
+       padding:10px;overflow:hidden}
+.stage-media{position:relative;display:inline-block;line-height:0;max-width:100%}
+.stage-media>img{display:block;max-width:100%;max-height:72vh;width:auto;height:auto;border-radius:4px}
+#empty-msg{color:#aaa;font-size:1rem;padding:40px}
+.bbox-overlay{position:absolute;inset:0;pointer-events:none;z-index:45}
+/* Edge navigation bands: pinned to the SCREEN edges (fixed → also works in
+   fullscreen and sits in front of the map). Transparent until hovered; the
+   face boxes (z-index 45) stay above them so face taps still win. */
+.nav-zone{position:fixed;top:50%;transform:translateY(-50%);height:60vh;
+          width:12%;min-width:46px;max-width:120px;
+          display:flex;align-items:center;justify-content:center;border:0;cursor:pointer;
+          color:#fff;font-size:2.6rem;line-height:1;background:transparent;opacity:0;
+          z-index:40;-webkit-tap-highlight-color:transparent;
+          transition:opacity .18s,background .18s}
+.nav-prev{left:0;justify-content:flex-start;padding-left:8px;
+          background:linear-gradient(to right,rgba(0,0,0,.5),transparent)}
+.nav-next{right:0;justify-content:flex-end;padding-right:8px;
+          background:linear-gradient(to left,rgba(0,0,0,.5),transparent)}
+.stage-media:hover .nav-zone{opacity:.55}
+.nav-zone:hover,.nav-zone:focus-visible{opacity:1;outline:none}
+/* Touch devices navigate by swiping; hide the click bands there. */
+@media (hover:none){.nav-zone{display:none}}
+.tb{position:absolute;outline:2px solid rgba(72,220,122,.5);background:rgba(72,220,122,.05);
+    pointer-events:auto;cursor:pointer;transition:outline-color .15s,background .15s}
+.tb:hover,.tb:focus,.tb.show{outline-color:rgba(125,255,166,.98);background:rgba(72,220,122,.13);
+    z-index:3;outline-width:3px}
+/* Labels off → hide the frame as well; reveal it only on hover/focus/tap. */
+.labels-off .tb{outline-color:transparent;background:transparent}
+.labels-off .tb:hover,.labels-off .tb:focus,.labels-off .tb.show{
+    outline-color:rgba(125,255,166,.98);background:rgba(72,220,122,.13)}
+.tb-label{position:absolute;left:0;top:0;transform:translateY(calc(-100% - 4px));
+          max-width:min(280px,70vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          background:rgba(12,18,12,.92);color:#75ff75;border:1px solid rgba(50,220,50,.85);
+          border-radius:4px;padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25;
+          transition:opacity .12s}
+.tb-label.inside{transform:none;top:2px;left:2px}
+.labels-full .tb-label{opacity:1}
+.labels-dim .tb-label{opacity:.28}
+.labels-off .tb-label{opacity:0}
+.tb:hover .tb-label,.tb:focus .tb-label,.tb.show .tb-label{opacity:1}
+
+#controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#1a1a1a;
+          border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px}
+#controls button{min-width:42px;padding:8px 12px;border:1px solid #3e5f9c;border-radius:6px;
+                 color:#eaf0ff;background:#1d2b45;cursor:pointer;font-size:1rem}
+#controls button:hover:not(:disabled){border-color:#88aaff;background:#26385a}
+#controls button:disabled{opacity:.35;cursor:default}
+#position{color:#aaa;font-size:.9rem;min-width:64px;text-align:center}
+.speed{flex-direction:row;align-items:center;gap:6px;color:#aaa;font-size:.76rem;font-weight:700}
+.speed select{width:auto}
+.label-modes{display:flex;align-items:center;gap:4px;color:#aaa;font-size:.76rem;font-weight:700;flex-wrap:wrap}
+.label-modes .lm{min-width:0;padding:6px 9px;font-size:.8rem}
+.label-modes .lm.active{background:#2d4a78;border-color:#88aaff}
+#btn-fullscreen{margin-left:auto}
+
+#info{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:12px 14px;
+      display:flex;flex-direction:column;gap:6px;line-height:1.5}
+#info .info-title{font-size:1.05rem;font-weight:700;color:#cfe0ff;overflow-wrap:anywhere}
+#info .info-row{font-size:.9rem;color:#cfcfcf}
+#info .info-row b{color:#9fb6e6;font-weight:700}
+#info .info-desc{font-size:.9rem;color:#bdbdbd;font-style:italic;overflow-wrap:anywhere}
+.badge{display:inline-block;font-size:.72rem;background:#243a5e;color:#bcd2ff;border:1px solid #3e5f9c;
+       border-radius:10px;padding:1px 8px;margin-right:4px}
+
+#side{position:sticky;top:14px;min-width:0}
+#map-panel{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;overflow:hidden}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;
+            padding:10px 12px;border-bottom:1px solid #2a2a2a;color:#cfe0ff;font-weight:700}
+#map-toggle{padding:5px 10px;border:1px solid #3e5f9c;border-radius:6px;color:#eaf0ff;
+            background:#1d2b45;cursor:pointer;font-size:.8rem}
+#map-toggle:hover{border-color:#88aaff;background:#26385a}
+#map-body{display:block}
+#map-panel.collapsed #map-body{display:none}
+#map{height:340px;width:100%;background:#151515}
+.leaflet-container{background:#151515}
+#map-status{padding:10px 12px;color:#aaa;font-size:.85rem;line-height:1.4}
+.leaflet-popup-content{margin:8px 10px;color:#222}
+
+@media (max-width:900px){
+  main{display:flex;flex-direction:column}
+  #side{position:static}
+  #stage{min-height:40vh}
+  .stage-media>img{max-height:60vh}
+  #btn-fullscreen{margin-left:0}
+}
+"""
+
+
+_TOUR_JS = """const TOUR = Array.isArray(window.TOUR_DATA) ? window.TOUR_DATA : [];
+let filtered = TOUR.slice();
+let index = 0;
+let playing = false;
+let timer = null;
+let speedMs = 4000;
+let labelMode = 'full';
+let map = null, marker = null, mapInit = false;
+
+const $ = id => document.getElementById(id);
+const els = {
+  count: $('tour-count'), stage: $('stage'), media: $('stage-media'),
+  img: $('tour-img'), overlay: $('tour-overlay'), empty: $('empty-msg'),
+  info: $('info'), position: $('position'),
+  prev: $('btn-prev'), next: $('btn-next'), play: $('btn-play'),
+  navPrev: $('nav-prev'), navNext: $('nav-next'),
+  speed: $('speed'), full: $('btn-fullscreen'),
+  fYear: $('f-year'), fDecade: $('f-decade'), fFrom: $('f-year-from'), fTo: $('f-year-to'),
+  fCity: $('f-city'), fLocation: $('f-location'), fFolder: $('f-folder'),
+  fPersons: $('f-persons'), fIdentified: $('f-identified'),
+  fFavorite: $('f-favorite'), fCaption: $('f-caption'), fReset: $('f-reset'),
+  filters: $('filters'), filtersToggle: $('filters-toggle'),
+  main: document.querySelector('main'), mapPanel: $('map-panel'),
+  mapToggle: $('map-toggle'), mapStatus: $('map-status')
+};
+
+function text(v){ return v == null ? '' : String(v); }
+function esc(v){
+  return text(v).replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));
+}
+function setPct(el, prop, value){
+  const n = Number(value);
+  el.style[prop] = Number.isFinite(n) ? n.toFixed(6) + '%' : '0%';
+}
+function option(select, value, label){
+  const opt = document.createElement('option');
+  opt.value = value; opt.textContent = label;
+  select.appendChild(opt);
+}
+function uniqueSorted(values){
+  return [...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'hu-HU'));
+}
+
+function buildFilters(){
+  uniqueSorted(TOUR.map(r => r.year)).forEach(y => option(els.fYear, y, y));
+  uniqueSorted(TOUR.map(r => r.decade)).forEach(d => option(els.fDecade, d, d));
+  uniqueSorted(TOUR.map(r => r.city)).forEach(c => option(els.fCity, c, c));
+  uniqueSorted(TOUR.map(r => r.locationName)).forEach(l => option(els.fLocation, l, l));
+  uniqueSorted(TOUR.map(r => r.folder)).forEach(f => option(els.fFolder, f, f));
+  const people = uniqueSorted(TOUR.flatMap(r => r.persons || []));
+  people.forEach(name => {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = name; cb.className = 'person-cb';
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(' ' + name));
+    els.fPersons.appendChild(lab);
+  });
+  if(!people.length){
+    els.fPersons.innerHTML = '<span style=\"color:#888;font-size:.8rem\">Nincs megnevezett személy.</span>';
+  }
+}
+
+function selectedPersons(){
+  return [...document.querySelectorAll('.person-cb:checked')].map(cb => cb.value);
+}
+function personMode(){
+  const r = document.querySelector('input[name=person-mode]:checked');
+  return r ? r.value : 'any';
+}
+function yearNum(record){
+  const n = parseInt(record.year, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function applyFilters(){
+  const year = els.fYear.value, decade = els.fDecade.value;
+  const from = parseInt(els.fFrom.value, 10), to = parseInt(els.fTo.value, 10);
+  const city = els.fCity.value, location = els.fLocation.value, folder = els.fFolder.value;
+  const persons = selectedPersons(), mode = personMode();
+  const onlyId = els.fIdentified.checked, onlyFav = els.fFavorite.checked, onlyCap = els.fCaption.checked;
+
+  filtered = TOUR.filter(r => {
+    if(year && r.year !== year) return false;
+    if(decade && r.decade !== decade) return false;
+    const yn = yearNum(r);
+    if(Number.isFinite(from) && (yn === null || yn < from)) return false;
+    if(Number.isFinite(to) && (yn === null || yn > to)) return false;
+    if(city && r.city !== city) return false;
+    if(location && r.locationName !== location) return false;
+    if(folder && r.folder !== folder) return false;
+    if(persons.length){
+      const have = r.persons || [];
+      if(mode === 'all'){ if(!persons.every(p => have.includes(p))) return false; }
+      else { if(!persons.some(p => have.includes(p))) return false; }
+    }
+    if(onlyId && !r.hasIdentifiedPersons) return false;
+    if(onlyFav && !r.isFavorite) return false;
+    if(onlyCap && !r.hasCaption) return false;
+    return true;
+  });
+
+  index = 0;
+  render();
+}
+
+function clearOverlay(){
+  while(els.overlay.firstChild) els.overlay.removeChild(els.overlay.firstChild);
+}
+function renderOverlay(record){
+  clearOverlay();
+  (record.faces || []).forEach(face => {
+    const bbox = face.bbox || {};
+    const box = document.createElement('div');
+    box.className = 'tb';
+    box.tabIndex = 0;
+    const name = face.name || 'Ismeretlen arc';
+    box.title = name;
+    box.setAttribute('role', 'button');
+    box.setAttribute('aria-label', 'Arc: ' + name);
+    setPct(box, 'left', bbox.left);
+    setPct(box, 'top', bbox.top);
+    setPct(box, 'width', bbox.width);
+    setPct(box, 'height', bbox.height);
+    const label = document.createElement('div');
+    label.className = 'tb-label';
+    if(Number(bbox.top) < 8) label.classList.add('inside');
+    label.textContent = name;
+    box.appendChild(label);
+    // Tap (touch) toggles the name even when labels are dimmed/off.
+    box.addEventListener('click', e => { e.stopPropagation(); box.classList.toggle('show'); });
+    els.overlay.appendChild(box);
+  });
+}
+
+function renderInfo(record){
+  const rows = [];
+  const titleText = record.title || record.fileName || 'Kép';
+  let html = '<div class=\"info-title\">' + esc(titleText) + '</div>';
+  const badges = [];
+  if(record.isFavorite) badges.push('★ Kedvenc');
+  if(record.hasIdentifiedPersons) badges.push('Azonosított');
+  if(record.hasCaption) badges.push('Felirat');
+  if(badges.length) html += '<div>' + badges.map(b => '<span class=\"badge\">' + esc(b) + '</span>').join('') + '</div>';
+  if(record.date || record.year) rows.push(['Dátum', record.date || record.year]);
+  else if(record.decade) rows.push(['Évtized', record.decade]);
+  const place = [record.locationName, record.city].filter((v,i,a)=>v && a.indexOf(v)===i).join(', ');
+  if(place) rows.push(['Helyszín', place]);
+  if(record.persons && record.persons.length) rows.push(['Személyek', record.persons.join(', ')]);
+  if(record.folder) rows.push(['Mappa', record.folder]);
+  if(record.fileName) rows.push(['Fájl', record.fileName]);
+  rows.forEach(([k,v]) => { html += '<div class=\"info-row\"><b>' + esc(k) + ':</b> ' + esc(v) + '</div>'; });
+  if(record.description) html += '<div class=\"info-desc\">' + esc(record.description) + '</div>';
+  els.info.innerHTML = html;
+}
+
+function ensureMap(){
+  if(mapInit || !window.L) return;
+  map = L.map('map', { scrollWheelZoom: true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  map.setView([47.1625, 19.5033], 6);
+  mapInit = true;
+}
+
+function updateMap(record){
+  if(!window.L){
+    els.mapStatus.textContent = 'A térképkönyvtár nem töltődött be (nincs internet?).';
+    return;
+  }
+  ensureMap();
+  const lat = Number(record && record.gpsLatitude);
+  const lon = Number(record && record.gpsLongitude);
+  if(record && record.hasLocation && Number.isFinite(lat) && Number.isFinite(lon)){
+    if(marker) marker.remove();
+    marker = L.marker([lat, lon]).addTo(map);
+    const place = record.locationName || record.city || '';
+    if(place) marker.bindPopup(esc(place)).openPopup();
+    map.setView([lat, lon], 13);
+    els.mapStatus.textContent = place
+      ? place + ' (' + lat.toFixed(5) + ', ' + lon.toFixed(5) + ')'
+      : lat.toFixed(5) + ', ' + lon.toFixed(5);
+    setTimeout(() => map && map.invalidateSize(), 60);
+  } else {
+    if(marker){ marker.remove(); marker = null; }
+    els.mapStatus.textContent = 'Ehhez a képhez nincs elérhető helyadat.';
+  }
+}
+
+function render(){
+  const total = filtered.length;
+  els.count.textContent = total + ' / ' + TOUR.length + ' kép';
+  if(!total){
+    stopPlay();
+    els.media.hidden = true;
+    els.empty.hidden = false;
+    els.position.textContent = '0 / 0';
+    els.info.innerHTML = '';
+    els.prev.disabled = els.next.disabled = els.play.disabled = true;
+    if(marker){ marker.remove(); marker = null; }
+    els.mapStatus.textContent = 'Nincs megjeleníthető kép.';
+    return;
+  }
+  els.media.hidden = false;
+  els.empty.hidden = true;
+  els.play.disabled = false;
+  if(index < 0) index = total - 1;
+  if(index >= total) index = 0;
+  const record = filtered[index];
+  els.img.onload = () => renderOverlay(record);
+  els.img.alt = record.title || record.fileName || '';
+  els.img.src = record.imagePath;
+  renderOverlay(record);
+  renderInfo(record);
+  updateMap(record);
+  els.position.textContent = (index + 1) + ' / ' + total;
+  els.prev.disabled = total < 2;
+  els.next.disabled = total < 2;
+}
+
+function go(delta){
+  if(!filtered.length) return;
+  index = (index + delta + filtered.length) % filtered.length;
+  render();
+}
+
+function startPlay(){
+  if(filtered.length < 2) return;
+  playing = true;
+  els.play.textContent = '⏸';
+  clearInterval(timer);
+  timer = setInterval(() => go(1), speedMs);
+}
+function stopPlay(){
+  playing = false;
+  els.play.textContent = '▶';
+  clearInterval(timer);
+  timer = null;
+}
+function togglePlay(){ playing ? stopPlay() : startPlay(); }
+
+function setLabelMode(mode){
+  labelMode = mode;
+  els.stage.classList.remove('labels-full', 'labels-dim', 'labels-off');
+  els.stage.classList.add('labels-' + mode);
+  document.querySelectorAll('.label-modes .lm').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+}
+
+function toggleFullscreen(){
+  // Fullscreen the whole two-panel area so the map stays visible.
+  const target = els.main;
+  if(!document.fullscreenElement){
+    if(target.requestFullscreen) target.requestFullscreen();
+  } else if(document.exitFullscreen){
+    document.exitFullscreen();
+  }
+}
+
+// --- wiring ---
+[els.fYear, els.fDecade, els.fCity, els.fLocation, els.fFolder].forEach(s =>
+  s.addEventListener('change', applyFilters));
+[els.fFrom, els.fTo].forEach(i => i.addEventListener('input', applyFilters));
+[els.fIdentified, els.fFavorite, els.fCaption].forEach(c =>
+  c.addEventListener('change', applyFilters));
+els.fPersons.addEventListener('change', applyFilters);
+document.querySelectorAll('input[name=person-mode]').forEach(r =>
+  r.addEventListener('change', applyFilters));
+
+els.fReset.addEventListener('click', () => {
+  [els.fYear, els.fDecade, els.fCity, els.fLocation, els.fFolder].forEach(s => s.value = '');
+  els.fFrom.value = ''; els.fTo.value = '';
+  els.fIdentified.checked = els.fFavorite.checked = els.fCaption.checked = false;
+  document.querySelectorAll('.person-cb').forEach(cb => cb.checked = false);
+  const anyMode = document.querySelector('input[name=person-mode][value=any]');
+  if(anyMode) anyMode.checked = true;
+  applyFilters();
+});
+
+els.prev.addEventListener('click', () => { stopPlay(); go(-1); });
+els.next.addEventListener('click', () => { stopPlay(); go(1); });
+els.navPrev.addEventListener('click', () => { stopPlay(); go(-1); });
+els.navNext.addEventListener('click', () => { stopPlay(); go(1); });
+els.play.addEventListener('click', togglePlay);
+
+// Touch swipe (works in fullscreen too): swipe left → next, right → previous.
+let touchX = null, touchY = null;
+els.stage.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0];
+  touchX = t.clientX; touchY = t.clientY;
+}, { passive: true });
+els.stage.addEventListener('touchend', e => {
+  if(touchX === null) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchX, dy = t.clientY - touchY;
+  touchX = touchY = null;
+  if(Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5){
+    stopPlay();
+    go(dx < 0 ? 1 : -1);
+  }
+}, { passive: true });
+els.speed.addEventListener('change', () => {
+  speedMs = parseInt(els.speed.value, 10) || 4000;
+  if(playing) startPlay();
+});
+els.full.addEventListener('click', toggleFullscreen);
+document.querySelectorAll('.label-modes .lm').forEach(b =>
+  b.addEventListener('click', () => setLabelMode(b.dataset.mode)));
+
+els.filtersToggle.addEventListener('click', () => {
+  const open = els.filters.hidden;
+  els.filters.hidden = !open;
+  els.filtersToggle.setAttribute('aria-expanded', String(open));
+});
+els.mapToggle.addEventListener('click', () => {
+  const collapsed = els.mapPanel.classList.toggle('collapsed');
+  // Collapse the side column too so the image grows into the freed space.
+  els.main.classList.toggle('map-collapsed', collapsed);
+  els.mapToggle.textContent = collapsed ? 'Kinyitás' : 'Összecsukás';
+  els.mapToggle.setAttribute('aria-expanded', String(!collapsed));
+  if(!collapsed && map) setTimeout(() => map.invalidateSize(), 60);
+});
+
+// Keep Leaflet sized correctly when entering/leaving fullscreen.
+document.addEventListener('fullscreenchange', () => {
+  if(map) setTimeout(() => map.invalidateSize(), 80);
+});
+
+// Clicking anywhere outside a face hides any tapped-open frame/label.
+document.addEventListener('click', e => {
+  if(e.target.closest && e.target.closest('.tb')) return;
+  document.querySelectorAll('.tb.show').forEach(b => b.classList.remove('show'));
+});
+
+document.addEventListener('keydown', e => {
+  if(/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if(e.key === 'ArrowLeft'){ e.preventDefault(); stopPlay(); go(-1); }
+  else if(e.key === 'ArrowRight'){ e.preventDefault(); stopPlay(); go(1); }
+  else if(e.key === ' '){ e.preventDefault(); togglePlay(); }
+});
+
+buildFilters();
+setLabelMode('full');
+render();
+"""
+
+
 def _safe_filename(name: str) -> str:
-    import re
     return re.sub(r'[\\/:*?"<>|]', "_", name)[:120] or "collage"
 
 

@@ -393,6 +393,125 @@ def test_export_html_map_skips_missing_bad_and_zero_gps(db, tmp_path):
     assert [record["fileName"] for record in data] == ["good.jpg"]
 
 
+def test_export_html_writes_slideshow_page_with_rich_records(db, tmp_path):
+    photos = tmp_path / "1984 Szemes"
+    photos.mkdir()
+    image_path = photos / "Nyaralás.jpg"
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+    image[:, :] = (90, 80, 70)
+    assert save_image_bgr(image_path, image)
+
+    with session_scope() as session:
+        place = Place(name="Balatonszemes", latitude=46.808, longitude=17.77)
+        named = Person(name="Panni", is_auto_named=False)
+        auto = Person(name="Unknown 4", is_auto_named=True)
+        session.add_all([place, named, auto])
+        session.flush()
+
+        img = Image(
+            file_path=str(image_path),
+            file_hash="hash-tour",
+            file_mtime=0.0,
+            width=320,
+            height=240,
+            photo_date="1984.07.12",
+            note="Nyári emlék a Balatonnál",
+            image_latitude=46.253,
+            image_longitude=20.148,
+            place_id=place.id,
+            detection_done=True,
+        )
+        session.add(img)
+        session.flush()
+        session.add_all(
+            [
+                Face(
+                    image_id=img.id, person_id=named.id,
+                    bbox_x=20, bbox_y=30, bbox_w=50, bbox_h=60,
+                    confidence=0.9, detector_backend="cpu",
+                ),
+                Face(
+                    image_id=img.id, person_id=auto.id,
+                    bbox_x=120, bbox_y=40, bbox_w=40, bbox_h=50,
+                    confidence=0.8, detector_backend="cpu",
+                ),
+            ]
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    assert (out / "slideshow.html").exists()
+    assert (out / "slideshow.css").exists()
+    assert (out / "slideshow.js").exists()
+    assert (out / "slideshow-data.json").exists()
+    assert (out / "slideshow-data.js").exists()
+
+    # Cross-links exist between the pages without breaking the old gallery page.
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert 'href="slideshow.html">Diavetítés</a>' in index_html
+    assert 'href="map.html">Térkép</a>' in index_html
+
+    data = json.loads((out / "slideshow-data.json").read_text(encoding="utf-8"))
+    assert len(data) == 1
+    record = data[0]
+    assert record["fileName"] == "Nyaralás.jpg"
+    assert record["folder"] == "1984 Szemes"
+    assert record["date"] == "1984.07.12"
+    assert record["year"] == "1984"
+    assert record["decade"] == "1980-as évek"
+    assert record["locationName"] == "Balatonszemes"
+    assert record["city"] == "Balatonszemes"
+    assert record["gpsLatitude"] == 46.253
+    assert record["gpsLongitude"] == 20.148
+    assert record["caption"] == "Nyári emlék a Balatonnál"
+    assert record["description"] == "Nyári emlék a Balatonnál"
+    assert record["hasCaption"] is True
+    assert record["hasLocation"] is True
+    assert record["isFavorite"] is False
+    assert record["hasIdentifiedPersons"] is True
+    assert set(record["persons"]) == {"Panni", "Unknown 4"}
+    assert len(record["faces"]) == 2
+    assert all("bbox" in face and "name" in face for face in record["faces"])
+
+
+def test_export_html_slideshow_handles_missing_metadata(db, tmp_path):
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    image_path = photos / "bare.jpg"
+    image = np.zeros((100, 120, 3), dtype=np.uint8)
+    assert save_image_bgr(image_path, image)
+
+    with session_scope() as session:
+        session.add(
+            Image(
+                file_path=str(image_path),
+                file_hash="bare",
+                file_mtime=0.0,
+                width=120,
+                height=100,
+                detection_done=True,
+            )
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    data = json.loads((out / "slideshow-data.json").read_text(encoding="utf-8"))
+    assert len(data) == 1
+    record = data[0]
+    assert record["year"] == ""
+    assert record["decade"] == ""
+    assert record["locationName"] == ""
+    assert record["gpsLatitude"] is None
+    assert record["gpsLongitude"] is None
+    assert record["persons"] == []
+    assert record["faces"] == []
+    assert record["hasCaption"] is False
+    assert record["hasLocation"] is False
+    assert record["hasIdentifiedPersons"] is False
+
+
 def test_export_html_creates_empty_map_page_without_gps(db, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()
