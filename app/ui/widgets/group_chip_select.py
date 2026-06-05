@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -117,6 +116,55 @@ class _FlowLayout(QLayout):
             line_height = max(line_height, hint.height())
 
         return y + line_height - rect.y() + m.bottom()
+
+
+# ---------------------------------------------------------------------------
+# Internal: container widget for _FlowLayout with correct height-for-width
+# ---------------------------------------------------------------------------
+
+class _FlowContainer(QWidget):
+    """QWidget that hosts a _FlowLayout and correctly propagates height-for-width.
+
+    Plain QWidget.sizeHint() delegates to QLayout.sizeHint() which for
+    _FlowLayout returns only one chip's height (minimumSize).  This container
+    overrides sizeHint/hasHeightForWidth/heightForWidth at the *widget* level
+    so that QScrollArea and parent QVBoxLayout allocate the full multi-row
+    height instead of clipping chips outside the container bounds.
+    """
+
+    def __init__(
+        self,
+        h_spacing: int = 4,
+        v_spacing: int = 4,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        fl = _FlowLayout(self, h_spacing=h_spacing, v_spacing=v_spacing)
+        fl.setContentsMargins(0, 0, 0, 0)
+        sp = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        h = self.layout().heightForWidth(width)
+        return max(h, 0)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        w = self.width()
+        if w > 0:
+            return QSize(w, self.heightForWidth(w))
+        return QSize(0, 0)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self.updateGeometry()
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +284,22 @@ class GroupChipSelect(QWidget):
         self._build_ui()
 
     # ------------------------------------------------------------------
+    # Size / layout overrides (needed so QScrollArea allocates full height)
+    # ------------------------------------------------------------------
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        lay = self.layout()
+        return lay.heightForWidth(width) if lay else -1
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self.updateGeometry()
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -278,10 +342,8 @@ class GroupChipSelect(QWidget):
         outer.addWidget(self._suggestion_list)
 
         # --- 3. Selected chips ---
-        self._selected_container = QWidget()
-        self._selected_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._selected_layout = _FlowLayout(self._selected_container, h_spacing=4, v_spacing=4)
-        self._selected_layout.setContentsMargins(0, 0, 0, 0)
+        self._selected_container = _FlowContainer(h_spacing=4, v_spacing=4)
+        self._selected_layout = self._selected_container.layout()
 
         self._selected_placeholder = QLabel(
             "Add meg, milyen társaságokhoz vagy közösségekhez tartozik ez a személy."
@@ -303,10 +365,8 @@ class GroupChipSelect(QWidget):
         self._available_label.setStyleSheet("color: #666; font-size: 11px;")
         outer.addWidget(self._available_label)
 
-        self._available_container = QWidget()
-        self._available_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._available_layout = _FlowLayout(self._available_container, h_spacing=4, v_spacing=4)
-        self._available_layout.setContentsMargins(0, 0, 0, 0)
+        self._available_container = _FlowContainer(h_spacing=4, v_spacing=4)
+        self._available_layout = self._available_container.layout()
         outer.addWidget(self._available_container)
 
         self._available_empty_label = QLabel("(még nincs létrehozva csoport)")
@@ -325,7 +385,9 @@ class GroupChipSelect(QWidget):
         while self._selected_layout.count():
             item = self._selected_layout.takeAt(0)
             if item and item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                w.hide()
+                w.deleteLater()
 
         has_selected = bool(self._selected)
         self._selected_placeholder.setVisible(not has_selected)
@@ -337,13 +399,16 @@ class GroupChipSelect(QWidget):
             self._selected_layout.addWidget(chip)
 
         self._selected_container.updateGeometry()
+        self.updateGeometry()
 
     def _refresh_available(self) -> None:
         """Redraw the available-groups area (unselected groups as clickable chips)."""
         while self._available_layout.count():
             item = self._available_layout.takeAt(0)
             if item and item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                w.hide()
+                w.deleteLater()
 
         unselected = [
             (gid, name)
@@ -361,6 +426,7 @@ class GroupChipSelect(QWidget):
             self._available_layout.addWidget(chip)
 
         self._available_container.updateGeometry()
+        self.updateGeometry()
 
     def _refresh_suggestion_list(self, search: str) -> None:
         """Populate and show/hide the inline suggestion list."""

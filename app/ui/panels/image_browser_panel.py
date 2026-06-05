@@ -1371,6 +1371,7 @@ class ImageBrowserPanel(QWidget):
         _svc = get_shortcut_service()
         _svc.register("bbox.undo", self._undo_bbox_edit)
         _svc.register("bbox.redo", self._redo_bbox_edit)
+        _svc.register("face.cycle_next", self._cycle_face_next)
 
         # Inline editor (floats over image label)
         self._inline_editor = _InlineFaceEditor(self._image_label)
@@ -2214,6 +2215,24 @@ class ImageBrowserPanel(QWidget):
 
     def _navigate_next(self) -> None:
         self._navigate(+1)
+
+    def _cycle_face_next(self) -> None:
+        """Cycle to the next face on the current image (Ctrl+A). Wraps around."""
+        if not self._face_data:
+            return
+        face_ids = [f[0] for f in self._face_data]
+        if self._selected_face_id in face_ids:
+            current_idx = face_ids.index(self._selected_face_id)
+            next_idx = (current_idx + 1) % len(face_ids)
+        else:
+            next_idx = 0
+        next_face_id = face_ids[next_idx]
+        if self._selected_face_id == next_face_id:
+            return
+        self._hide_inline_editor()
+        self._selected_face_id = next_face_id
+        self._redraw_faces()
+        self._show_face_info(next_face_id)
 
     def _navigate(self, direction: int) -> None:
         current = self._current_tree_item

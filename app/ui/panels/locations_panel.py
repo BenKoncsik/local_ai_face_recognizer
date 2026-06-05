@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QSize, QRect
+from PySide6.QtGui import QPixmap, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,11 +17,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QHeaderView,
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +42,39 @@ from app.ui.widgets.place_gallery_widget import PlaceGalleryWidget
 from app.ui.widgets.place_map_widget import PlaceMapWidget
 
 _ROLE_ID = Qt.UserRole
+
+
+class _WrappingNameDelegate(QStyledItemDelegate):
+    """Inline editor that wraps long names across multiple lines."""
+
+    def createEditor(self, parent, option, index):
+        editor = QTextEdit(parent)
+        editor.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        editor.setFrameShape(QTextEdit.NoFrame)
+        return editor
+
+    def setEditorData(self, editor, index):
+        editor.setPlainText(index.data(Qt.EditRole) or "")
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.toPlainText().strip(), Qt.EditRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        doc = editor.document()
+        doc.setTextWidth(option.rect.width())
+        content_h = int(doc.size().height()) + 8
+        height = max(option.rect.height(), content_h)
+        editor.setGeometry(QRect(option.rect.x(), option.rect.y(), option.rect.width(), height))
+
+    def sizeHint(self, option, index):
+        text = index.data(Qt.DisplayRole) or ""
+        doc = QTextEdit()
+        doc.setPlainText(text)
+        doc.document().setTextWidth(max(option.rect.width(), 120))
+        h = int(doc.document().size().height()) + 6
+        return QSize(option.rect.width(), max(option.rect.height(), h))
 
 # Collect per-image GPS only if the coordinate differs from the place centre by
 # more than this threshold (degrees) — avoids duplicating the main marker.
@@ -93,8 +129,17 @@ class LocationsPanel(QWidget):
         self._table = QTableWidget(0, 5)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self._table.setWordWrap(True)
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.itemChanged.connect(self._on_table_item_changed)
+        self._name_delegate = _WrappingNameDelegate(self._table)
+        self._table.setItemDelegateForColumn(0, self._name_delegate)
         splitter.addWidget(self._table)
 
         detail_inner = QWidget()
@@ -114,10 +159,18 @@ class LocationsPanel(QWidget):
         form.setSpacing(4)
         self._name = QLabel()
         self._name.setWordWrap(True)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        name_row.addWidget(self._name, 1)
+        self._rename_btn = QPushButton()
+        self._rename_btn.setToolTip(t("places_rename_tooltip"))
+        self._rename_btn.setEnabled(False)
+        self._rename_btn.clicked.connect(self._start_rename)
+        name_row.addWidget(self._rename_btn)
         self._coords = QLabel()
         self._image_count = QLabel()
         self._person_count_lbl = QLabel()
-        form.addRow(t("places_name"), self._name)
+        form.addRow(t("places_name"), name_row)
         form.addRow(t("places_coords"), self._coords)
         form.addRow(t("places_image_count"), self._image_count)
         form.addRow(t("places_person_count"), self._person_count_lbl)
@@ -188,6 +241,8 @@ class LocationsPanel(QWidget):
             t("places_source"),
         ])
         self._gallery_hdr.setText(t("places_images"))
+        self._rename_btn.setText(t("places_rename_btn"))
+        self._rename_btn.setToolTip(t("places_rename_tooltip"))
         self._merge_btn.setText(t("places_merge_btn"))
         self._refresh_btn.setText(t("places_refresh_btn"))
 
@@ -234,8 +289,25 @@ class LocationsPanel(QWidget):
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(_ROLE_ID, summary.place_id)
+                if col == 0:
+                    # Name column: editable, tooltip hints at double-click
+                    item.setFlags(
+                        Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
+                    )
+                    item.setToolTip(t("places_name_edit_tip", default="Dupla kattintás a név szerkesztéséhez"))
+                else:
+                    # Other columns: read-only
+                    item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
                 self._table.setItem(row, col, item)
-        self._table.resizeColumnsToContents()
+        self._table.resizeRowsToContents()
+
+    def _start_rename(self) -> None:
+        """Open the inline editor for the selected place's name cell."""
+        rows = sorted({i.row() for i in self._table.selectedItems()})
+        if not rows:
+            return
+        self._table.scrollToItem(self._table.item(rows[0], 0))
+        self._table.editItem(self._table.item(rows[0], 0))
 
     def _on_selection_changed(self) -> None:
         rows = sorted({i.row() for i in self._table.selectedItems()})
@@ -328,6 +400,7 @@ class LocationsPanel(QWidget):
             nearby = _collect_nearby_points(images, lat, lon)
 
         self._name.setText(name)
+        self._rename_btn.setEnabled(True)
         self._coords.setText(coords)
         self._image_count.setText(str(image_count))
         self._person_count_lbl.setText(str(person_count))
@@ -350,6 +423,7 @@ class LocationsPanel(QWidget):
         self._thumb.setText(t("places_no_thumbnail"))
         self._map_widget.clear()
         self._gallery.clear()
+        self._rename_btn.setEnabled(False)
 
     def _set_thumbnail(self, path: Optional[str]) -> None:
         self._thumb.setPixmap(QPixmap())

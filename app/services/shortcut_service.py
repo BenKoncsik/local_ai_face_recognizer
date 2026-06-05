@@ -58,6 +58,7 @@ _DEFAULTS: List[ShortcutDef] = [
     ShortcutDef("image.next",            "sc_fn_image_next",      "sc_cat_image",   "Right"),
     ShortcutDef("image.manual_sel",      "sc_fn_manual_sel",      "sc_cat_image",   "B"),
     ShortcutDef("face.assign",           "sc_fn_face_assign",     "sc_cat_image",   "A"),
+    ShortcutDef("face.cycle_next",       "sc_fn_face_cycle_next", "sc_cat_image",   "Ctrl+A"),
     ShortcutDef("face.confirm",          "sc_fn_face_confirm",    "sc_cat_image",   "Return"),
     ShortcutDef("image.deselect",        "sc_fn_deselect",        "sc_cat_image",   "Esc",     deletable=False),
     ShortcutDef("bbox.delete",           "sc_fn_bbox_delete",     "sc_cat_image",   "Del"),

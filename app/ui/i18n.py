@@ -925,6 +925,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_gallery_no_images": {"en": "No images", "hu": "Nincs kép"},
     "places_gallery_dbl_click":  {"en": "Double-click to view full size", "hu": "Dupla kattintás a teljes mérethez"},
     "places_gallery_click_to_close": {"en": "Click to close", "hu": "Kattints a bezáráshoz"},
+    "places_rename_btn":     {"en": "Rename", "hu": "Átnevezés"},
+    "places_rename_tooltip": {"en": "Edit the name of this place", "hu": "Hely nevének szerkesztése"},
+    "places_name_edit_tip":  {"en": "Double-click to rename", "hu": "Dupla kattintás az átnevezéshez"},
 
     # ── 3-column image browser (ib3_*) ────────────────────────────────────
     "ib3_folders_hdr":         {"en": "Folders",           "hu": "Mappák"},
@@ -1647,8 +1650,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "sc_fn_image_prev":     {"en": "Previous Image",         "hu": "Előző kép"},
     "sc_fn_image_next":     {"en": "Next Image",             "hu": "Következő kép"},
     "sc_fn_manual_sel":     {"en": "Manual Selection Mode",  "hu": "Kézi kijelölés mód"},
-    "sc_fn_face_assign":    {"en": "Assign to Person",       "hu": "Személyhez adás"},
-    "sc_fn_face_confirm":   {"en": "Confirm Assignment",     "hu": "Hozzárendelés véglegesítése"},
+    "sc_fn_face_assign":      {"en": "Assign to Person",       "hu": "Személyhez adás"},
+    "sc_fn_face_cycle_next":  {"en": "Next Face on Image",     "hu": "Következő arc a képen"},
+    "sc_fn_face_confirm":     {"en": "Confirm Assignment",     "hu": "Hozzárendelés véglegesítése"},
     "sc_fn_deselect":       {"en": "Deselect / Cancel (Esc)","hu": "Kijelölés megszüntetése (Esc)"},
     "sc_fn_bbox_delete":    {"en": "Delete BBox",            "hu": "BBox törlés"},
     "sc_fn_bbox_edit":      {"en": "Edit BBox",              "hu": "BBox módosítás"},
