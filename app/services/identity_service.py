@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -162,6 +163,9 @@ class IdentityService:
             _ = face.image.file_path
         log.debug("Assignment before: %s", face_debug_state(face, face.crop_path))
 
+        # Invalidate manual thumbnail on the *source* person before the move
+        self._invalidate_manual_thumbnail_if_needed(face)
+
         face.person_id = target_person_id
         face.assignment_source = "manual"
         face.assignment_confidence = None
@@ -177,6 +181,7 @@ class IdentityService:
         """Un-assign a face from its current person (makes it unclustered)."""
         face = self._require_face(face_id)
         old_pid = face.person_id
+        self._invalidate_manual_thumbnail_if_needed(face)
         face.person_id = None
         face.is_excluded = True  # prevent re-clustering into same group
         face.assignment_source = None
@@ -189,6 +194,7 @@ class IdentityService:
     def exclude_face(self, face_id: int) -> Face:
         """Mark a face as excluded from all future clustering."""
         face = self._require_face(face_id)
+        self._invalidate_manual_thumbnail_if_needed(face)
         face.person_id = None
         face.is_excluded = True
         face.assignment_source = None
@@ -197,6 +203,81 @@ class IdentityService:
         self._session.commit()
         log.info("Excluded face %d from clustering", face_id)
         return face
+
+    # ------------------------------------------------------------------
+    # Thumbnail management
+    # ------------------------------------------------------------------
+
+    def set_person_thumbnail(self, person_id: int, face_id: int) -> Person:
+        """Set a specific face crop as the manual thumbnail for a person.
+
+        Args:
+            person_id: Person whose thumbnail is being set.
+            face_id:   Face whose crop_path will become the thumbnail.
+
+        Returns:
+            The updated :class:`Person` row.
+        """
+        person = self._require_person(person_id)
+        face = self._require_face(face_id)
+        if face.person_id != person_id:
+            raise ValueError(
+                f"Face {face_id} does not belong to person {person_id}"
+            )
+        if not face.crop_path or not Path(face.crop_path).exists():
+            raise ValueError(
+                f"Face {face_id} has no valid crop file"
+            )
+        person.thumbnail_path = face.crop_path
+        person.thumbnail_is_manual = True
+        self._session.commit()
+        log.info(
+            "Set manual thumbnail for person %d → face %d (%s)",
+            person_id, face_id, face.crop_path,
+        )
+        return person
+
+    def clear_manual_person_thumbnail(self, person_id: int) -> Person:
+        """Reset a person's thumbnail to automatic selection.
+
+        Picks the first available face crop as the new fallback.
+
+        Args:
+            person_id: Person to reset.
+
+        Returns:
+            The updated :class:`Person` row.
+        """
+        person = self._require_person(person_id)
+        person.thumbnail_is_manual = False
+        faces_with_crop = [f for f in person.faces if f.crop_path]
+        person.thumbnail_path = (
+            faces_with_crop[0].crop_path if faces_with_crop else None
+        )
+        self._session.commit()
+        log.info("Cleared manual thumbnail for person %d", person_id)
+        return person
+
+    # ------------------------------------------------------------------
+    # Private thumbnail helpers
+    # ------------------------------------------------------------------
+
+    def _invalidate_manual_thumbnail_if_needed(self, face: Face) -> None:
+        """If face is the manual thumbnail of its person, fall back to auto."""
+        if face.person_id is None:
+            return
+        person = self._session.get(Person, face.person_id)
+        if person is None:
+            return
+        if person.thumbnail_is_manual and person.thumbnail_path == face.crop_path:
+            person.thumbnail_is_manual = False
+            remaining = [
+                f for f in person.faces
+                if f.id != face.id and f.crop_path
+            ]
+            person.thumbnail_path = (
+                remaining[0].crop_path if remaining else None
+            )
 
     # ------------------------------------------------------------------
     # Correction recording

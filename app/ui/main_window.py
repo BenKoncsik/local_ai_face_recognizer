@@ -289,6 +289,12 @@ class MainWindow(QMainWindow):
         self._preview_panel.face_diagnostics_requested.connect(
             self._on_preview_face_diagnostics
         )
+        self._preview_panel.face_set_thumbnail_requested.connect(
+            self._on_face_set_thumbnail
+        )
+        self._preview_panel.face_clear_thumbnail_requested.connect(
+            self._on_face_clear_thumbnail
+        )
         splitter.addWidget(self._preview_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -2111,6 +2117,36 @@ class MainWindow(QMainWindow):
         if diag is None:
             return
         FaceDiagnosticsDialog(diag, parent=self).exec()
+
+    @Slot(int)
+    def _on_face_set_thumbnail(self, face_id: int) -> None:
+        """Set a face crop as the manual thumbnail for its person."""
+        with session_scope() as session:
+            face = session.get(Face, face_id)
+            if face is None or face.person_id is None:
+                return
+            try:
+                IdentityService(session).set_person_thumbnail(
+                    face.person_id, face_id
+                )
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    t("thumbnail_set_error", error="", default="Thumbnail"),
+                    t("thumbnail_set_error", error=str(exc)),
+                )
+                return
+        self._refresh_persons()
+
+    @Slot(int)
+    def _on_face_clear_thumbnail(self, face_id: int) -> None:
+        """Reset a person's thumbnail to automatic selection."""
+        with session_scope() as session:
+            face = session.get(Face, face_id)
+            if face is None or face.person_id is None:
+                return
+            IdentityService(session).clear_manual_person_thumbnail(face.person_id)
+        self._refresh_persons()
 
     def _on_preview_face_delete(self, face_id: int) -> None:
         """Handle 'Arc törlése' from the preview panel context menu (hard delete)."""

@@ -129,6 +129,9 @@ class Place(Base):
     longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # True when the user manually chose this thumbnail (auto-refresh skips it)
+    thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # EXIF-derived records start as anonymous, then become normal named places
     # once the user names them or merges them into another place.
     is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -191,6 +194,9 @@ class Person(Base):
 
     # Representative thumbnail path (one crop selected to stand for the person)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # True when the user manually chose this thumbnail (auto-refresh skips it)
+    thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Structured personal data
     family_code: Mapped[Optional[str]] = mapped_column(

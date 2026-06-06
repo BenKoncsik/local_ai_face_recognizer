@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 from sqlalchemy import case, distinct, func, or_
@@ -355,12 +356,22 @@ class PlaceService:
         elif target.longitude is None:
             target.longitude = next((p.longitude for p in sources if p.longitude is not None), None)
         if thumbnail_path is not None:
+            # Explicit caller-supplied path (e.g. merge dialog): just store it.
+            # Do NOT mark as thumbnail_is_manual — that flag is reserved for
+            # selections made through the UI thumbnail picker.
             target.thumbnail_path = thumbnail_path or None
+        elif target.thumbnail_is_manual and target.thumbnail_path:
+            # Target already has a user-chosen thumbnail — leave it alone.
+            pass
         elif target.thumbnail_path is None:
-            target.thumbnail_path = next(
-                (p.thumbnail_path for p in sources if p.thumbnail_path),
-                None,
+            # Inherit the best available thumbnail from sources.
+            # Preserve the manual flag when the winning source had one.
+            winning_source = next(
+                (p for p in sources if p.thumbnail_path), None
             )
+            if winning_source is not None:
+                target.thumbnail_path = winning_source.thumbnail_path
+                target.thumbnail_is_manual = winning_source.thumbnail_is_manual
 
         self._ensure_thumbnail(target)
         for source in sources:
@@ -385,7 +396,51 @@ class PlaceService:
             raise ValueError(f"Place not found: {place_id}")
         return place
 
+    def set_place_thumbnail(self, place_id: int, image_path: str) -> Place:
+        """Set an image as the manual thumbnail for a place.
+
+        Args:
+            place_id:   Place to update.
+            image_path: Absolute path to the image file.
+
+        Returns:
+            The updated :class:`Place` row.
+        """
+        if not Path(image_path).exists():
+            raise ValueError(f"Image file not found: {image_path}")
+        place = self._require_place(place_id)
+        place.thumbnail_path = image_path
+        place.thumbnail_is_manual = True
+        self._session.commit()
+        log.info("Set manual thumbnail for place %d → %s", place_id, image_path)
+        return place
+
+    def clear_manual_place_thumbnail(self, place_id: int) -> Place:
+        """Reset a place's thumbnail to automatic selection.
+
+        Args:
+            place_id: Place to reset.
+
+        Returns:
+            The updated :class:`Place` row.
+        """
+        place = self._require_place(place_id)
+        place.thumbnail_is_manual = False
+        place.thumbnail_path = None
+        self._ensure_thumbnail(place)
+        self._session.commit()
+        log.info("Cleared manual thumbnail for place %d", place_id)
+        return place
+
     def _ensure_thumbnail(self, place: Place) -> None:
+        # Honour manual selection unless the file has been deleted
+        if place.thumbnail_is_manual:
+            if place.thumbnail_path and Path(place.thumbnail_path).exists():
+                return
+            # Source file gone → fall back to auto
+            place.thumbnail_is_manual = False
+            place.thumbnail_path = None
+
         if place.thumbnail_path:
             return
         image = (

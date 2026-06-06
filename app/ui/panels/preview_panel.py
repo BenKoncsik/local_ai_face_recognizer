@@ -654,14 +654,16 @@ class PreviewPanel(QWidget):
         next_image_requested: emitted when the user clicks "Következő →"
     """
 
-    face_selected              = Signal(int)
-    face_assign_requested      = Signal(int)
-    face_delete_requested      = Signal(int)
-    face_create_requested      = Signal(int, int, int, int, int)
-    face_bbox_update_requested = Signal(int, int, int, int, int)
-    face_diagnostics_requested = Signal(int)
-    prev_image_requested       = Signal()
-    next_image_requested       = Signal()
+    face_selected                  = Signal(int)
+    face_assign_requested          = Signal(int)
+    face_delete_requested          = Signal(int)
+    face_create_requested          = Signal(int, int, int, int, int)
+    face_bbox_update_requested     = Signal(int, int, int, int, int)
+    face_diagnostics_requested     = Signal(int)
+    face_set_thumbnail_requested   = Signal(int)   # face_id
+    face_clear_thumbnail_requested = Signal(int)   # person_id
+    prev_image_requested           = Signal()
+    next_image_requested           = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -1085,6 +1087,13 @@ class PreviewPanel(QWidget):
         menu.addSeparator()
         diag_action = menu.addAction(f"🔍  {t('diag_menu')}")
 
+        set_thumb_action   = None
+        clear_thumb_action = None
+        if person_name:
+            menu.addSeparator()
+            set_thumb_action   = menu.addAction(f"🖼  {t('set_as_person_thumbnail')}")
+            clear_thumb_action = menu.addAction(f"↩  {t('clear_person_thumbnail')}")
+
         chosen = menu.exec(QPoint(gx, gy))
         if chosen == assign_action:
             self.face_assign_requested.emit(face_id)
@@ -1094,6 +1103,11 @@ class PreviewPanel(QWidget):
             self.face_delete_requested.emit(face_id)
         elif chosen == diag_action:
             self.face_diagnostics_requested.emit(face_id)
+        elif set_thumb_action and chosen == set_thumb_action:
+            self.face_set_thumbnail_requested.emit(face_id)
+        elif clear_thumb_action and chosen == clear_thumb_action:
+            # person_id is resolved in main_window from the face_id
+            self.face_clear_thumbnail_requested.emit(face_id)
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
         self._image_label.set_draw_mode(active)

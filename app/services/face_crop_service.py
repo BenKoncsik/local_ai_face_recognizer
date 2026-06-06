@@ -165,5 +165,8 @@ def _update_matching_person_thumbnail(
     person = face.person
     if person is None:
         return
+    # Never overwrite a user's manual thumbnail choice
+    if person.thumbnail_is_manual:
+        return
     if person.thumbnail_path == old_crop_path:
         person.thumbnail_path = new_crop_path

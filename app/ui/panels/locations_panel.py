@@ -187,6 +187,9 @@ class LocationsPanel(QWidget):
         detail_layout.addWidget(gallery_hdr)
 
         self._gallery = PlaceGalleryWidget()
+        self._gallery.set_place_thumbnail_requested.connect(
+            self._on_set_place_thumbnail
+        )
         detail_layout.addWidget(self._gallery)
 
         # Persons
@@ -442,6 +445,30 @@ class LocationsPanel(QWidget):
         self._thumb.setPixmap(
             pixmap.scaled(self._thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+
+    # ------------------------------------------------------------------
+    # Thumbnail management
+    # ------------------------------------------------------------------
+
+    def _on_set_place_thumbnail(self, image_path: str) -> None:
+        """Called when the gallery requests a thumbnail change."""
+        if self._current_place_id is None:
+            return
+        try:
+            with session_scope() as session:
+                svc = PlaceService(session)
+                if image_path:
+                    svc.set_place_thumbnail(self._current_place_id, image_path)
+                else:
+                    svc.clear_manual_place_thumbnail(self._current_place_id)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                t("thumbnail_set_error", error="", default="Thumbnail error"),
+                t("thumbnail_set_error", error=str(exc)),
+            )
+            return
+        self._load_detail(self._current_place_id)
 
     # ------------------------------------------------------------------
     # Merge

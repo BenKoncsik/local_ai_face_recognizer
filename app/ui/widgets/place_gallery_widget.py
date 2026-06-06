@@ -32,7 +32,8 @@ _LARGE_FULL_MAX = 1400
 class _ThumbLabel(QLabel):
     """Clickable thumbnail with selection highlight."""
 
-    clicked = Signal(str)   # file_path
+    clicked = Signal(str)        # file_path
+    right_clicked = Signal(str)  # file_path
 
     def __init__(self, file_path: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -65,6 +66,9 @@ class _ThumbLabel(QLabel):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self._path)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: ANN001
+        self.right_clicked.emit(self._path)
 
     @property
     def path(self) -> str:
@@ -141,6 +145,8 @@ class _FullSizeDialog(QDialog):
 class PlaceGalleryWidget(QWidget):
     """Visual gallery: large preview + scrollable thumbnail strip below."""
 
+    set_place_thumbnail_requested = Signal(str)  # image file_path
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._paths: List[str] = []
@@ -201,6 +207,7 @@ class PlaceGalleryWidget(QWidget):
         for path in paths:
             lbl = _ThumbLabel(path)
             lbl.clicked.connect(self._on_thumb_click)
+            lbl.right_clicked.connect(self._on_thumb_right_clicked)
             self._thumb_layout.insertWidget(self._thumb_layout.count() - 1, lbl)
             self._thumb_labels[path] = lbl
 
@@ -239,6 +246,18 @@ class PlaceGalleryWidget(QWidget):
 
     def _on_thumb_click(self, path: str) -> None:
         self._select_path(path)
+
+    def _on_thumb_right_clicked(self, path: str) -> None:
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        set_action   = menu.addAction(t("places_gallery_set_thumb"))
+        clear_action = menu.addAction(t("places_gallery_clear_thumb"))
+        chosen = menu.exec(QCursor.pos())
+        if chosen == set_action:
+            self.set_place_thumbnail_requested.emit(path)
+        elif chosen == clear_action:
+            self.set_place_thumbnail_requested.emit("")  # empty = clear
 
     def _on_preview_dbl_click(self) -> None:
         if self._current_path and Path(self._current_path).exists():
