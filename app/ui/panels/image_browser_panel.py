@@ -1494,6 +1494,15 @@ class ImageBrowserPanel(QWidget):
         info_layout.setContentsMargins(8, 8, 8, 8)
         info_layout.setSpacing(6)
 
+        # Save everything about this image (persons + face boxes, GPS, date)
+        # into its metadata. Disabled until an image is displayed.
+        self._save_meta_btn = QPushButton()
+        self._save_meta_btn.setEnabled(False)
+        self._save_meta_btn.clicked.connect(self._on_save_face_metadata)
+        info_layout.addWidget(self._save_meta_btn)
+
+        info_layout.addWidget(_hline())
+
         self._folder_hdr = QLabel()
         self._folder_hdr.setStyleSheet(
             "font-weight: bold; color: #888; font-size: 11px;"
@@ -1644,11 +1653,6 @@ class ImageBrowserPanel(QWidget):
         gps_btns.addWidget(self._gps_clear_btn)
         info_layout.addLayout(gps_btns)
 
-        self._gps_write_place_btn = QPushButton()
-        self._gps_write_place_btn.clicked.connect(self._write_place_coords_to_exif)
-        self._gps_write_place_btn.setVisible(False)
-        info_layout.addWidget(self._gps_write_place_btn)
-
         info_layout.addWidget(_hline())
 
         # ── Image note ────────────────────────────────────────────────
@@ -1785,6 +1789,8 @@ class ImageBrowserPanel(QWidget):
         self._tree_search_bar.retranslate()
         self._toggle_left_btn.setToolTip(t("ib3_toggle_left_tip"))
         self._toggle_right_btn.setToolTip(t("ib3_toggle_right_tip"))
+        self._save_meta_btn.setText(t("ib3_save_meta_btn"))
+        self._save_meta_btn.setToolTip(t("ib3_save_meta_tip"))
         self._draw_mode_btn.setText(t("ibp_manual_mark"))
         self._draw_mode_btn.setToolTip(t("ibp_manual_mark_tooltip"))
         self._fs_btn.setText(t("ibp_fullscreen"))
@@ -1809,8 +1815,6 @@ class ImageBrowserPanel(QWidget):
         self._gps_edit.setPlaceholderText(t("ibp_gps_placeholder"))
         self._gps_save_btn.setText(t("ibp_gps_save_btn"))
         self._gps_clear_btn.setText(t("ibp_gps_clear_btn"))
-        self._gps_write_place_btn.setText(t("ibp_gps_write_exif_place"))
-        self._gps_write_place_btn.setToolTip(t("ibp_gps_write_exif_place_tip"))
         self._update_exif_date_btn.setText(t("ibp_update_exif_date_btn"))
         self._update_exif_date_btn.setToolTip(t("ibp_update_exif_date_tip"))
         self._note_hdr.setText(t("ibp_note_hdr"))
@@ -2730,6 +2734,7 @@ class ImageBrowserPanel(QWidget):
                 _ = f.person
             self._current_image_id = image_id
             self._current_path = img.file_path
+            self._save_meta_btn.setEnabled(True)
             self.image_displayed.emit(image_id, img.file_path)
             self._detection_done = img.detection_done
             photo_date = img.photo_date or ""
@@ -2865,10 +2870,102 @@ class ImageBrowserPanel(QWidget):
         self._reload_persons_combo()
         self._reload_places()
 
+    def _on_save_face_metadata(self) -> None:
+        """Write everything about the current image into its metadata.
+
+        Persists, into the image file (with sidecar-JSON fallback for persons):
+
+        * recognised persons + face bounding boxes (``facelocal`` XMP/EXIF),
+        * the effective GPS coordinate (image-level → EXIF → linked place), and
+        * the photo date (EXIF DateTimeOriginal).
+
+        When the displayed image is part of a deoldified (colour ↔ B&W) pair,
+        both variants receive the same data so the annotation survives whichever
+        copy is later shared or re-imported.
+        """
+        if self._current_image_id is None:
+            return
+
+        # Current image + its deoldified partner (either direction), de-duplicated.
+        image_ids: list[int] = [self._current_image_id]
+        if (
+            self._deol_pair_partner_id is not None
+            and self._deol_pair_partner_id != self._current_image_id
+        ):
+            image_ids.append(self._deol_pair_partner_id)
+
+        reply = QMessageBox.warning(
+            self,
+            t("fmeta_confirm_title"),
+            t("fmeta_warning"),
+            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if reply != QMessageBox.Ok:
+            return
+
+        from app.services.face_metadata_export_service import FaceMetadataExportService
+        from app.services.image_library_service import resolve_image_path
+        from app.utils.exif import parse_flexible_date, write_exif_date, write_exif_gps
+
+        gps_written = 0
+        date_written = 0
+
+        with session_scope() as session:
+            # 1) GPS + date go in FIRST — they only touch EXIF. The face-metadata
+            #    XMP write below re-attaches the existing EXIF, so writing it last
+            #    keeps GPS/date intact while adding the persons block.
+            for image_id in image_ids:
+                img = session.get(Image, image_id)
+                if img is None:
+                    continue
+                abs_path = resolve_image_path(img)
+                if abs_path is None or not Path(abs_path).exists():
+                    continue
+                path_str = str(abs_path)
+
+                lat, lon = self._effective_gps(img)
+                if lat is not None and lon is not None and write_exif_gps(path_str, lat, lon):
+                    gps_written += 1
+
+                dt = parse_flexible_date((img.photo_date or "").strip())
+                if dt is not None and write_exif_date(path_str, dt):
+                    date_written += 1
+
+            # 2) Persons + face boxes (XMP / EXIF UserComment / sidecar JSON).
+            summary = FaceMetadataExportService(session).export_images(image_ids)
+
+        msg = t(
+            "ib3_save_meta_summary",
+            total=summary.total,
+            embedded=summary.embedded_count,
+            sidecar=summary.sidecar_count,
+            gps=gps_written,
+            date=date_written,
+            failed=summary.failed_count,
+        )
+        errors = summary.errors
+        if errors:
+            msg += "\n\n" + "\n".join(errors[:10])
+        QMessageBox.information(self, t("fmeta_done_title"), msg)
+
+    @staticmethod
+    def _effective_gps(img: "Image") -> tuple[Optional[float], Optional[float]]:
+        """Resolve the GPS coordinate to embed: image-level → EXIF → place."""
+        if img.image_latitude is not None and img.image_longitude is not None:
+            return img.image_latitude, img.image_longitude
+        if img.exif_latitude is not None and img.exif_longitude is not None:
+            return img.exif_latitude, img.exif_longitude
+        if img.place is not None and img.place.latitude is not None:
+            return img.place.latitude, img.place.longitude
+        return None, None
+
     def _clear_current_image(self) -> None:
         """Reset preview when switching folders."""
         self._current_image_id = None
         self._current_path = ""
+        if hasattr(self, "_save_meta_btn"):
+            self._save_meta_btn.setEnabled(False)
         self._face_data = []
         self._selected_face_id = None
         self._editing_face_id = None
@@ -3988,16 +4085,6 @@ class ImageBrowserPanel(QWidget):
             self._gps_source_label.setStyleSheet("color: #555; font-size: 10px; font-style: italic;")
         self._gps_edit.blockSignals(False)
 
-        # Show the "write place coords to EXIF" button only when applicable:
-        # no EXIF GPS, no image-level coords, but place has coords
-        show_place_btn = (
-            exif_lat is None
-            and image_lat is None
-            and place_lat is not None
-            and place_id is not None
-        )
-        self._gps_write_place_btn.setVisible(bool(show_place_btn))
-
     def _reload_gps_panel(self) -> None:
         """Reload GPS panel from DB for the current image."""
         if self._current_image_id is None:
@@ -4052,7 +4139,6 @@ class ImageBrowserPanel(QWidget):
         log.info("Image %d: image_latitude=%.6f image_longitude=%.6f saved", self._current_image_id, lat, lon)
         self._gps_source_label.setText(t("ibp_gps_source_manual"))
         self._gps_source_label.setStyleSheet("color: #88ee88; font-size: 10px; font-style: italic;")
-        self._gps_write_place_btn.setVisible(False)
 
         # Requirement #3: write to EXIF if no EXIF GPS exists
         if needs_exif_write and self._current_path:
@@ -4070,22 +4156,6 @@ class ImageBrowserPanel(QWidget):
             img.image_longitude = None
         log.info("Image %d: image_latitude/longitude cleared", self._current_image_id)
         self._reload_gps_panel()
-
-    def _write_place_coords_to_exif(self) -> None:
-        """Write the linked place's coordinates into this image's EXIF GPS fields."""
-        if self._current_image_id is None or not self._current_path:
-            return
-        from app.utils.exif import write_exif_gps
-        with session_scope() as session:
-            img = session.get(Image, self._current_image_id)
-            if img is None or img.place is None:
-                return
-            place_lat = img.place.latitude
-            place_lon = img.place.longitude
-        if place_lat is None or place_lon is None:
-            return
-        write_exif_gps(self._current_path, place_lat, place_lon)
-        self._gps_write_place_btn.setVisible(False)
 
     def _update_exif_date(self) -> None:
         """Write the photo date field into the image EXIF DateTimeOriginal."""

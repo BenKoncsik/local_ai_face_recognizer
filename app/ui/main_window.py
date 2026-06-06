@@ -2720,6 +2720,7 @@ class MainWindow(QMainWindow):
         dlg = ExportDialog(
             current_person_id=self._current_person_id,
             current_person_name=person_name,
+            current_image_id=self._preview_panel.current_image_id,
             on_collage_import=self._on_import_collage,
             on_collage_html_export=self._on_export_collage_html,
             on_project_export=self._on_export_project_package,

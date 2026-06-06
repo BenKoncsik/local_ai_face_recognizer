@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -49,6 +50,7 @@ class ExportDialog(QDialog):
         self,
         current_person_id: Optional[int] = None,
         current_person_name: Optional[str] = None,
+        current_image_id: Optional[int] = None,
         on_collage_import: Optional[Callable[[], None]] = None,
         on_collage_html_export: Optional[Callable[[], None]] = None,
         on_project_export: Optional[Callable[[], None]] = None,
@@ -58,6 +60,7 @@ class ExportDialog(QDialog):
         super().__init__(parent)
         self._person_id = current_person_id
         self._person_name = current_person_name
+        self._image_id = current_image_id
         self._on_collage_import_cb = on_collage_import
         self._on_collage_html_export_cb = on_collage_html_export
         self._on_project_export_cb = on_project_export
@@ -280,6 +283,41 @@ class ExportDialog(QDialog):
 
         layout.addWidget(meta_box)
 
+        # --- Embed persons into image files / sidecar JSON ---
+        fmeta_box = QGroupBox(t("fmeta_group"))
+        fmeta_layout = QVBoxLayout(fmeta_box)
+
+        fmeta_desc = QLabel(t("fmeta_desc"))
+        fmeta_desc.setWordWrap(True)
+        fmeta_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        fmeta_layout.addWidget(fmeta_desc)
+
+        fmeta_warn = QLabel("⚠️  " + t("fmeta_warning"))
+        fmeta_warn.setWordWrap(True)
+        fmeta_warn.setStyleSheet("color: #d08b00; font-size: 11px;")
+        fmeta_layout.addWidget(fmeta_warn)
+
+        self._fmeta_name = QCheckBox(t("fmeta_opt_name"))
+        self._fmeta_name.setChecked(True)
+        self._fmeta_notes = QCheckBox(t("fmeta_opt_notes"))
+        self._fmeta_notes.setChecked(True)
+        self._fmeta_sidecar = QCheckBox(t("fmeta_opt_sidecar"))
+        for cb in (self._fmeta_name, self._fmeta_notes, self._fmeta_sidecar):
+            fmeta_layout.addWidget(cb)
+
+        self._fmeta_current_btn = QPushButton(t("fmeta_btn_current"))
+        self._fmeta_current_btn.setEnabled(self._image_id is not None)
+        if self._image_id is None:
+            self._fmeta_current_btn.setToolTip(t("fmeta_no_current"))
+        self._fmeta_current_btn.clicked.connect(self._on_embed_current)
+        fmeta_layout.addWidget(self._fmeta_current_btn)
+
+        self._fmeta_all_btn = QPushButton(t("fmeta_btn_all"))
+        self._fmeta_all_btn.clicked.connect(self._on_embed_all)
+        fmeta_layout.addWidget(self._fmeta_all_btn)
+
+        layout.addWidget(fmeta_box)
+
         layout.addStretch()
         scroll.setWidget(inner)
         outer.addWidget(scroll, stretch=1)
@@ -416,6 +454,80 @@ class ExportDialog(QDialog):
         if self._cb_gps.isChecked():
             fields.add(FIELD_GPS)
         return fields
+
+    # ------------------------------------------------------------------
+    # Embed persons into image files / sidecar JSON
+    # ------------------------------------------------------------------
+
+    def _fmeta_options(self):
+        from app.services.face_metadata_export_service import FaceMetadataExportOptions
+
+        return FaceMetadataExportOptions(
+            include_person_name=self._fmeta_name.isChecked(),
+            include_notes=self._fmeta_notes.isChecked(),
+            prefer_sidecar_only=self._fmeta_sidecar.isChecked(),
+        )
+
+    def _confirm_embed(self) -> bool:
+        reply = QMessageBox.warning(
+            self,
+            t("fmeta_confirm_title"),
+            t("fmeta_warning"),
+            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        return reply == QMessageBox.Ok
+
+    def _on_embed_current(self) -> None:
+        if self._image_id is None or not self._confirm_embed():
+            return
+        from app.services.face_metadata_export_service import (
+            FaceMetadataExportService,
+            FaceMetadataExportSummary,
+        )
+
+        with session_scope() as session:
+            result = FaceMetadataExportService(session).export_image(
+                self._image_id, self._fmeta_options()
+            )
+        summary = FaceMetadataExportSummary(results=[result])
+        self._show_embed_summary(summary)
+
+    def _on_embed_all(self) -> None:
+        if not self._confirm_embed():
+            return
+        from app.services.face_metadata_export_service import FaceMetadataExportService
+
+        progress = QProgressDialog(t("fmeta_group"), t("close"), 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        def cb(done: int, total: int) -> None:
+            progress.setMaximum(max(total, 1))
+            progress.setValue(done)
+
+        with session_scope() as session:
+            summary = FaceMetadataExportService(session).export_all(
+                self._fmeta_options(), progress_cb=cb
+            )
+        progress.close()
+        self._show_embed_summary(summary)
+
+    def _show_embed_summary(self, summary) -> None:
+        msg = t(
+            "fmeta_summary",
+            total=summary.total,
+            embedded=summary.embedded_count,
+            sidecar=summary.sidecar_count,
+            skipped=summary.skipped_count,
+            failed=summary.failed_count,
+        )
+        errors = summary.errors
+        if errors:
+            msg += "\n\n" + "\n".join(errors[:10])
+            if len(errors) > 10:
+                msg += f"\n… (+{len(errors) - 10})"
+        QMessageBox.information(self, t("fmeta_done_title"), msg)
 
     def _on_collage_import_clicked(self) -> None:
         if self._on_collage_import_cb is None:

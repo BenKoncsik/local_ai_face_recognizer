@@ -751,6 +751,33 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                     "hu": "Válasszon legalább egy exportálandó mezőt."},
     "export_metadata_no_fields_title": {"en": "No Fields Selected", "hu": "Nincs mező kiválasztva"},
 
+    # ── Face metadata embedding (into image files / sidecar JSON) ─────────
+    "fmeta_group":        {"en": "Embed Persons Into Image Files",
+                           "hu": "Személyek beágyazása a képfájlokba"},
+    "fmeta_desc":         {"en": "Write the recognised persons (id, name, face box) into each "
+                                 "image's own metadata (XMP/EXIF), or a JSON file next to it.",
+                           "hu": "A felismert személyeket (azonosító, név, arc-pozíció) a képek "
+                                 "saját metaadatába (XMP/EXIF) vagy egy mellettük lévő JSON fájlba írja."},
+    "fmeta_warning":      {"en": "Person names, ids and face positions may be written into the image "
+                                 "file's metadata or a JSON file next to it. Other programs or people "
+                                 "can read these if you share the image.",
+                           "hu": "A személynevek, azonosítók és arcpozíciók bekerülhetnek a képfájl "
+                                 "metaadataiba vagy egy mellette lévő JSON fájlba. Ezeket más programok "
+                                 "vagy más személyek is elolvashatják, ha a képet továbbküldöd."},
+    "fmeta_confirm_title": {"en": "Embed person metadata?", "hu": "Személy-metaadat beágyazása?"},
+    "fmeta_opt_name":     {"en": "Include person name", "hu": "Személynév mentése"},
+    "fmeta_opt_notes":    {"en": "Include notes", "hu": "Megjegyzések mentése"},
+    "fmeta_opt_sidecar":  {"en": "Only write sidecar JSON (never modify images)",
+                           "hu": "Csak sidecar JSON készüljön (a képek soha ne módosuljanak)"},
+    "fmeta_btn_current":  {"en": "📝  Save current image", "hu": "📝  Aktuális kép mentése"},
+    "fmeta_btn_all":      {"en": "📝  Save all images", "hu": "📝  Összes kép mentése"},
+    "fmeta_no_current":   {"en": "No image is currently selected.", "hu": "Nincs kiválasztott kép."},
+    "fmeta_done_title":   {"en": "Metadata Export Complete", "hu": "Metaadat-export kész"},
+    "fmeta_summary":      {"en": "Processed: {total}\nEmbedded: {embedded}\nSidecar JSON: {sidecar}\n"
+                                 "Skipped: {skipped}\nFailed: {failed}",
+                           "hu": "Feldolgozva: {total}\nKépbe írva: {embedded}\nSidecar JSON: {sidecar}\n"
+                                 "Kihagyva: {skipped}\nHiba: {failed}"},
+
     # ── Status bar update notification ────────────────────────────────────
     "status_update_available":     {"en": "New version available: v{version}  ↑",
                                     "hu": "Új verzió elérhető: v{version}  ↑"},
@@ -1056,6 +1083,22 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                 "hu": "Mappa panel mutatása / elrejtése"},
     "ib3_toggle_right_tip":    {"en": "Show / hide the info panel",
                                 "hu": "Infó panel mutatása / elrejtése"},
+    "ib3_save_meta_btn":       {"en": "💾  Save EXIF data",
+                                "hu": "💾  Exif adatok mentése"},
+    "ib3_save_meta_tip":       {"en": "Write everything about this image into its metadata: "
+                                      "recognised persons + face boxes (XMP/EXIF or sidecar JSON), "
+                                      "GPS coordinates and the photo date (EXIF). If the image has a "
+                                      "colourised/B&W pair, both copies are updated.",
+                                "hu": "Mindent a kép metaadatába ír: a felismert személyeket + "
+                                      "arc-pozíciókat (XMP/EXIF vagy sidecar JSON), a GPS-koordinátákat "
+                                      "és a fénykép dátumát (EXIF). Ha a képnek van színezett/fekete-fehér "
+                                      "párja, mindkét példány frissül."},
+    "ib3_save_meta_summary":   {"en": "Processed: {total}\nPersons embedded: {embedded}\n"
+                                      "Sidecar JSON: {sidecar}\nGPS written: {gps}\nDate written: {date}\n"
+                                      "Failed: {failed}",
+                                "hu": "Feldolgozva: {total}\nSzemélyek beágyazva: {embedded}\n"
+                                      "Sidecar JSON: {sidecar}\nGPS mentve: {gps}\nDátum mentve: {date}\n"
+                                      "Hiba: {failed}"},
 
     # ── Settings tabs ────────────────────────────────────────────────────
     "settings_tab_general":     {"en": "General",               "hu": "Általános"},
