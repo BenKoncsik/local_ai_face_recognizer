@@ -1384,6 +1384,46 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Review step included — only auto-named Unknown persons are merged",
          "hu": "Átnézési lépéssel — csak automatikus „Unknown” személyeket von össze"},
 
+    # ── Clean up empty Unknown persons ────────────────────────────────────
+    "scanModes.cleanupEmptyUnknowns.title":
+        {"en": "Clean Up Empty Unknown Persons",
+         "hu": "Üres Unknown személyek tisztítása"},
+    "scanModes.cleanupEmptyUnknowns.description":
+        {"en": "Removes automatically created 'Unknown N' persons that no longer have "
+               "any faces attached. These empty placeholders are left behind when their "
+               "last face is reassigned, removed, or excluded, and show up as blank '?' "
+               "entries in the person list. Named people and the protected 'Ismeretlen' "
+               "person are always kept, and no person that still owns a face is touched. "
+               "Face boxes and embeddings are not affected.",
+         "hu": "Eltávolítja azokat az automatikusan létrehozott „Unknown N” személyeket, "
+               "amelyekhez már egyetlen arc sem tartozik. Ezek az üres helykitöltők akkor "
+               "maradnak vissza, amikor az utolsó arcukat átrendelik, eltávolítják vagy "
+               "kizárják, és üres „?” bejegyzésként jelennek meg a személylistában. Az "
+               "elnevezett személyek és a védett „Ismeretlen” személy mindig megmaradnak, "
+               "és egyetlen arccal rendelkező személyt sem érint. Az arckereteket és "
+               "embeddingeket nem befolyásolja."},
+    "scanModes.cleanupEmptyUnknowns.startButton":
+        {"en": "Clean Up Empty Unknown Persons",
+         "hu": "Üres Unknown személyek tisztítása"},
+    "scanModes.cleanupEmptyUnknowns.warning":
+        {"en": "Safe — only face-less auto-named Unknown persons are removed",
+         "hu": "Biztonságos — csak az arc nélküli automatikus „Unknown” személyeket törli"},
+    "cleanup_empty_unknowns_title":
+        {"en": "Clean Up Empty Unknown Persons",
+         "hu": "Üres Unknown személyek tisztítása"},
+    "cleanup_empty_unknowns_msg":
+        {"en": "Delete every automatically created 'Unknown' person that has no faces?\n\n"
+               "Named people and the protected 'Ismeretlen' person are preserved.",
+         "hu": "Törli az összes olyan automatikusan létrehozott „Unknown” személyt, "
+               "amelyhez nem tartozik arc?\n\n"
+               "Az elnevezett személyek és a védett „Ismeretlen” személy megmaradnak."},
+    "cleanup_empty_unknowns_status":
+        {"en": "Cleaned up {persons} empty Unknown person(s)",
+         "hu": "{persons} üres Unknown személy törölve"},
+    "cleanup_empty_unknowns_none":
+        {"en": "No empty Unknown persons were found.",
+         "hu": "Nem található üres Unknown személy."},
+
     # Identity repair results dialog
     "repair_title":      {"en": "Identity Repair — Merge Fragmented Unknowns",
                           "hu": "Identitás-helyreállítás — Töredékek összevonása"},

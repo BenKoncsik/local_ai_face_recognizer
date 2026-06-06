@@ -124,6 +124,56 @@ class IdentityService:
         self._session.commit()
         return target
 
+    def cleanup_empty_unknown_persons(self) -> int:
+        """Delete auto-generated "Unknown" persons that have no faces left.
+
+        Reassigning, removing or excluding faces can drain an auto-named
+        ("Unknown N") cluster until it holds no :class:`Face` rows.  Such
+        face-less placeholders render as blank "?" entries and serve no
+        purpose, so this maintenance pass removes them.
+
+        Strict safety rules — a person is only deleted when ALL hold:
+
+        * ``is_auto_named is True``  – it is a generated Unknown placeholder,
+          never a manually named identity (those survive even when face-less);
+        * ``is_protected is False``  – the canonical "Ismeretlen" person is
+          always kept;
+        * it has zero associated faces (checked with a DB-side ``NOT EXISTS``
+          subquery, not an in-memory scan).
+
+        The whole operation runs in a single transaction: on any error it
+        rolls back and re-raises, leaving the database untouched.
+
+        Returns:
+            The number of empty Unknown persons that were deleted.
+        """
+        empty_ids = [
+            pid
+            for (pid,) in (
+                self._session.query(Person.id)
+                .filter(Person.is_auto_named == True)  # noqa: E712
+                .filter(Person.is_protected == False)  # noqa: E712
+                .filter(~Person.faces.any())
+                .all()
+            )
+        ]
+        if not empty_ids:
+            return 0
+
+        try:
+            deleted = (
+                self._session.query(Person)
+                .filter(Person.id.in_(empty_ids))
+                .delete(synchronize_session=False)
+            )
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+
+        log.info("Cleaned up %d empty Unknown person(s)", deleted)
+        return deleted
+
     def delete_person(self, person_id: int) -> None:
         """Un-assign all faces from *person_id* and delete the person row."""
         person = self._require_person(person_id)
@@ -175,6 +225,8 @@ class IdentityService:
         log.info(
             "Reassigned face %d: person %s → %d", face_id, old_pid, target_person_id
         )
+        # Moving the last face away may leave the source Unknown cluster empty.
+        self.cleanup_empty_unknown_persons()
         return face
 
     def remove_face_from_cluster(self, face_id: int) -> Face:
@@ -189,6 +241,8 @@ class IdentityService:
         face.assigned_at = None
         self._session.commit()
         log.info("Removed face %d from person %s", face_id, old_pid)
+        # Un-assigning the last face may leave the source Unknown cluster empty.
+        self.cleanup_empty_unknown_persons()
         return face
 
     def exclude_face(self, face_id: int) -> Face:
@@ -202,6 +256,8 @@ class IdentityService:
         face.assigned_at = None
         self._session.commit()
         log.info("Excluded face %d from clustering", face_id)
+        # Excluding the last face may leave the source Unknown cluster empty.
+        self.cleanup_empty_unknown_persons()
         return face
 
     # ------------------------------------------------------------------

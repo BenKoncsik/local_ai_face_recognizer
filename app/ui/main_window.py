@@ -834,6 +834,7 @@ class MainWindow(QMainWindow):
             on_reset_unknown_persons=self._on_reset_unknown_persons,
             on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
             on_identity_repair_scan=self._on_identity_repair_scan,
+            on_cleanup_empty_unknown_persons=self._on_cleanup_empty_unknown_persons,
             parent=self,
         )
         dlg.exec()
@@ -894,6 +895,44 @@ class MainWindow(QMainWindow):
             )
         )
         self._start_pipeline(high_accuracy=False)
+
+    @Slot()
+    def _on_cleanup_empty_unknown_persons(self) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("cleanup_empty_unknowns_title"),
+            t("cleanup_empty_unknowns_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                deleted = IdentityService(session).cleanup_empty_unknown_persons()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Cleanup of empty Unknown persons failed")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        if deleted:
+            self._current_person_id = None
+            self._current_face_id = None
+            self._refresh_persons()
+            self._image_browser._reload_current_face_data()
+            self._status_label.setText(
+                t("cleanup_empty_unknowns_status", persons=deleted)
+            )
+        else:
+            QMessageBox.information(
+                self,
+                t("cleanup_empty_unknowns_title"),
+                t("cleanup_empty_unknowns_none"),
+            )
 
     @Slot()
     def _on_scan(self) -> None:
@@ -1110,6 +1149,9 @@ class MainWindow(QMainWindow):
                     exclude_low_quality=exclude_low_quality,
                 )
                 result = svc.apply(pairs)
+                # Consolidating fragmented identities can leave face-less
+                # Unknown placeholders behind — sweep them in the same session.
+                IdentityService(session).cleanup_empty_unknown_persons()
         except Exception as exc:  # noqa: BLE001
             log.exception("Identity repair apply failed")
             QMessageBox.critical(self, t("error"), t("repair_error", error=exc))

@@ -36,6 +36,7 @@ class ScanModesDialog(QDialog):
         on_reset_unknown_persons: Callable[[], None],
         on_find_overlapping_unknown_faces: Callable[[], None],
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
+        on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -46,6 +47,7 @@ class ScanModesDialog(QDialog):
         self._on_reset_unknown_persons = on_reset_unknown_persons
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
         self._on_identity_repair_scan = on_identity_repair_scan
+        self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -118,6 +120,15 @@ class ScanModesDialog(QDialog):
                 button_label=t("scanModes.identityRepair.startButton"),
                 warning=t("scanModes.identityRepair.warning"),
                 callback=self._launch_identity_repair_scan,
+                danger=False,
+            ))
+        if self._on_cleanup_empty_unknown_persons is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.cleanupEmptyUnknowns.title"),
+                description=t("scanModes.cleanupEmptyUnknowns.description"),
+                button_label=t("scanModes.cleanupEmptyUnknowns.startButton"),
+                warning=t("scanModes.cleanupEmptyUnknowns.warning"),
+                callback=self._launch_cleanup_empty_unknown_persons,
                 danger=False,
             ))
         cards_layout.addWidget(self._make_card(
@@ -232,3 +243,8 @@ class ScanModesDialog(QDialog):
         self.accept()
         if self._on_identity_repair_scan is not None:
             self._on_identity_repair_scan()
+
+    def _launch_cleanup_empty_unknown_persons(self) -> None:
+        self.accept()
+        if self._on_cleanup_empty_unknown_persons is not None:
+            self._on_cleanup_empty_unknown_persons()
