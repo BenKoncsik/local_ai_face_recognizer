@@ -58,3 +58,27 @@ def test_enter_on_empty_query_does_nothing(widget, qtbot):
     qtbot.keyClick(widget._search, Qt.Key_Return)
 
     assert created == []
+
+
+def test_double_click_emits_place_double_clicked(widget, qtbot):
+    """Double-clicking a result emits the accept signal with its place id."""
+    accepted: list[int] = []
+    widget.place_double_clicked.connect(accepted.append)
+
+    item = widget._list.item(0)
+    widget._list.setCurrentItem(item)
+    widget._on_item_double_clicked(item)
+
+    assert accepted == [item.data(Qt.UserRole)]
+
+
+def test_double_click_without_selection_is_silent(widget, qtbot):
+    """Double-click with nothing selected must not emit (no crash, no accept)."""
+    accepted: list[int] = []
+    widget.place_double_clicked.connect(accepted.append)
+
+    widget.clear_selection()
+    # No current item → current_place_id() is None → nothing emitted.
+    widget._on_item_double_clicked(None)
+
+    assert accepted == []

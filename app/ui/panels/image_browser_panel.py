@@ -1582,7 +1582,10 @@ class ImageBrowserPanel(QWidget):
 
         self._place_search = PlaceSearchSelect()
         self._place_search.place_selected.connect(self._on_place_selected)
-        self._place_search.place_double_clicked.connect(self._on_place_selected)
+        # Double-clicking a result accepts it, mirroring the "Assign" button.
+        self._place_search.place_double_clicked.connect(
+            lambda _place_id: self._assign_existing_place()
+        )
         # Enter on a non-matching query creates the place (same as the button).
         self._place_search.create_requested.connect(
             lambda _name: self._create_or_assign_place_by_text()
