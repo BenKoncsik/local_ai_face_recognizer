@@ -17,9 +17,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.models import Place
-from app.services.place_service import ANONYMOUS_GPS_PLACE_NAME
+from app.services.place_service import (
+    ANONYMOUS_GPS_PLACE_NAME,
+    PLACE_TYPE_AREA,
+    PLACE_TYPE_EXACT,
+    PLACE_TYPE_REGION,
+)
 from app.ui.i18n import t
 from app.utils.person_search import normalize
+
+_TYPE_ICON = {
+    PLACE_TYPE_EXACT: "📍",
+    PLACE_TYPE_AREA: "🏘️",
+    PLACE_TYPE_REGION: "🗺️",
+}
 
 _ROLE_ID = Qt.UserRole
 _MAX_VISIBLE_ITEMS = 8
@@ -92,13 +103,23 @@ class PlaceSearchSelect(QWidget):
 
     def set_places(self, places: List[Place]) -> None:
         self._entries = []
-        for place in sorted(places, key=lambda p: (not p.is_anonymous, p.name.casefold(), p.id)):
-            label = place.name
+
+        def _name_of(p: Place) -> str:
+            return getattr(p, "display_name", None) or p.name
+
+        for place in sorted(places, key=lambda p: (not p.is_anonymous, _name_of(p).casefold(), p.id)):
+            base = _name_of(place)
+            label = base
             if place.is_anonymous and place.source == "exif":
                 label = f"{ANONYMOUS_GPS_PLACE_NAME} #{place.id}"
+                base = place.name
+            icon = _TYPE_ICON.get(getattr(place, "place_type", None))
+            if icon:
+                label = f"{icon} {label}"
             if place.latitude is not None and place.longitude is not None:
                 label = f"{label}  ({place.latitude:.5f}, {place.longitude:.5f})"
-            self._entries.append(PlaceEntry(place.id, place.name, label))
+            # Searchable text = display name so "Balatonszemes, Bajcsy…" matches.
+            self._entries.append(PlaceEntry(place.id, base, label))
         self._refresh_list()
 
     def current_place_id(self) -> Optional[int]:

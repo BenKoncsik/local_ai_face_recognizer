@@ -547,7 +547,8 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 | `ClusteringService` | DBSCAN alapú klaszterezés és re-cluster, same/different korrekciókkal, pipeline integrációval |
 | `IdentityService` | átnevezés, merge, törlés, reassign, kizárás, kézi korrekciók |
 | `FamilyService` | családi kódok, kapcsolatok, rokonleírások, családi képfeltételek szerinti keresés |
-| `PlaceService` | helyszínek létrehozása, EXIF GPS kapcsolás, közeli helyek, merge, thumbnail |
+| `PlaceService` | helyszínek létrehozása, helytípusok (exact/area/region), strukturált cím (settlement/street/house, display_name, classify_address állapotgép), típus-tudatos EXIF GPS kapcsolás, közeli helyek, hierarchia (parent/children), merge, thumbnail |
+| `GeocodingService` | cache-first geokódolás: település/utca javaslat, cím→koordináta; rétegek: geocoding_cache → place_address_suggestions (offline) → opt-in online provider |
 | `PersonService` | önálló Személyek oldal: személyek listázása szűrőkkel és arc/kép számokkal, strukturált adatok és név frissítése, személyhez tartozó arc cropok és képek lekérése, bélyegkép beállítása arc cropból, védett személy védelme |
 | `ImageBrowserService` | mappa- és képösszefoglalók a böngésző tabhoz |
 | `ImageLibraryService` | hordozható útvonalkezelés és migráció |
@@ -753,6 +754,7 @@ A Helyszínek oldal mintájára felépített, önálló karbantartó oldal a `PE
 | `RenameDialog` | személy átnevezése |
 | `MergeDialog` | személyek összevonása |
 | `PlaceMergeDialog` | helyek összevonása |
+| `PlaceEditDialog` | kétpaneles hely-szerkesztő: strukturált cím (település/utca autocomplete, házszám), típus, koordináta-forrás, lat/lon, pontossági sugár, szülő + interaktív térkép (PlaceMapPickerWidget) |
 | `ExportDialog` | export formátum és cél kiválasztása |
 | `ImageLibraryMissingDialog` | hiányzó image library root kezelése |
 | `MigrateLibraryDialog` | legacy abszolút utak migrálása relatív utakra |
@@ -807,9 +809,13 @@ A családi szolgáltatás:
 
 ### Helyszínek
 
-**Fájlok**: `app/services/place_service.py`, `app/utils/exif.py`
+**Fájlok**: `app/services/place_service.py`, `app/services/geocoding_service.py`, `app/services/geocoding/` (provider, nominatim_provider, factory), `app/utils/exif.py`, `app/ui/panels/locations_panel.py`, `app/ui/dialogs/place_edit_dialog.py`, `app/ui/widgets/address_autocomplete_edit.py`, `app/ui/widgets/place_map_picker_widget.py`, `app/workers/geocoding_worker.py`
 
 A scan EXIF GPS koordinátát olvas. Ha a képnek nincs helye, a `PlaceService` közeli meglévő helyhez kötheti, vagy anonim EXIF helyet hoz létre. A felhasználó ezeket később elnevezheti, összevonhatja vagy kézzel rendelheti képekhez.
+
+**Strukturált cím, autocomplete és interaktív térkép.** A hely a szabad nevén túl strukturált címet tárol: `settlement_name` (kötelező), `street_name`, `house_number` (opcionális), `display_name` (auto: „Balatonszemes, Bajcsy-Zsilinszky utca 12."), `coordinate_source` (`geocoded_settlement`/`geocoded_street`/`geocoded_address`/`manual_map_pin`/`exif`/`imported`) és `is_exact_coordinate`. A `PlaceService.classify_address` állapotgépe: csak település → `area`/`geocoded_settlement`/nem pontos; +utca → `area`/`geocoded_street`; +házszám → `exact`/`geocoded_address`/pontos; térképi kézi pin → `manual_map_pin`. Metódusok: `create_place_from_address`, `update_place_address`, `set_manual_coordinates`, `find_places_by_settlement`, `build_display_name`. A kereső a `display_name`/`settlement`/`street`/`house_number`/alias/`name` mezőkre is illeszt. A `PlaceEditDialog` kétpaneles: bal oldalt űrlap (`AddressAutocompleteEdit` település/utca, debounce + háttér-worker), jobb oldalt `PlaceMapPickerWidget` (Leaflet + `QWebChannel`, húzható marker, kattintásra pont, pontossági kör). A geokódolást a `GeocodingService` végzi cache-first módon: `geocoding_cache` (provider-válaszok) → `place_address_suggestions` (a felhasználó saját, offline is működő címei) → online provider. **Az online geokódolás opt-in, alapból kikapcsolva** (`geocoding/enabled` QSettings, Beállítások → Képpárosítás fül); a `NominatimProvider` (`urllib`, User-Agent + 1 req/s throttle) csak engedélyezve hívódik. Provider-hiba/offline esetén a szolgáltatás üres listával/`None`-nal degradál, a kézi koordináta-megadás mindig elérhető.
+
+**Helytípusok és hierarchia.** Minden hely `place_type` értéke `exact` (pontos hely – ház, templom, strand; ~50 m), `area` (település méretű; ~5 km) vagy `region` (nagy földrajzi egység; ~50 km). A típushoz tartozik egy `accuracy_radius_meters` (alapértéke a típusból jön, felülírható), amely a közeli-hely keresés sugarát szabja. EXIF GPS feldolgozáskor a `link_exif_gps_to_image` előbb `exact`, majd `area`, végül `region` helyet keres (`find_nearby(..., place_types=..., use_place_radius=True)`); ha egyik sincs, anonim `exact` helyet hoz létre. A `place_type IS NULL`/régi helyek a migrációban automatikusan `area` típust kapnak (`database._migrate_place_types`). A helyek a `parent_id` mezővel hierarchiába (`region → area → exact`) szervezhetők (`set_parent` ciklusvédelemmel, `list_children`/`list_descendants`). A `LocationsPanel` `QTreeWidget`-ben, szülő-gyermek fában mutatja a helyeket Típus oszloppal és ikonnal, típus-szűrővel; az „Új hely"/„Szerkesztés" a `PlaceEditDialog`-ot nyitja (név, típus, koordináta, sugár, szülő).
 
 A képnek a helyszíntől külön saját koordinátája is lehet (`Image.image_latitude`, `Image.image_longitude`). Megjelenítéskor ez az elsődleges; ha nincs, az EXIF GPS, majd a kapcsolt hely koordinátája következik. Az EXIF helper validál koordinátát, rugalmas dátumot parse-ol, és támogatja a GPS/dátum visszaírását a képfájlba.
 

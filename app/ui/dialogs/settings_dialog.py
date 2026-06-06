@@ -268,6 +268,17 @@ class SettingsDialog(QDialog):
         deol_layout.addWidget(self._deoldified_sync_check)
 
         layout.addWidget(deol_group)
+
+        geo_group = QGroupBox(t("geocoding_group"))
+        geo_layout = QVBoxLayout(geo_group)
+        self._geocoding_check = QCheckBox(t("geocoding_enable"))
+        self._geocoding_check.setChecked(
+            _qsettings().value("geocoding/enabled", False, type=bool)
+        )
+        self._geocoding_check.setToolTip(t("geocoding_enable_tip"))
+        geo_layout.addWidget(self._geocoding_check)
+        layout.addWidget(geo_group)
+
         layout.addStretch()
         return widget
 
@@ -843,6 +854,7 @@ class SettingsDialog(QDialog):
         qs.setValue("updates/notify", self._notify_check.isChecked())
         qs.setValue("deoldified/auto_pair", self._deoldified_check.isChecked())
         qs.setValue("deoldified/auto_sync", self._deoldified_sync_check.isChecked())
+        qs.setValue("geocoding/enabled", self._geocoding_check.isChecked())
         qs.setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
         )

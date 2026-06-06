@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QSize, QRect
 from PySide6.QtGui import QPixmap, QTextOption
@@ -22,9 +22,9 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStyledItemDelegate,
-    QTableWidget,
-    QTableWidgetItem,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -33,15 +33,37 @@ from app.db.database import session_scope
 from app.db.models import Place
 from app.services.place_service import (
     ANONYMOUS_GPS_PLACE_NAME,
+    PLACE_TYPE_AREA,
+    PLACE_TYPE_EXACT,
+    PLACE_TYPE_REGION,
     PlaceFilters,
     PlaceService,
 )
+from app.ui.dialogs.place_edit_dialog import PlaceEditDialog
 from app.ui.dialogs.place_merge_dialog import PlaceMergeDialog
 from app.ui.i18n import t
 from app.ui.widgets.place_gallery_widget import PlaceGalleryWidget
 from app.ui.widgets.place_map_widget import PlaceMapWidget
 
 _ROLE_ID = Qt.UserRole
+
+# Emoji prefix shown in the Type column / labels for each place type.
+_TYPE_ICON = {
+    PLACE_TYPE_EXACT: "📍",
+    PLACE_TYPE_AREA: "🏘️",
+    PLACE_TYPE_REGION: "🗺️",
+}
+_TYPE_I18N = {
+    PLACE_TYPE_EXACT: "places_type_exact",
+    PLACE_TYPE_AREA: "places_type_area",
+    PLACE_TYPE_REGION: "places_type_region",
+}
+
+
+def _type_label(place_type: str) -> str:
+    icon = _TYPE_ICON.get(place_type, "")
+    label = t(_TYPE_I18N.get(place_type, "places_type_area"))
+    return f"{icon} {label}".strip()
 
 
 class _WrappingNameDelegate(QStyledItemDelegate):
@@ -82,7 +104,7 @@ _MIN_GPS_DIFF = 5e-5
 
 
 class LocationsPanel(QWidget):
-    """List, filter, inspect, and merge reusable places."""
+    """List, filter, inspect, edit, and merge reusable places (hierarchical)."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -115,6 +137,8 @@ class LocationsPanel(QWidget):
         self._min_images = QSpinBox()
         self._min_images.setRange(0, 1_000_000)
         filters.addWidget(self._min_images)
+        self._type_filter = QComboBox()
+        filters.addWidget(self._type_filter)
         self._coord_filter = QComboBox()
         filters.addWidget(self._coord_filter)
         self._anon_only = QCheckBox()
@@ -126,21 +150,21 @@ class LocationsPanel(QWidget):
 
         splitter = QSplitter(Qt.Horizontal)
 
-        self._table = QTableWidget(0, 5)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self._table.setWordWrap(True)
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self._table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self._table.itemSelectionChanged.connect(self._on_selection_changed)
-        self._table.itemChanged.connect(self._on_table_item_changed)
-        self._name_delegate = _WrappingNameDelegate(self._table)
-        self._table.setItemDelegateForColumn(0, self._name_delegate)
-        splitter.addWidget(self._table)
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(6)
+        self._tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._tree.setWordWrap(True)
+        self._tree.setUniformRowHeights(False)
+        self._tree.setExpandsOnDoubleClick(False)
+        header = self._tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in range(1, 6):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self._tree.itemSelectionChanged.connect(self._on_selection_changed)
+        self._tree.itemChanged.connect(self._on_tree_item_changed)
+        self._name_delegate = _WrappingNameDelegate(self._tree)
+        self._tree.setItemDelegateForColumn(0, self._name_delegate)
+        splitter.addWidget(self._tree)
 
         detail_inner = QWidget()
         detail_layout = QVBoxLayout(detail_inner)
@@ -167,10 +191,12 @@ class LocationsPanel(QWidget):
         self._rename_btn.setEnabled(False)
         self._rename_btn.clicked.connect(self._start_rename)
         name_row.addWidget(self._rename_btn)
+        self._type_lbl = QLabel()
         self._coords = QLabel()
         self._image_count = QLabel()
         self._person_count_lbl = QLabel()
         form.addRow(t("places_name"), name_row)
+        form.addRow(t("places_type"), self._type_lbl)
         form.addRow(t("places_coords"), self._coords)
         form.addRow(t("places_image_count"), self._image_count)
         form.addRow(t("places_person_count"), self._person_count_lbl)
@@ -200,6 +226,13 @@ class LocationsPanel(QWidget):
 
         # Action buttons
         actions = QHBoxLayout()
+        self._new_btn = QPushButton()
+        self._new_btn.clicked.connect(self._create_place)
+        actions.addWidget(self._new_btn)
+        self._edit_btn = QPushButton()
+        self._edit_btn.setEnabled(False)
+        self._edit_btn.clicked.connect(self._edit_selected)
+        actions.addWidget(self._edit_btn)
         self._merge_btn = QPushButton()
         self._merge_btn.clicked.connect(self._merge_selected)
         actions.addWidget(self._merge_btn)
@@ -230,14 +263,20 @@ class LocationsPanel(QWidget):
         self._date_from.setPlaceholderText(t("places_filter_date_from"))
         self._date_to.setPlaceholderText(t("places_filter_date_to"))
         self._min_images.setPrefix(t("places_filter_min_images"))
+        self._type_filter.clear()
+        self._type_filter.addItem(t("places_filter_type_any"), None)
+        self._type_filter.addItem(_type_label(PLACE_TYPE_EXACT), PLACE_TYPE_EXACT)
+        self._type_filter.addItem(_type_label(PLACE_TYPE_AREA), PLACE_TYPE_AREA)
+        self._type_filter.addItem(_type_label(PLACE_TYPE_REGION), PLACE_TYPE_REGION)
         self._coord_filter.clear()
         self._coord_filter.addItem(t("places_filter_coords_any"), None)
         self._coord_filter.addItem(t("places_filter_coords_yes"), True)
         self._coord_filter.addItem(t("places_filter_coords_no"), False)
         self._anon_only.setText(t("places_filter_anon"))
         self._filter_btn.setText(t("places_filter_apply"))
-        self._table.setHorizontalHeaderLabels([
+        self._tree.setHeaderLabels([
             t("places_name"),
+            t("places_type"),
             t("places_coords"),
             t("places_image_count"),
             t("places_person_count"),
@@ -246,6 +285,8 @@ class LocationsPanel(QWidget):
         self._gallery_hdr.setText(t("places_images"))
         self._rename_btn.setText(t("places_rename_btn"))
         self._rename_btn.setToolTip(t("places_rename_tooltip"))
+        self._new_btn.setText(t("places_new_btn"))
+        self._edit_btn.setText(t("places_edit_btn"))
         self._merge_btn.setText(t("places_merge_btn"))
         self._refresh_btn.setText(t("places_refresh_btn"))
 
@@ -261,6 +302,7 @@ class LocationsPanel(QWidget):
                 person_id = int(person_text)
             except ValueError:
                 person_id = None
+        type_value = self._type_filter.currentData()
         filters = PlaceFilters(
             name=self._name_filter.text(),
             person_id=person_id,
@@ -269,90 +311,99 @@ class LocationsPanel(QWidget):
             min_images=self._min_images.value() or None,
             has_coordinates=self._coord_filter.currentData(),
             anonymous_exif_only=self._anon_only.isChecked(),
+            place_types=(type_value,) if type_value else None,
         )
         with session_scope() as session:
             summaries = PlaceService(session).list_places(filters)
 
-        self._table.setRowCount(0)
-        for row, summary in enumerate(summaries):
-            self._table.insertRow(row)
-            name = summary.name
-            if summary.is_anonymous and summary.source == "exif":
-                name = f"{ANONYMOUS_GPS_PLACE_NAME} #{summary.place_id}"
-            coords = ""
-            if summary.latitude is not None and summary.longitude is not None:
-                coords = f"{summary.latitude:.6f}, {summary.longitude:.6f}"
-            values = [
-                name,
-                coords,
-                str(summary.image_count),
-                str(summary.person_count),
-                summary.source or "",
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setData(_ROLE_ID, summary.place_id)
-                if col == 0:
-                    # Name column: editable, tooltip hints at double-click
-                    item.setFlags(
-                        Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
-                    )
-                    item.setToolTip(t("places_name_edit_tip", default="Dupla kattintás a név szerkesztéséhez"))
-                else:
-                    # Other columns: read-only
-                    item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-                self._table.setItem(row, col, item)
-        self._table.resizeRowsToContents()
+        # Build the tree from the flat summaries using parent_id. A child whose
+        # parent was filtered out is promoted to a root so nothing disappears.
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        present_ids = {s.place_id for s in summaries}
+        items: Dict[int, QTreeWidgetItem] = {}
+        # First pass: create every item.
+        for summary in summaries:
+            items[summary.place_id] = self._make_item(summary)
+        # Second pass: attach to parent or to the root.
+        for summary in summaries:
+            item = items[summary.place_id]
+            parent_id = summary.parent_id
+            if parent_id is not None and parent_id in present_ids:
+                items[parent_id].addChild(item)
+            else:
+                self._tree.addTopLevelItem(item)
+        self._tree.expandAll()
+        self._tree.blockSignals(False)
+
+    def _make_item(self, summary) -> QTreeWidgetItem:
+        name = summary.name
+        if summary.is_anonymous and summary.source == "exif":
+            name = f"{ANONYMOUS_GPS_PLACE_NAME} #{summary.place_id}"
+        coords = ""
+        if summary.latitude is not None and summary.longitude is not None:
+            coords = f"{summary.latitude:.6f}, {summary.longitude:.6f}"
+        values = [
+            name,
+            _type_label(summary.place_type),
+            coords,
+            str(summary.image_count),
+            str(summary.person_count),
+            summary.source or "",
+        ]
+        item = QTreeWidgetItem(values)
+        for col in range(6):
+            item.setData(col, _ROLE_ID, summary.place_id)
+        # Name column editable inline (matches the legacy double-click rename).
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        item.setToolTip(0, t("places_name_edit_tip", default="Dupla kattintás a név szerkesztéséhez"))
+        return item
 
     def _start_rename(self) -> None:
         """Open the inline editor for the selected place's name cell."""
-        rows = sorted({i.row() for i in self._table.selectedItems()})
-        if not rows:
-            return
-        self._table.scrollToItem(self._table.item(rows[0], 0))
-        self._table.editItem(self._table.item(rows[0], 0))
+        item = self._tree.currentItem()
+        if item is None:
+            items = self._tree.selectedItems()
+            if not items:
+                return
+            item = items[0]
+        self._tree.scrollToItem(item)
+        self._tree.editItem(item, 0)
 
     def _on_selection_changed(self) -> None:
-        rows = sorted({i.row() for i in self._table.selectedItems()})
-        if not rows:
+        items = self._tree.selectedItems()
+        if not items:
             self._current_place_id = None
             self._clear_detail()
             return
-        item = self._table.item(rows[0], 0)
-        place_id = item.data(_ROLE_ID) if item else None
+        place_id = items[0].data(0, _ROLE_ID)
         if place_id is not None:
             self._load_detail(int(place_id))
 
-    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
-        """Handle when a table item is edited by the user."""
-        # Only process changes to the name column (column 0)
-        if item.column() != 0:
+    def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        """Handle inline editing of the name column."""
+        if column != 0:
             return
 
-        place_id = item.data(_ROLE_ID)
+        place_id = item.data(0, _ROLE_ID)
         if place_id is None:
             return
 
-        new_name = item.text().strip()
+        new_name = item.text(0).strip()
 
-        # Validate that the new name is not empty
         if not new_name:
             QMessageBox.warning(self, t("empty_name_title"), t("empty_name_msg"))
-            # Restore the old value
             with session_scope() as session:
                 place = session.get(Place, place_id)
                 if place is not None:
-                    item.setText(place.name)
+                    item.setText(0, place.name)
             return
 
-        # Check if the name actually changed
         with session_scope() as session:
             place = session.get(Place, place_id)
             if place is not None and place.name == new_name:
-                # No change, nothing to do
                 return
 
-        # Save the new name to the database
         try:
             with session_scope() as session:
                 PlaceService(session).name_place(int(place_id), new_name)
@@ -362,14 +413,12 @@ class LocationsPanel(QWidget):
                 t("places_rename_title", default="Rename Place"),
                 t("places_rename_error", error=str(exc), default="Failed to rename place: {error}"),
             )
-            # Restore the old value
             with session_scope() as session:
                 place = session.get(Place, place_id)
                 if place is not None:
-                    item.setText(place.name)
+                    item.setText(0, place.name)
             return
 
-        # Reload the detail pane to show updated data if this place is currently selected
         if self._current_place_id == place_id:
             self._load_detail(int(place_id))
 
@@ -387,6 +436,8 @@ class LocationsPanel(QWidget):
             if place.is_anonymous and place.source == "exif":
                 name = f"{ANONYMOUS_GPS_PLACE_NAME} #{place.id}"
 
+            place_type = place.place_type
+            radius = place.accuracy_radius_meters
             lat = place.latitude
             lon = place.longitude
             coords = (
@@ -404,6 +455,11 @@ class LocationsPanel(QWidget):
 
         self._name.setText(name)
         self._rename_btn.setEnabled(True)
+        self._edit_btn.setEnabled(True)
+        type_text = _type_label(place_type)
+        if radius is not None:
+            type_text = f"{type_text}  (~{int(radius)} m)"
+        self._type_lbl.setText(type_text)
         self._coords.setText(coords)
         self._image_count.setText(str(image_count))
         self._person_count_lbl.setText(str(person_count))
@@ -418,6 +474,7 @@ class LocationsPanel(QWidget):
 
     def _clear_detail(self) -> None:
         self._name.clear()
+        self._type_lbl.clear()
         self._coords.clear()
         self._image_count.clear()
         self._person_count_lbl.clear()
@@ -427,6 +484,7 @@ class LocationsPanel(QWidget):
         self._map_widget.clear()
         self._gallery.clear()
         self._rename_btn.setEnabled(False)
+        self._edit_btn.setEnabled(False)
 
     def _set_thumbnail(self, path: Optional[str]) -> None:
         self._thumb.setPixmap(QPixmap())
@@ -445,6 +503,124 @@ class LocationsPanel(QWidget):
         self._thumb.setPixmap(
             pixmap.scaled(self._thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+
+    # ------------------------------------------------------------------
+    # Create / edit
+    # ------------------------------------------------------------------
+
+    def _candidate_parents(self, session, exclude_id: Optional[int]) -> List[Place]:
+        """All places eligible as a parent of ``exclude_id`` (excludes itself
+        and its descendants to prevent cycles)."""
+        svc = PlaceService(session)
+        forbidden = set()
+        if exclude_id is not None:
+            forbidden.add(exclude_id)
+            forbidden.update(d.id for d in svc.list_descendants(exclude_id))
+        places = session.query(Place).order_by(Place.name).all()
+        return [p for p in places if p.id not in forbidden]
+
+    def _create_place(self) -> None:
+        with session_scope() as session:
+            parents = self._candidate_parents(session, None)
+            dlg = PlaceEditDialog(place=None, parents=parents, parent=self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            res = dlg.result_value()
+            try:
+                svc = PlaceService(session)
+                if res.settlement_name:
+                    place = svc.create_place_from_address(
+                        res.settlement_name,
+                        res.street_name,
+                        res.house_number,
+                        latitude=res.latitude,
+                        longitude=res.longitude,
+                        place_type=res.place_type,
+                        coordinate_source=res.coordinate_source,
+                        is_exact_coordinate=res.is_exact_coordinate,
+                        accuracy_radius_meters=res.accuracy_radius_meters,
+                        parent_id=res.parent_id,
+                        name=res.name,
+                    )
+                    self._record_address(session, res)
+                else:
+                    place = svc.create_place(
+                        name=res.name,
+                        latitude=res.latitude,
+                        longitude=res.longitude,
+                        source="manual",
+                        place_type=res.place_type,
+                        accuracy_radius_meters=res.accuracy_radius_meters,
+                        parent_id=res.parent_id,
+                    )
+                new_id = place.id
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, t("place_edit_title_new"),
+                                     t("place_edit_save_error", error=str(exc)))
+                return
+        self.refresh()
+        self._load_detail(new_id)
+
+    def _record_address(self, session, res) -> None:
+        """Save the settlement/street into the offline suggestion store."""
+        if not res.settlement_name:
+            return
+        try:
+            from app.services.geocoding.factory import create_geocoding_service
+
+            create_geocoding_service(session).record_address_use(
+                res.settlement_name, res.street_name
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _edit_selected(self) -> None:
+        if self._current_place_id is None:
+            return
+        place_id = self._current_place_id
+        with session_scope() as session:
+            place = session.get(Place, place_id)
+            if place is None:
+                return
+            parents = self._candidate_parents(session, place_id)
+            dlg = PlaceEditDialog(place=place, parents=parents, parent=self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            res = dlg.result_value()
+            try:
+                svc = PlaceService(session)
+                if res.settlement_name:
+                    svc.update_place_address(
+                        place_id,
+                        res.settlement_name,
+                        res.street_name,
+                        res.house_number,
+                        latitude=res.latitude,
+                        longitude=res.longitude,
+                        place_type=res.place_type,
+                        coordinate_source=res.coordinate_source,
+                        is_exact_coordinate=res.is_exact_coordinate,
+                        accuracy_radius_meters=res.accuracy_radius_meters,
+                    )
+                    self._record_address(session, res)
+                else:
+                    if res.name and res.name != place.name:
+                        svc.name_place(place_id, res.name)
+                    svc.set_place_type(
+                        place_id,
+                        res.place_type,
+                        accuracy_radius_meters=res.accuracy_radius_meters,
+                        reset_radius_to_default=res.accuracy_radius_meters is None,
+                    )
+                    place.latitude = res.latitude
+                    place.longitude = res.longitude
+                svc.set_parent(place_id, res.parent_id)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, t("place_edit_title_edit"),
+                                     t("place_edit_save_error", error=str(exc)))
+                return
+        self.refresh()
+        self._load_detail(place_id)
 
     # ------------------------------------------------------------------
     # Thumbnail management
@@ -475,15 +651,14 @@ class LocationsPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _merge_selected(self) -> None:
-        rows = sorted({i.row() for i in self._table.selectedItems()})
-        if len(rows) < 2:
+        ids: List[int] = []
+        for item in self._tree.selectedItems():
+            pid = item.data(0, _ROLE_ID)
+            if pid is not None and int(pid) not in ids:
+                ids.append(int(pid))
+        if len(ids) < 2:
             QMessageBox.information(self, t("places_merge_title"), t("places_merge_need_two"))
             return
-        ids = []
-        for row in rows:
-            item = self._table.item(row, 0)
-            if item is not None:
-                ids.append(int(item.data(_ROLE_ID)))
 
         target_id = self._current_place_id or ids[0]
         with session_scope() as session:

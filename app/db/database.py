@@ -100,7 +100,16 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("thumbnail_is_manual",  "BOOLEAN NOT NULL DEFAULT 0"),
         ],
         "places": [
-            ("thumbnail_is_manual",  "BOOLEAN NOT NULL DEFAULT 0"),
+            ("thumbnail_is_manual",     "BOOLEAN NOT NULL DEFAULT 0"),
+            ("place_type",              "VARCHAR(16) NOT NULL DEFAULT 'area'"),
+            ("accuracy_radius_meters",  "FLOAT"),
+            ("parent_id",               "INTEGER REFERENCES places(id) ON DELETE SET NULL"),
+            ("settlement_name",         "VARCHAR(255)"),
+            ("street_name",             "VARCHAR(255)"),
+            ("house_number",            "VARCHAR(32)"),
+            ("display_name",            "VARCHAR(512)"),
+            ("coordinate_source",       "VARCHAR(32)"),
+            ("is_exact_coordinate",     "BOOLEAN NOT NULL DEFAULT 0"),
         ],
         "images": [
             ("photo_date", "VARCHAR(128)"),
@@ -138,6 +147,145 @@ def _migrate_add_columns(engine: Engine) -> None:
     _migrate_add_indexes(engine)
     _migrate_person_groups(engine)
     _migrate_collage_locations_to_places(engine)
+    _migrate_place_types(engine)
+    _migrate_geocoding_tables(engine)
+    _migrate_place_display_name(engine)
+
+
+def _migrate_geocoding_tables(engine: Engine) -> None:
+    """Create geocoding_cache and place_address_suggestions if missing."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS geocoding_cache (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_type      VARCHAR(32) NOT NULL,
+                    query_text      VARCHAR(512) NOT NULL,
+                    settlement_name VARCHAR(255),
+                    street_name     VARCHAR(255),
+                    house_number    VARCHAR(32),
+                    result_json     TEXT NOT NULL,
+                    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_geocoding_query "
+                "ON geocoding_cache(query_type, query_text)"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS place_address_suggestions (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    settlement_name VARCHAR(255) NOT NULL,
+                    street_name     VARCHAR(255),
+                    source          VARCHAR(32) NOT NULL DEFAULT 'user',
+                    last_used_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_address_suggestion "
+                "ON place_address_suggestions(settlement_name, street_name)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_address_suggestion_settlement "
+                "ON place_address_suggestions(settlement_name)"
+            )
+        )
+    log.debug("Migration: geocoding tables ensured")
+
+
+def _migrate_place_display_name(engine: Engine) -> None:
+    """Backfill display_name/coordinate_source for legacy place rows (idempotent).
+
+    Preserves existing free-text names: display_name defaults to name, and the
+    coordinate source is tagged 'imported' so legacy coordinates are not mistaken
+    for precise geocoded addresses.
+    """
+    with engine.begin() as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        if "places" not in tables:
+            return
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(places)")).fetchall()
+        }
+        if "display_name" in columns:
+            conn.execute(
+                text(
+                    "UPDATE places SET display_name = name "
+                    "WHERE display_name IS NULL OR display_name = ''"
+                )
+            )
+        if "coordinate_source" in columns:
+            # EXIF-sourced rows keep an 'exif' tag; everything else legacy → 'imported'.
+            if "source" in columns:
+                conn.execute(
+                    text(
+                        "UPDATE places SET coordinate_source = 'exif' "
+                        "WHERE coordinate_source IS NULL AND source = 'exif'"
+                    )
+                )
+            conn.execute(
+                text(
+                    "UPDATE places SET coordinate_source = 'imported' "
+                    "WHERE coordinate_source IS NULL"
+                )
+            )
+    log.debug("Migration: place display_name/coordinate_source backfilled")
+
+
+def _migrate_place_types(engine: Engine) -> None:
+    """Backfill place_type/accuracy_radius for legacy rows (idempotent).
+
+    Existing places become "area" (the column default already handles new
+    columns, but this also covers any NULL left by older partial migrations)
+    and receive the area-sized accuracy radius when none was set.
+    """
+    default_radius = {"exact": 50.0, "area": 5000.0, "region": 50000.0}
+    with engine.begin() as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        if "places" not in tables:
+            return
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(places)")).fetchall()
+        }
+        if "place_type" not in columns:
+            return
+        conn.execute(
+            text("UPDATE places SET place_type = 'area' WHERE place_type IS NULL")
+        )
+        if "accuracy_radius_meters" in columns:
+            for place_type, radius in default_radius.items():
+                conn.execute(
+                    text(
+                        "UPDATE places SET accuracy_radius_meters = :r "
+                        "WHERE accuracy_radius_meters IS NULL AND place_type = :t"
+                    ),
+                    {"r": radius, "t": place_type},
+                )
+    log.debug("Migration: place_type/accuracy_radius backfilled")
 
 
 def _migrate_add_indexes(engine: Engine) -> None:
@@ -150,6 +298,8 @@ def _migrate_add_indexes(engine: Engine) -> None:
         ),
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",
+        "CREATE INDEX IF NOT EXISTS ix_places_type ON places(place_type)",
+        "CREATE INDEX IF NOT EXISTS ix_places_parent ON places(parent_id)",
         (
             "CREATE INDEX IF NOT EXISTS ix_relationship_type_a "
             "ON relationships(relationship_type, person_a_id)"

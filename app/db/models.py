@@ -132,6 +132,38 @@ class Place(Base):
     # True when the user manually chose this thumbnail (auto-refresh skips it)
     thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Granularity of the place: "exact" (a few metres — a house, church, beach),
+    # "area" (town/settlement sized) or "region" (large geographic unit).
+    # Existing rows migrate to "area" (see _migrate_add_columns default).
+    place_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="area", index=True
+    )
+    # Radius within which a GPS coordinate is considered to belong to this
+    # place. Defaults derive from place_type when not set explicitly.
+    accuracy_radius_meters: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Self-referential hierarchy: an "exact" place can sit under an "area",
+    # an "area" under a "region". NULL means a top-level place.
+    parent_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("places.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Structured address. settlement_name is required for new addresses (UI
+    # enforced); street_name / house_number are optional. Legacy rows leave
+    # these NULL and keep their free-text `name`.
+    settlement_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    street_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    house_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # Auto-built human label ("Balatonszemes, Bajcsy-Zsilinszky utca 12."). For
+    # legacy rows this equals `name` (see _migrate_place_display_name).
+    display_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, index=True)
+    # Where the coordinate came from: geocoded_settlement / geocoded_street /
+    # geocoded_address / manual_map_pin / exif / imported.
+    coordinate_source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # True when the coordinate marks a concrete spot (a precise address or a
+    # hand-placed pin); False for a settlement centre or a broad area.
+    is_exact_coordinate: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # EXIF-derived records start as anonymous, then become normal named places
     # once the user names them or merges them into another place.
     is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -146,9 +178,15 @@ class Place(Base):
     aliases: Mapped[List["PlaceAlias"]] = relationship(
         "PlaceAlias", back_populates="place", cascade="all, delete-orphan"
     )
+    parent: Mapped[Optional["Place"]] = relationship(
+        "Place", remote_side=[id], back_populates="children"
+    )
+    children: Mapped[List["Place"]] = relationship(
+        "Place", back_populates="parent", overlaps="parent"
+    )
 
     def __repr__(self) -> str:
-        return f"<Place id={self.id} name={self.name!r}>"
+        return f"<Place id={self.id} name={self.name!r} type={self.place_type!r}>"
 
 
 class PlaceAlias(Base):
@@ -168,6 +206,57 @@ class PlaceAlias(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     place: Mapped["Place"] = relationship("Place", back_populates="aliases")
+
+
+class GeocodingCache(Base):
+    """Cached geocoding provider responses, keyed by query type + text.
+
+    Stores both autocomplete suggestion lists and single geocode results as
+    ``result_json``; the service decodes it per ``query_type``. Acts as the
+    offline layer so a repeated lookup never re-hits the network.
+    """
+
+    __tablename__ = "geocoding_cache"
+    __table_args__ = (
+        UniqueConstraint("query_type", "query_text", name="ux_geocoding_query"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # "settlement" | "street" | "address" | "reverse"
+    query_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Normalized lookup key (accent/case-folded query).
+    query_text: Mapped[str] = mapped_column(String(512), nullable=False)
+    settlement_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    street_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    house_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PlaceAddressSuggestion(Base):
+    """Local autocomplete source built from addresses the user has used.
+
+    Survives offline: settlement/street pairs entered or geocoded before are
+    suggested again without any network call. A NULL street_name means a
+    "settlement only" entry.
+    """
+
+    __tablename__ = "place_address_suggestions"
+    __table_args__ = (
+        UniqueConstraint(
+            "settlement_name", "street_name", name="ux_address_suggestion"
+        ),
+        Index("ix_address_suggestion_settlement", "settlement_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    settlement_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    street_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # "user" (typed) | "geocoded" (came from a provider result)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 # ---------------------------------------------------------------------------
