@@ -65,9 +65,12 @@ _ZOOM_POPUP_SIZE = 220
 def _crop_pixmap(path: Optional[str]) -> Optional[QPixmap]:
     """Load a face crop scaled to the row thumbnail size, or None."""
     if path and Path(path).exists():
-        return QPixmap(path).scaled(
-            _CROP_SIZE, _CROP_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        from app.utils.image_utils import load_pixmap_exif
+        pix = load_pixmap_exif(path)
+        if not pix.isNull():
+            return pix.scaled(
+                _CROP_SIZE, _CROP_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
     return None
 
 
@@ -93,7 +96,8 @@ def _get_zoom_popup() -> QLabel:
 def _show_zoom_popup(crop_path: Optional[str], global_pos) -> None:
     popup = _get_zoom_popup()
     if crop_path and Path(crop_path).exists():
-        pix = QPixmap(crop_path).scaled(
+        from app.utils.image_utils import load_pixmap_exif
+        pix = load_pixmap_exif(crop_path).scaled(
             _ZOOM_POPUP_SIZE, _ZOOM_POPUP_SIZE,
             Qt.KeepAspectRatio, Qt.SmoothTransformation,
         )

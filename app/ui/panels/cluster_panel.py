@@ -40,6 +40,7 @@ def _load_crop_pixmap(
         return None
     QPixmapCache.remove(crop_path)
     reader = QImageReader(crop_path)
+    reader.setAutoTransform(True)
     image = reader.read()
     if image.isNull():
         log.warning(

@@ -361,7 +361,8 @@ class FamilySearchPanel(QWidget):
     def _load_thumb(self, file_path: str) -> Optional[QPixmap]:
         if not Path(file_path).exists():
             return None
-        pixmap = QPixmap(file_path)
+        from app.utils.image_utils import load_pixmap_exif
+        pixmap = load_pixmap_exif(file_path)
         if pixmap.isNull():
             return None
         return pixmap.scaled(

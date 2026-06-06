@@ -83,9 +83,9 @@ class DriveThumbRunnable(QRunnable):
 
         # Generate thumbnail from the local mirror file.
         import cv2
-        from app.utils.image_utils import load_image_bgr
+        from app.utils.image_utils import load_image_bgr_normalized
 
-        img_bgr = load_image_bgr(str(local))
+        img_bgr = load_image_bgr_normalized(str(local))
         if img_bgr is None:
             self.signals.failed.emit(self._key)
             return

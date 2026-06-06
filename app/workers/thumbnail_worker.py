@@ -52,9 +52,9 @@ class ThumbnailRunnable(QRunnable):
     def _generate(self) -> None:
         import cv2
 
-        from app.utils.image_utils import load_image_bgr
+        from app.utils.image_utils import load_image_bgr_normalized
 
-        img_bgr = load_image_bgr(self._path)
+        img_bgr = load_image_bgr_normalized(self._path)
         if img_bgr is None:
             log.warning("Thumbnail: cannot load %s", self._path)
             self.signals.failed.emit(self._key)

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Face
 from app.detectors.base import Detection
-from app.utils.image_utils import load_image_bgr, save_face_crop
+from app.utils.image_utils import load_image_bgr_normalized, save_face_crop
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def save_crop_for_face(
         if face.image is None:
             log.warning("Cannot save crop for face_id=%s: image relationship missing", face.id)
             return None
-        img_bgr = load_image_bgr(face.image.file_path)
+        img_bgr = load_image_bgr_normalized(face.image.file_path)
         if img_bgr is None:
             log.warning(
                 "Cannot save crop for face_id=%s: image cannot be loaded: %s",
@@ -126,7 +126,7 @@ def ensure_unique_face_crops(
     for face in to_repair.values():
         if face.image_id not in image_cache:
             image_cache[face.image_id] = (
-                load_image_bgr(face.image.file_path) if face.image else None
+                load_image_bgr_normalized(face.image.file_path) if face.image else None
             )
         crop_path = save_crop_for_face(
             face,

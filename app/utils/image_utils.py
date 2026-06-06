@@ -275,8 +275,38 @@ def save_image_bgr(path, img: np.ndarray, params: Optional[list] = None) -> bool
         return False
 
 
+def load_pixmap_exif(path: str):
+    """Load an image into a QPixmap with EXIF orientation applied.
+
+    Uses ``QImageReader`` with ``autoTransform`` enabled so that images shot
+    in portrait mode (rotation tags 3/6/8) appear upright rather than on
+    their side.  Falls back to a null QPixmap on failure.
+
+    Args:
+        path: Absolute path to the image file.
+
+    Returns:
+        A :class:`PySide6.QtGui.QPixmap` — may be null if the file is
+        unreadable.  Check with ``pixmap.isNull()``.
+    """
+    try:
+        from PySide6.QtGui import QImageReader, QPixmap
+
+        reader = QImageReader(path)
+        reader.setAutoTransform(True)
+        img = reader.read()
+        if img.isNull():
+            log.debug("QImageReader failed for %s: %s", path, reader.errorString())
+            return QPixmap()
+        return QPixmap.fromImage(img)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("load_pixmap_exif failed for %s: %s", path, exc)
+        from PySide6.QtGui import QPixmap
+        return QPixmap()
+
+
 def qt_pixmap_from_path(path: str, max_size: Tuple[int, int] = (400, 400)):
-    """Load an image and return a scaled QPixmap.
+    """Load an image and return a scaled QPixmap with EXIF orientation applied.
 
     Keeps aspect ratio; fits within *max_size*.
 
@@ -288,10 +318,9 @@ def qt_pixmap_from_path(path: str, max_size: Tuple[int, int] = (400, 400)):
         :class:`PySide6.QtGui.QPixmap` or ``None`` if loading fails.
     """
     try:
-        from PySide6.QtGui import QPixmap
         from PySide6.QtCore import Qt
 
-        pixmap = QPixmap(path)
+        pixmap = load_pixmap_exif(path)
         if pixmap.isNull():
             return None
         return pixmap.scaled(

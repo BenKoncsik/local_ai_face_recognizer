@@ -125,7 +125,8 @@ class _FullSizeDialog(QDialog):
         label.setToolTip(t("places_gallery_click_to_close"))
         label.clicked.connect(self.accept)
 
-        pix = QPixmap(file_path)
+        from app.utils.image_utils import load_pixmap_exif
+        pix = load_pixmap_exif(file_path)
         if not pix.isNull():
             pix = pix.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         label.setPixmap(pix)
@@ -229,7 +230,8 @@ class PlaceGalleryWidget(QWidget):
         self._load_preview(path)
 
     def _load_preview(self, path: str) -> None:
-        pix = QPixmap(path)
+        from app.utils.image_utils import load_pixmap_exif
+        pix = load_pixmap_exif(path)
         if pix.isNull():
             self._clear_preview()
             return

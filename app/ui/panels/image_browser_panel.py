@@ -2027,7 +2027,7 @@ class ImageBrowserPanel(QWidget):
         self, show_colorized: bool, *, reset_zoom: bool
     ) -> None:
         """Display one side of the pair, with the compare divider off."""
-        from app.utils.image_utils import load_image_bgr
+        from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr
         from app.services.image_library_service import resolve_image_path
 
         if show_colorized:
@@ -2076,7 +2076,7 @@ class ImageBrowserPanel(QWidget):
         """Load and cache both sides of the pair, color resized to B&W shape."""
         if self._deol_bw_bgr is not None and self._deol_color_bgr is not None:
             return True
-        from app.utils.image_utils import load_image_bgr
+        from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr
 
         bw_path = self._deol_bw_path()
         bw = load_image_bgr(bw_path) if bw_path else None
@@ -2823,7 +2823,7 @@ class ImageBrowserPanel(QWidget):
         self._filename_label.setText(p.name)
         self._load_exif_suggestion(self._current_path)
 
-        from app.utils.image_utils import load_image_bgr
+        from app.utils.image_utils import load_image_bgr_normalized
         display_path = (
             self._deol_pair_color_path
             if (self._deol_viewing_color and self._deol_pair_color_path)
@@ -2847,7 +2847,7 @@ class ImageBrowserPanel(QWidget):
             QThreadPool.globalInstance().start(fetcher)
             return
 
-        img_bgr = load_image_bgr(display_path)
+        img_bgr = load_image_bgr_normalized(display_path)
         if img_bgr is None:
             self._orig_img_bgr = None
             self._full_pixmap = None
@@ -3347,12 +3347,12 @@ class ImageBrowserPanel(QWidget):
                 face_debug_state,
                 save_crop_for_face,
             )
-            from app.utils.image_utils import load_image_bgr
+            from app.utils.image_utils import load_image_bgr_normalized
 
             face = session.get(Face, face_id)
             if face is None or face.image is None:
                 return
-            img_bgr = load_image_bgr(face.image.file_path)
+            img_bgr = load_image_bgr_normalized(face.image.file_path)
             if img_bgr is None:
                 return
             detection = Detection(x=x, y=y, w=w, h=h, confidence=1.0).clamp(

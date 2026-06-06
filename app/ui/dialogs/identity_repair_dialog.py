@@ -138,7 +138,8 @@ class IdentityRepairDialog(QDialog):
         lbl.setFixedSize(_THUMB_PX, _THUMB_PX)
         lbl.setAlignment(Qt.AlignCenter)
         if crop_path:
-            pix = QPixmap(crop_path)
+            from app.utils.image_utils import load_pixmap_exif
+            pix = load_pixmap_exif(crop_path)
             if not pix.isNull():
                 lbl.setPixmap(
                     pix.scaled(

@@ -2231,7 +2231,7 @@ class MainWindow(QMainWindow):
         """Save a manually marked face from the face-recognition preview."""
         from app.db.models import Image
         from app.detectors.base import Detection
-        from app.utils.image_utils import load_image_bgr, save_face_crop
+        from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr, save_face_crop
 
         log.debug(
             "face create: image_id=%d bbox=(%d,%d,%d,%d)", image_id, x, y, w, h
@@ -2333,12 +2333,12 @@ class MainWindow(QMainWindow):
                 face_debug_state,
                 save_crop_for_face,
             )
-            from app.utils.image_utils import load_image_bgr
+            from app.utils.image_utils import load_image_bgr_normalized
 
             face = session.get(Face, face_id)
             if face is None or face.image is None:
                 return
-            img_bgr = load_image_bgr(face.image.file_path)
+            img_bgr = load_image_bgr_normalized(face.image.file_path)
             if img_bgr is None:
                 return
 

@@ -126,7 +126,8 @@ class _ThumbnailCache:
             if not os.path.isfile(match.image_path):
                 log.warning("Overlap preview: missing %s", match.image_path)
                 return None
-            full = QPixmap(match.image_path)
+            from app.utils.image_utils import load_pixmap_exif
+            full = load_pixmap_exif(match.image_path)
             if full.isNull():
                 log.warning("Overlap preview: cannot load %s", match.image_path)
                 return None

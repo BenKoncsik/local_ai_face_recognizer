@@ -106,7 +106,8 @@ class _FaceThumb(QLabel):
         )
         pix = None
         if crop_path and Path(crop_path).exists():
-            loaded = QPixmap(crop_path)
+            from app.utils.image_utils import load_pixmap_exif
+            loaded = load_pixmap_exif(crop_path)
             if not loaded.isNull():
                 pix = loaded.scaled(
                     size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation
@@ -513,7 +514,8 @@ class PersonsPanel(QWidget):
         if not path or not Path(path).exists():
             self._thumb.setText(t("persons_no_thumbnail"))
             return
-        pixmap = QPixmap(path)
+        from app.utils.image_utils import load_pixmap_exif
+        pixmap = load_pixmap_exif(path)
         if pixmap.isNull():
             self._thumb.setText(t("persons_no_thumbnail"))
             return

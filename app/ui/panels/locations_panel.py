@@ -612,7 +612,8 @@ class LocationsPanel(QWidget):
         if not _Path(path).exists():
             self._thumb.setText(t("places_no_thumbnail"))
             return
-        pixmap = QPixmap(path)
+        from app.utils.image_utils import load_pixmap_exif
+        pixmap = load_pixmap_exif(path)
         if pixmap.isNull():
             self._thumb.setText(t("places_no_thumbnail"))
             return

@@ -108,9 +108,9 @@ def _build_annotated_pixmap(
     other_bboxes: Optional[List[Tuple[int, int, int, int]]] = None,
 ) -> Optional[QPixmap]:
     """Load *image_path*, draw bboxes, return QPixmap or None on failure."""
-    from app.utils.image_utils import load_image_bgr
+    from app.utils.image_utils import load_image_bgr_normalized
 
-    img = load_image_bgr(image_path)
+    img = load_image_bgr_normalized(image_path)
     if img is None:
         log.warning("FullImageDialog: cannot load %r", image_path)
         return None

@@ -919,8 +919,8 @@ class PreviewPanel(QWidget):
         self._current_image_path = img_path
         self._current_image_id = face.image.id
 
-        from app.utils.image_utils import load_image_bgr
-        img_bgr = load_image_bgr(img_path)
+        from app.utils.image_utils import load_image_bgr_normalized
+        img_bgr = load_image_bgr_normalized(img_path)
         if img_bgr is None:
             # If the image was already loaded for this same path, reuse the
             # cached BGR buffer so manual annotations still appear even when
