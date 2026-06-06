@@ -22,8 +22,14 @@ from typing import Optional
 
 # ── Root person registry ──────────────────────────────────────────────────────
 
+# The four root persons of the family (siblings). Each gets its own initial
+# letter rather than a T-sibling code, per the specification. Names use the
+# same short/given form as the examples (Cikky, not Pósa Anna Mária).
 DEFAULT_ROOT_NAMES: dict[str, str] = {
     "C": "Cikky",
+    "G": "Gábor",
+    "J": "Jerne",
+    "I": "Ildi",
 }
 
 # ── Regex ─────────────────────────────────────────────────────────────────────
@@ -70,6 +76,35 @@ class ExtendedCodeInfo:
 
 # ── Low-level parsing ─────────────────────────────────────────────────────────
 
+def _path_is_valid(path_digits: tuple[int, ...]) -> bool:
+    """Validate a descendant/spouse digit path against the spec's 0-semantics.
+
+    The first digit is the root-person marker (0) or an nth-child index (1-9).
+    Afterwards a 0 marks the spouse of the preceding person, and a 1-9 after a
+    spouse-0 is that spouse's child from a previous relationship (stepchild).
+    Two 0s in a row away from the root marker (spouse of a spouse) and a child
+    index hung directly off the root marker (e.g. C08) are invalid.
+    """
+    prev = ""  # "" | "rootmarker" | "person" | "spouse"
+    for i, digit in enumerate(path_digits):
+        if i == 0:
+            prev = "rootmarker" if digit == 0 else "person"
+            continue
+        if prev == "rootmarker":
+            # Only a spouse (0) may follow the bare root person (C00); a child
+            # index attaches directly to the root (C8), never as C08.
+            if digit != 0:
+                return False
+            prev = "spouse"
+        elif prev == "spouse":
+            if digit == 0:
+                return False  # spouse of a spouse
+            prev = "person"   # stepchild — now a person in their own right
+        else:  # prev == "person"
+            prev = "spouse" if digit == 0 else "person"
+    return True
+
+
 def _detect_stepchild(path_digits: tuple[int, ...]) -> bool:
     """True when the last path digit comes right after a non-initial spouse-zero."""
     n = len(path_digits)
@@ -99,6 +134,13 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
     suffix_str = m.group(3) or ""
 
     path_digits = tuple(int(c) for c in path_str)
+
+    if not _path_is_valid(path_digits):
+        raise ValueError(
+            f"Érvénytelen kód '{code}': a számkód nem követi a 0-szabályokat "
+            "(0 = kiinduló személy vagy házastárs; házastárs után 1-9 = hozott "
+            "gyermek; két 0 egymás után nem megengedett)."
+        )
 
     if suffix_str and not path_digits:
         raise ValueError(

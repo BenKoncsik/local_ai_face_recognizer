@@ -124,6 +124,26 @@ class TestParseExtendedCode:
         with pytest.raises(ValueError):
             parse_extended_code("C0F3")
 
+    def test_invalid_child_off_root_marker(self):
+        # C08: a child index cannot hang directly off the bare root marker.
+        with pytest.raises(ValueError):
+            parse_extended_code("C08")
+
+    def test_invalid_spouse_of_spouse(self):
+        # C800: two 0s in a row away from the root marker.
+        with pytest.raises(ValueError):
+            parse_extended_code("C800")
+
+    def test_valid_spouse_of_root(self):
+        info = parse_extended_code("C00")
+        assert info.path_digits == (0, 0)
+
+    def test_valid_stepchild_via_spouse(self):
+        # C805 = C8's spouse (C80)'s 5th child from a previous relationship.
+        info = parse_extended_code("C805")
+        assert info.path_digits == (8, 0, 5)
+        assert info.is_stepchild
+
     def test_invalid_empty(self):
         with pytest.raises(ValueError):
             validate_extended_code("")
@@ -325,6 +345,34 @@ class TestValidateExtendedCode:
 
     def test_lowercase_normalised(self):
         assert validate_extended_code("c0f1") == "C0F1"
+
+
+# ── Default root persons (C, G, J, I) ─────────────────────────────────────────
+
+class TestDefaultRootPersons:
+    def test_all_four_roots_registered(self):
+        assert set("CGJI").issubset(DEFAULT_ROOT_NAMES)
+
+    def test_cikky(self):
+        assert describe_family_code("C0") == "Cikky"
+
+    def test_gabor(self):
+        assert describe_family_code("G0") == "Gábor"
+
+    def test_jerne(self):
+        assert describe_family_code("J0") == "Jerne"
+
+    def test_ildi(self):
+        assert describe_family_code("I0") == "Ildi"
+
+    def test_root_descendant(self):
+        assert describe_family_code("G1") == "Gábor 1. gyermeke"
+
+    def test_root_ancestor(self):
+        assert describe_family_code("I0F1") == "Ildi apja"
+
+    def test_root_spouse(self):
+        assert describe_family_code("J00") == "Jerne házastársa"
 
 
 # ── Custom root names ─────────────────────────────────────────────────────────

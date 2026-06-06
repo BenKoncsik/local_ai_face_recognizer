@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image, Person, Place, Relationship
+from app.services.family_code_interpreter import validate_extended_code
 
 REL_PARENT_CHILD = "ParentChild"
 REL_SPOUSE = "Spouse"
@@ -19,6 +20,10 @@ REL_SPOUSE = "Spouse"
 RelationshipFilter = Literal["any", "spouse", "parent", "child", "sibling"]
 ImageSearchMode = Literal["both", "exact"]
 
+# Simple descendant/spouse codes (C, C0, C8, C85, C80): one root letter, child
+# indexes, optional trailing spouse 0. Used by parse_family_code to decide
+# whether a code has a simple descendant-tree derivation (extended F/T/B codes
+# do not). Validation itself lives in the family_code_interpreter.
 _FAMILY_CODE_RE = re.compile(r"^[A-Z](?:0|[1-9]+0?)?$")
 
 
@@ -76,24 +81,35 @@ def normalize_family_code(value: Optional[str]) -> Optional[str]:
 def validate_family_code(value: Optional[str]) -> Optional[str]:
     """Validate and canonicalise a FamilyCode.
 
-    Accepted examples: C, C0, C8, C85, C851, C80.  A trailing 0 marks a
-    spouse; other path digits must be child indexes 1-9.
+    Supports the full family relationship grammar:
+      - simple descendant/spouse codes: C, C0, C8, C85, C80 (trailing 0 = spouse);
+      - ancestors (F): C0F1, C0F11, C00F2, ...;
+      - siblings / collateral relatives (T): C00T1, C00T11, C810T4, ...;
+      - friends / acquaintances (B): C81B;
+      - shared-friend multi-codes: ``C81B,C82B`` / ``C81B C82B``;
+      - range notation: ``C[1-9]B``.
+
+    Extended codes are delegated to validate_extended_code, which owns the
+    full grammar. Returns None for an empty value; raises ValueError otherwise.
     """
     code = normalize_family_code(value)
     if code is None:
         return None
-    if not _FAMILY_CODE_RE.fullmatch(code):
-        raise ValueError(
-            "Invalid family code. Use one root letter followed by child indexes 1-9; "
-            "a single trailing 0 may mark a spouse (for example C85 or C80)."
-        )
-    return code
+    # The interpreter owns the full grammar (descendants, spouse-0, stepchild,
+    # ancestors F, siblings T, friends B, multi-codes and ranges) including the
+    # structural 0-rules, so all validation is delegated to it.
+    return validate_extended_code(code)
 
 
 def parse_family_code(value: Optional[str]) -> Optional[FamilyCodeInfo]:
     """Parse a FamilyCode into derived relationship hints."""
     code = validate_family_code(value)
     if code is None:
+        return None
+    # Extended codes (F/T/B suffixes, multi-codes, ranges) describe ancestors,
+    # collateral relatives or friends — they have no simple descendant-tree
+    # derivation, so the parent/spouse/sibling helpers do not apply.
+    if not _FAMILY_CODE_RE.fullmatch(code):
         return None
 
     root = code[0]
@@ -164,6 +180,11 @@ class FamilyService:
         code = validate_family_code(family_code)
         if code is None:
             return None
+        # Friend/acquaintance codes (B) are relational markers, not unique
+        # identities — several different external people may share e.g. "C81B".
+        # Only the actual family identity codes are enforced as unique.
+        if "B" in code:
+            return code
         q = self._session.query(Person).filter(Person.family_code == code)
         if current_person_id is not None:
             q = q.filter(Person.id != current_person_id)

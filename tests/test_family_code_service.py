@@ -51,9 +51,47 @@ def test_family_code_examples_are_parsed():
 
 
 def test_invalid_family_code_is_rejected():
-    for code in ["8C", "C08", "C805", "C800", "CC8", "C-8"]:
+    # C08 = child hung off the bare root marker; C800 = spouse of a spouse.
+    for code in ["8C", "C08", "C800", "CC8", "C-8"]:
         with pytest.raises(ValueError):
             validate_family_code(code)
+
+
+def test_spec_defined_simple_codes_are_accepted():
+    # Relationships defined in the spec that the old strict regex rejected.
+    assert validate_family_code("C00") == "C00"    # spouse of the root person
+    assert validate_family_code("C2201") == "C2201"  # spouse's child (stepchild)
+    assert validate_family_code("C805") == "C805"    # C8's stepchild via spouse C80
+    assert validate_family_code("C810") == "C810"    # spouse of a grandchild
+
+
+def test_extended_family_codes_are_accepted():
+    # Ancestors (F), siblings (T), friends (B), multi-codes and ranges must all
+    # be accepted and canonicalised, not rejected.
+    assert validate_family_code("C81B") == "C81B"
+    assert validate_family_code("c81b") == "C81B"
+    assert validate_family_code("C0F1") == "C0F1"
+    assert validate_family_code("C0F22") == "C0F22"
+    assert validate_family_code("C00T1") == "C00T1"
+    assert validate_family_code("C810T4") == "C810T4"
+    assert validate_family_code("C[1-9]B") == "C[1-9]B"
+    assert "C81B" in validate_family_code("C81B,C82B")
+    assert "C82B" in validate_family_code("C81B,C82B")
+
+
+def test_invalid_extended_family_codes_are_rejected():
+    for code in ["C0F3", "C81B1", "CF1", "C00T0"]:
+        with pytest.raises(ValueError):
+            validate_family_code(code)
+
+
+def test_extended_codes_have_no_simple_tree_derivation():
+    # parse_family_code returns None for extended codes (no parent/spouse tree).
+    assert parse_family_code("C81B") is None
+    assert parse_family_code("C0F1") is None
+    assert parse_family_code("C00T1") is None
+    # Simple codes still parse as before.
+    assert parse_family_code("C85") is not None
 
 
 def test_duplicate_family_code_is_rejected(db):
@@ -71,6 +109,26 @@ def test_service_reports_duplicate_family_code(db):
     with session_scope() as session:
         with pytest.raises(ValueError):
             FamilyService(session).ensure_unique_family_code("c8")
+
+
+def test_friend_codes_are_not_unique(db):
+    # The same B (friend) code may be assigned to several different people.
+    with session_scope() as session:
+        session.add(Person(name="Friend A", is_auto_named=False, family_code="C81B"))
+
+    with session_scope() as session:
+        svc = FamilyService(session)
+        # Does not raise, even though C81B already exists.
+        assert svc.ensure_unique_family_code("C81B") == "C81B"
+
+
+def test_identity_codes_remain_unique(db):
+    with session_scope() as session:
+        session.add(Person(name="Matyi", is_auto_named=False, family_code="C81"))
+
+    with session_scope() as session:
+        with pytest.raises(ValueError):
+            FamilyService(session).ensure_unique_family_code("C81")
 
 
 def test_family_code_relationships_are_derived(db):

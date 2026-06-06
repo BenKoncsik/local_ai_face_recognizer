@@ -238,10 +238,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "family_code":        {"en": "Family code:", "hu": "Családi azonosító:"},
     "example_family_code": {"en": "e.g. C85", "hu": "pl. C85"},
     "family_code_help": {
-        "en": "Example: C85 = Cikky's 8th child's 5th child, "
-              "C80 = spouse of Cikky's 8th child.",
-        "hu": "Példa: C85 = Cikky 8. gyerekének 5. gyereke, "
-              "C80 = Cikky 8. gyerekének házastársa.",
+        "en": "Examples: C85 = Cikky's 8th child's 5th child, "
+              "C80 = spouse of Cikky's 8th child, C0F1 = Cikky's father, "
+              "C00T1 = spouse's 1st sibling, C81B = friend of C81.",
+        "hu": "Példák: C85 = Cikky 8. gyerekének 5. gyereke, "
+              "C80 = Cikky 8. gyerekének házastársa, C0F1 = Cikky apja, "
+              "C00T1 = házastárs 1. testvére, C81B = C81 barátja/ismerőse.",
     },
     "family_code_invalid_title": {
         "en": "Invalid family code",
