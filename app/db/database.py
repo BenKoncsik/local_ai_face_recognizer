@@ -292,9 +292,18 @@ def _migrate_add_indexes(engine: Engine) -> None:
     """Create indexes used by person/image and family queries."""
     statements = [
         "CREATE INDEX IF NOT EXISTS ix_persons_gender ON persons(gender)",
+        # Friend/acquaintance codes (containing "B") are relational markers, not
+        # unique identities, so they are excluded from the uniqueness rule.
+        # Older databases may have an unconditional unique index on family_code
+        # (from the column-level unique=True) or a NOT NULL-only partial index;
+        # drop both and recreate them with the friend-aware definitions.
+        "DROP INDEX IF EXISTS ix_persons_family_code",
+        "CREATE INDEX IF NOT EXISTS ix_persons_family_code ON persons(family_code)",
+        "DROP INDEX IF EXISTS ux_persons_family_code",
         (
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_family_code "
-            "ON persons(family_code) WHERE family_code IS NOT NULL"
+            "ON persons(family_code) "
+            "WHERE family_code IS NOT NULL AND family_code NOT LIKE '%B%'"
         ),
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",

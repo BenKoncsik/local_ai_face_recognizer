@@ -65,6 +65,12 @@ def test_spec_defined_simple_codes_are_accepted():
     assert validate_family_code("C810") == "C810"    # spouse of a grandchild
 
 
+def test_range_friend_code_is_valid():
+    # A range of consecutive family members sharing one acquaintance.
+    assert validate_family_code("C[81-86]B") == "C[81-86]B"
+    assert validate_family_code("C[1-9]B") == "C[1-9]B"
+
+
 def test_extended_family_codes_are_accepted():
     # Ancestors (F), siblings (T), friends (B), multi-codes and ranges must all
     # be accepted and canonicalised, not rejected.
@@ -120,6 +126,47 @@ def test_friend_codes_are_not_unique(db):
         svc = FamilyService(session)
         # Does not raise, even though C81B already exists.
         assert svc.ensure_unique_family_code("C81B") == "C81B"
+
+
+def test_friend_codes_can_be_duplicated_at_db_level(db):
+    # The DB-level partial unique index must NOT block duplicate friend codes.
+    with session_scope() as session:
+        session.add(Person(name="Friend A", is_auto_named=False, family_code="C81B"))
+        session.add(Person(name="Friend B", is_auto_named=False, family_code="C81B"))
+        session.add(Person(name="Shared", is_auto_named=False, family_code="C[81-86]B"))
+        session.add(Person(name="Shared2", is_auto_named=False, family_code="C[81-86]B"))
+
+
+def test_identity_codes_are_unique_at_db_level(db):
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError):
+        with session_scope() as session:
+            session.add(Person(name="A", is_auto_named=False, family_code="C81"))
+            session.add(Person(name="B", is_auto_named=False, family_code="C81"))
+
+
+def test_migration_converts_legacy_unconditional_unique_index(tmp_path):
+    # Legacy databases had an unconditional unique index on family_code, which
+    # wrongly blocked duplicate friend codes. init_db must convert it.
+    import app.db.database as db_module
+    from app.db.database import init_db, session_scope
+
+    db_path = tmp_path / "legacy_idx.db"
+    init_db(db_path)
+    db_module._engine = None  # force a clean re-open on the next init_db
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX IF EXISTS ix_persons_family_code")
+        conn.execute("DROP INDEX IF EXISTS ux_persons_family_code")
+        conn.execute(
+            "CREATE UNIQUE INDEX ix_persons_family_code ON persons(family_code)"
+        )
+
+    init_db(db_path)  # re-run migrations
+    with session_scope() as session:
+        session.add(Person(name="F1", is_auto_named=False, family_code="C81B"))
+        session.add(Person(name="F2", is_auto_named=False, family_code="C81B"))
 
 
 def test_identity_codes_remain_unique(db):

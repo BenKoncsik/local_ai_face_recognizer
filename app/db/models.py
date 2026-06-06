@@ -287,9 +287,14 @@ class Person(Base):
     # True when the user manually chose this thumbnail (auto-refresh skips it)
     thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Structured personal data
+    # Structured personal data.
+    # Uniqueness is NOT enforced at the column level: friend/acquaintance codes
+    # (those containing "B") are relational markers that several people may
+    # share. A partial unique index (ux_persons_family_code, created in
+    # _migrate_add_indexes) enforces uniqueness only for identity codes, and
+    # FamilyService.ensure_unique_family_code mirrors this at the program level.
     family_code: Mapped[Optional[str]] = mapped_column(
-        String(64), unique=True, nullable=True, index=True
+        String(64), nullable=True, index=True
     )
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
