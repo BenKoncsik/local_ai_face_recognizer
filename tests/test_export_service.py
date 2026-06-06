@@ -536,3 +536,174 @@ def test_export_html_creates_empty_map_page_without_gps(db, tmp_path):
 
     assert json.loads((out / "map-data.json").read_text(encoding="utf-8")) == []
     assert "Nincs GPS-koordinátával rendelkező kép" in (out / "map.js").read_text(encoding="utf-8")
+
+
+def test_export_html_links_deoldified_pair_with_compare_slider(db, tmp_path):
+    """An exported image with a deoldified counterpart gets a bw/color pair."""
+    bw_dir = tmp_path / "bw"
+    color_dir = tmp_path / "color"
+    bw_dir.mkdir()
+    color_dir.mkdir()
+    bw_path = bw_dir / "portrait.jpg"
+    color_path = color_dir / "portrait-deoldified (artistic).jpg"
+    thumb_path = bw_dir / "thumb.jpg"
+
+    bw = np.zeros((200, 300, 3), dtype=np.uint8)
+    bw[:, :] = (90, 90, 90)
+    color = np.zeros((200, 300, 3), dtype=np.uint8)
+    color[:, :] = (20, 120, 200)
+    thumb = np.zeros((64, 64, 3), dtype=np.uint8)
+    assert save_image_bgr(bw_path, bw)
+    assert save_image_bgr(color_path, color)
+    assert save_image_bgr(thumb_path, thumb)
+
+    with session_scope() as session:
+        person = Person(name="Anna", is_auto_named=False)
+        session.add(person)
+        session.flush()
+
+        bw_img = Image(
+            file_path=str(bw_path),
+            file_hash="bw-hash",
+            file_mtime=0.0,
+            width=300,
+            height=200,
+            detection_done=True,
+        )
+        color_img = Image(
+            file_path=str(color_path),
+            file_hash="color-hash",
+            file_mtime=0.0,
+            width=300,
+            height=200,
+        )
+        session.add_all([bw_img, color_img])
+        session.flush()
+        session.add(
+            Face(
+                image_id=bw_img.id,
+                person_id=person.id,
+                bbox_x=30,
+                bbox_y=20,
+                bbox_w=80,
+                bbox_h=80,
+                confidence=0.95,
+                detector_backend="cpu",
+                crop_path=str(thumb_path),
+            )
+        )
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    index_html = out / "index.html"
+    html = index_html.read_text(encoding="utf-8")
+    images = _read_json_const(index_html, "IMAGES")
+
+    # The B&W image (the one with the face) carries a pair pointing at both sides.
+    record = next(r for r in images.values() if r["faces"])
+    assert "pair" in record
+    pair = record["pair"]
+    assert pair["bw"] == record["src"]
+    assert pair["color"] != pair["bw"]
+    # Both normalized image files were exported.
+    assert (out / pair["bw"]).exists()
+    assert (out / pair["color"]).exists()
+
+    # Viewer wiring for the toggle + drag-compare slider is present.
+    assert 'onclick="toggleCompare()"' in html
+    assert 'onclick="setPairView(' in html
+    assert "function setCompareSplit(pct)" in html
+    assert "initCompareDrag" in html
+
+    # The slideshow record carries the same pair, and slideshow.js wires up the
+    # slider-only compare (no toggle buttons there).
+    tour = json.loads(
+        (out / "slideshow-data.json").read_text(encoding="utf-8")
+    )
+    tour_record = next(r for r in tour if r["faces"])
+    assert tour_record["pair"] == pair
+    tour_js = (out / "slideshow.js").read_text(encoding="utf-8")
+    assert "function setupPairMedia(record)" in tour_js
+    assert "function setTourSplit(pct)" in tour_js
+    assert "initTourCompareDrag" in tour_js
+    tour_css = (out / "slideshow.css").read_text(encoding="utf-8")
+    assert "#tour-slider" in tour_css
+
+
+def test_export_html_slideshow_person_panel_data_and_wiring(db, tmp_path):
+    """Clicking a face opens a person panel; rich person data is exported."""
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    image_path = photos / "group.jpg"
+    thumb_path = photos / "anna_thumb.jpg"
+    image = np.zeros((200, 300, 3), dtype=np.uint8)
+    thumb = np.zeros((64, 64, 3), dtype=np.uint8)
+    assert save_image_bgr(image_path, image)
+    assert save_image_bgr(thumb_path, thumb)
+
+    with session_scope() as session:
+        anna = Person(
+            name="Anna Kovács",
+            is_auto_named=False,
+            gender="female",
+            birth_date="1950",
+            birth_place="Szeged",
+            nickname="Anci",
+            notes="Nagymama.",
+            thumbnail_path=str(thumb_path),
+        )
+        session.add(anna)
+        session.flush()
+
+        img = Image(
+            file_path=str(image_path),
+            file_hash="grp-hash",
+            file_mtime=0.0,
+            width=300,
+            height=200,
+            detection_done=True,
+        )
+        session.add(img)
+        session.flush()
+        session.add(
+            Face(
+                image_id=img.id,
+                person_id=anna.id,
+                bbox_x=20,
+                bbox_y=20,
+                bbox_w=60,
+                bbox_h=60,
+                confidence=0.97,
+                detector_backend="cpu",
+                crop_path=str(thumb_path),
+            )
+        )
+        anna_id = anna.id
+
+    with session_scope() as session:
+        out = ExportService(session).export_html(str(tmp_path / "html_export"))
+
+    # Person details are embedded in slideshow-data.js as window.TOUR_PERSONS.
+    data_js = (out / "slideshow-data.js").read_text(encoding="utf-8")
+    marker = "window.TOUR_PERSONS = "
+    start = data_js.index(marker) + len(marker)
+    end = data_js.index(";\n", start)
+    persons = json.loads(data_js[start:end])
+
+    detail = persons[str(anna_id)]
+    assert detail["name"] == "Anna Kovács"
+    assert detail["gender"] == "female"
+    assert detail["birthDate"] == "1950"
+    assert detail["nickname"] == "Anci"
+    assert detail["notes"] == "Nagymama."
+    assert detail["thumb"] == "thumbs/person_%d.jpg" % anna_id
+    assert (out / detail["thumb"]).exists()
+
+    # Front-end wiring: clickable panel, close handler, drag guard for faces.
+    tour_js = (out / "slideshow.js").read_text(encoding="utf-8")
+    assert "function openPersonPanel(personId" in tour_js
+    assert "function closePersonPanel()" in tour_js
+    assert "openPersonPanel(face.person_id" in tour_js
+    assert "closest('.tb')) return" in tour_js
+    assert 'id="person-panel"' in (out / "slideshow.html").read_text(encoding="utf-8")

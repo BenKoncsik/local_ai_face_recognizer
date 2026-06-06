@@ -246,6 +246,8 @@ class ExportService:
                     faceless_image_paths.add(image.file_path)
 
         # --- export normalized originals and HTML overlay metadata ---
+        saved_names: set[str] = set()
+
         image_records: Dict[str, dict] = {}
         map_records: List[dict] = []
         tour_records: List[dict] = []
@@ -259,6 +261,7 @@ class ExportService:
             dst_name = _image_export_filename(img_path)
             if not save_image_bgr(img_dir / dst_name, img):
                 continue
+            saved_names.add(dst_name)
 
             face_records = []
             persons_in_image: List[str] = []
@@ -294,13 +297,18 @@ class ExportService:
                 "height": img_h,
                 "faces": face_records,
             }
+            pair = self._build_deoldified_pair_export(
+                db_image, img_path, dst_name, img_dir, saved_names
+            )
+            if pair is not None:
+                image_records[dst_name]["pair"] = pair
             map_record = _build_map_export_record(db_image, dst_name, source, face_records)
             if map_record is not None:
                 map_records.append(map_record)
             tour_records.append(
                 _build_tour_export_record(
                     db_image, dst_name, source, face_records,
-                    persons_in_image, has_identified, img_w, img_h,
+                    persons_in_image, has_identified, img_w, img_h, pair,
                 )
             )
             image_order.append(dst_name)
@@ -326,7 +334,16 @@ class ExportService:
         )
         (out / "index.html").write_text(html, encoding="utf-8")
         _write_map_export_files(out, map_records)
-        _write_tour_export_files(out, tour_records)
+
+        # Rich person details for the slideshow's clickable person panel.
+        person_objs: Dict[int, Person] = {}
+        for face_list in image_faces.values():
+            for person, _face in face_list:
+                person_objs[person.id] = person
+        person_details = self._build_person_details_export(
+            list(person_objs.values()), thumb_dir
+        )
+        _write_tour_export_files(out, tour_records, person_details)
 
         log.info("HTML export: %d person(s) → %s", len(persons), out)
         return out
@@ -524,6 +541,99 @@ class ExportService:
                 )
         return rows
 
+    def _build_deoldified_pair_export(
+        self,
+        db_image: Optional[Image],
+        img_path: str,
+        dst_name: str,
+        img_dir: Path,
+        saved_names: set,
+    ) -> Optional[dict]:
+        """Find the deoldified counterpart of an image and export both sides.
+
+        Returns ``{"bw": "images/...", "color": "images/..."}`` so the HTML
+        viewer can toggle between, and slide-compare, the black-and-white
+        original and the colorized version.  Returns None when there is no
+        paired image on disk.
+        """
+        from app.services.deoldified_pairing_service import (
+            DeoldifiedPairingService,
+            is_deoldified_path,
+        )
+        from app.services.image_library_service import resolve_image_path
+
+        if db_image is None:
+            return None
+
+        svc = DeoldifiedPairingService(self._session)
+        current_is_color = is_deoldified_path(img_path)
+        partner = (
+            svc.find_original_for_deoldified(db_image)
+            if current_is_color
+            else svc.find_deoldified_for_original(db_image)
+        )
+        if partner is None:
+            return None
+
+        resolved = resolve_image_path(partner)
+        partner_disk = str(resolved) if resolved else partner.file_path
+        partner_name = _image_export_filename(partner.file_path)
+        if partner_name not in saved_names:
+            partner_img = load_image_bgr(partner_disk)
+            if partner_img is None:
+                return None
+            if not save_image_bgr(img_dir / partner_name, partner_img):
+                return None
+            saved_names.add(partner_name)
+
+        partner_src = f"images/{partner_name}"
+        current_src = f"images/{dst_name}"
+        if current_is_color:
+            return {"color": current_src, "bw": partner_src}
+        return {"color": partner_src, "bw": current_src}
+
+    def _build_person_details_export(
+        self,
+        persons: List[Person],
+        thumb_dir: Path,
+    ) -> Dict[str, dict]:
+        """Build a person_id → details map for the slideshow person panel.
+
+        Keyed by stringified person id (JSON object keys are strings).  Copies
+        each person's representative thumbnail into ``thumbs/`` when available.
+        """
+        from app.services.person_group_service import PersonGroupService
+
+        group_svc = PersonGroupService(self._session)
+        details: Dict[str, dict] = {}
+        for person in persons:
+            groups = [g.name for g in group_svc.get_person_groups(person.id)]
+            thumb = None
+            if person.thumbnail_path and Path(person.thumbnail_path).exists():
+                dst = thumb_dir / f"person_{person.id}.jpg"
+                try:
+                    shutil.copy2(person.thumbnail_path, dst)
+                    thumb = f"thumbs/{dst.name}"
+                except OSError:
+                    thumb = None
+            details[str(person.id)] = {
+                "id": person.id,
+                "name": person.name,
+                "isAutoNamed": bool(person.is_auto_named),
+                "gender": person.gender or "",
+                "familyCode": person.family_code or "",
+                "nickname": person.nickname or "",
+                "marriedName": person.married_name or "",
+                "birthDate": person.birth_date or "",
+                "birthPlace": person.birth_place or "",
+                "deathDate": person.death_date or "",
+                "deathPlace": person.death_place or "",
+                "notes": person.notes or "",
+                "groups": groups,
+                "thumb": thumb,
+            }
+        return details
+
 
 def _image_export_filename(image_path: str) -> str:
     """Return a stable browser-friendly filename for an exported source image."""
@@ -683,6 +793,7 @@ def _build_tour_export_record(
     has_identified: bool,
     width: int,
     height: int,
+    pair: Optional[dict] = None,
 ) -> dict:
     """Build one rich per-image record for the slideshow / image-tour page.
 
@@ -722,14 +833,21 @@ def _build_tour_export_record(
         "hasCaption": bool(note),
         "hasIdentifiedPersons": has_identified,
         "hasLocation": latitude is not None and longitude is not None,
+        "pair": pair,
     }
 
 
-def _write_tour_export_files(out: Path, records: List[dict]) -> None:
+def _write_tour_export_files(
+    out: Path,
+    records: List[dict],
+    persons: Optional[Dict[str, dict]] = None,
+) -> None:
+    persons = persons or {}
     data_json = json.dumps(records, ensure_ascii=False, indent=2)
     (out / "slideshow-data.json").write_text(data_json + "\n", encoding="utf-8")
     (out / "slideshow-data.js").write_text(
-        "window.TOUR_DATA = " + _json_for_script(records, indent=2) + ";\n",
+        "window.TOUR_DATA = " + _json_for_script(records, indent=2) + ";\n"
+        + "window.TOUR_PERSONS = " + _json_for_script(persons, indent=2) + ";\n",
         encoding="utf-8",
     )
     (out / "slideshow.html").write_text(_TOUR_HTML_TEMPLATE, encoding="utf-8")
@@ -827,6 +945,26 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   #lb-close{position:fixed;top:16px;right:20px;font-size:2rem;cursor:pointer;
              color:#aaa;line-height:1;background:none;border:none}
   #lb-close:hover{color:#fff}
+
+  /* deoldified pair controls + compare slider */
+  #lb-pair-controls{display:none;width:min(92vw,1200px);align-items:center;
+                    justify-content:center;gap:8px;flex-wrap:wrap}
+  #lb-pair-controls.show{display:flex}
+  .lb-nav.active{background:#2f6df0;border-color:#88aaff;color:#fff}
+  #lb-img-top{display:none;position:absolute;inset:0;width:100%;height:100%;
+              object-fit:contain;border-radius:6px;pointer-events:none}
+  #lb-media.compare #lb-img-top{display:block}
+  #lb-slider{display:none;position:absolute;top:0;bottom:0;left:50%;width:40px;
+             transform:translateX(-50%);cursor:ew-resize;z-index:6;
+             align-items:center;justify-content:center;touch-action:none}
+  #lb-media.compare #lb-slider{display:flex}
+  #lb-slider .lb-slider-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
+             transform:translateX(-50%);background:#fff;box-shadow:0 0 4px rgba(0,0,0,.85)}
+  #lb-slider .lb-slider-handle{width:36px;height:36px;border-radius:50%;background:#fff;
+             color:#111;display:flex;align-items:center;justify-content:center;
+             font-size:18px;font-weight:700;box-shadow:0 0 7px rgba(0,0,0,.75);
+             position:relative;user-select:none}
+  #lb-media.compare>#lb-overlay{z-index:5}
 </style>
 </head>
 <body>
@@ -847,9 +985,19 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="lb-caption"></div>
     <button id="lb-next" class="lb-nav" onclick="showRelativeImage(1)">Következő kép</button>
   </div>
+  <div id="lb-pair-controls">
+    <button id="lb-color" class="lb-nav" onclick="setPairView('color')">Színes</button>
+    <button id="lb-bw" class="lb-nav" onclick="setPairView('bw')">Fekete-fehér</button>
+    <button id="lb-compare" class="lb-nav" onclick="toggleCompare()">Összehasonlítás</button>
+  </div>
   <div id="lb-media" class="media-wrap">
     <img id="lb-img" src="" alt="">
+    <img id="lb-img-top" alt="" aria-hidden="true">
     <div id="lb-overlay" class="bbox-overlay"></div>
+    <div id="lb-slider" aria-hidden="true">
+      <div class="lb-slider-line"></div>
+      <div class="lb-slider-handle">⇔</div>
+    </div>
   </div>
 </div>
 
@@ -858,6 +1006,11 @@ const PERSONS = __PERSONS_JSON__;
 const IMAGES = __IMAGES_JSON__;
 const IMAGE_ORDER = __IMAGE_ORDER_JSON__;
 let currentImageId = null;
+let currentRecord = null;
+let currentPair = null;       // {bw, color} when the image has a deoldified pair
+let compareOn = false;        // slider compare mode active
+let pairMode = 'color';       // single-view mode: 'color' | 'bw'
+let currentSplit = 50;        // compare slider position (percent)
 
 function clearOverlay(overlay){
   while(overlay.firstChild)overlay.removeChild(overlay.firstChild);
@@ -907,15 +1060,75 @@ function imageTitle(record){
   return parts.join(' / ');
 }
 
+function updatePairButtons(){
+  const bw=document.getElementById('lb-bw');
+  const color=document.getElementById('lb-color');
+  const cmp=document.getElementById('lb-compare');
+  if(bw)bw.classList.toggle('active',!compareOn&&pairMode==='bw');
+  if(color)color.classList.toggle('active',!compareOn&&pairMode==='color');
+  if(cmp)cmp.classList.toggle('active',compareOn);
+}
+
+function setCompareSplit(pct){
+  currentSplit=Math.max(0,Math.min(100,pct));
+  const top=document.getElementById('lb-img-top');
+  top.style.clipPath='inset(0 '+(100-currentSplit).toFixed(3)+'% 0 0)';
+  document.getElementById('lb-slider').style.left=currentSplit.toFixed(3)+'%';
+}
+
+function refreshPairMedia(){
+  const media=document.getElementById('lb-media');
+  const img=document.getElementById('lb-img');
+  const top=document.getElementById('lb-img-top');
+  if(!currentPair){
+    media.classList.remove('compare');
+    top.src='';
+    if(currentRecord)img.src=currentRecord.src;
+    return;
+  }
+  if(compareOn){
+    media.classList.add('compare');
+    top.src=currentPair.bw;        // B&W layer clipped on the left, color base on the right
+    img.src=currentPair.color;
+    setCompareSplit(currentSplit);
+  }else{
+    media.classList.remove('compare');
+    top.src='';
+    img.src=(pairMode==='bw')?currentPair.bw:currentPair.color;
+  }
+  updatePairButtons();
+}
+
+function setPairView(mode){
+  if(!currentPair)return;
+  compareOn=false;
+  pairMode=mode;
+  refreshPairMedia();
+}
+
+function toggleCompare(){
+  if(!currentPair)return;
+  compareOn=!compareOn;
+  if(compareOn)currentSplit=50;
+  refreshPairMedia();
+}
+
 function openLb(imageId){
   const record=IMAGES[imageId];
   if(!record)return;
   currentImageId=imageId;
+  currentRecord=record;
+  currentPair=record.pair||null;
+  compareOn=false;
+  pairMode='color';
+  currentSplit=50;
+  document.getElementById('lb-pair-controls').classList.toggle('show',!!currentPair);
   const img=document.getElementById('lb-img');
   const overlay=document.getElementById('lb-overlay');
   img.onload=()=>renderOverlay(record,overlay);
   img.alt=imageTitle(record);
-  img.src=record.src;
+  refreshPairMedia();
+  if(!currentPair)img.src=record.src;
   document.getElementById('lb').classList.add('open');
   renderOverlay(record,overlay);
   updateLbNav();
@@ -923,6 +1136,12 @@ function openLb(imageId){
 
 function openThumb(src,title){
   currentImageId=null;
+  currentRecord=null;
+  currentPair=null;
+  compareOn=false;
+  document.getElementById('lb-pair-controls').classList.remove('show');
+  document.getElementById('lb-media').classList.remove('compare');
+  document.getElementById('lb-img-top').src='';
   const img=document.getElementById('lb-img');
   img.onload=null;
   img.src=src;
@@ -934,8 +1153,33 @@ function openThumb(src,title){
 
 function closeLb(){
   document.getElementById('lb').classList.remove('open');
+  document.getElementById('lb-media').classList.remove('compare');
   currentImageId=null;
+  currentRecord=null;
+  currentPair=null;
+  compareOn=false;
 }
+
+(function initCompareDrag(){
+  const media=document.getElementById('lb-media');
+  let dragging=false;
+  function pctFromEvent(e){
+    const rect=media.getBoundingClientRect();
+    if(!rect.width)return currentSplit;
+    return ((e.clientX-rect.left)/rect.width)*100;
+  }
+  media.addEventListener('pointerdown',function(e){
+    if(!compareOn)return;
+    dragging=true;
+    setCompareSplit(pctFromEvent(e));
+    e.preventDefault();
+  });
+  window.addEventListener('pointermove',function(e){
+    if(!compareOn||!dragging)return;
+    setCompareSplit(pctFromEvent(e));
+  });
+  window.addEventListener('pointerup',function(){dragging=false;});
+})();
 
 function setThumbNav(title){
   document.getElementById('lb-prev').disabled=true;
@@ -991,6 +1235,10 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowRight'){
     e.preventDefault();
     showRelativeImage(1);
+  }
+  if((e.key==='c'||e.key==='C')&&currentPair){
+    e.preventDefault();
+    toggleCompare();
   }
 });
 
@@ -1459,7 +1707,12 @@ _TOUR_HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="stage" class="labels-full">
       <div id="stage-media" class="stage-media">
         <img id="tour-img" src="" alt="">
+        <img id="tour-img-top" alt="" aria-hidden="true">
         <div id="tour-overlay" class="bbox-overlay"></div>
+        <div id="tour-slider" aria-hidden="true">
+          <div class="tour-slider-line"></div>
+          <div class="tour-slider-handle">⇔</div>
+        </div>
         <button id="nav-prev" class="nav-zone nav-prev" type="button" aria-label="Előző kép">‹</button>
         <button id="nav-next" class="nav-zone nav-next" type="button" aria-label="Következő kép">›</button>
       </div>
@@ -1501,6 +1754,14 @@ _TOUR_HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="map-status"></div>
       </div>
     </div>
+  </aside>
+
+  <aside id="person-panel" hidden aria-label="Személy adatai">
+    <div class="pp-head">
+      <span id="pp-title">Személy</span>
+      <button id="pp-close" type="button" aria-label="Bezárás">✕</button>
+    </div>
+    <div id="pp-body"></div>
   </aside>
 </main>
 
@@ -1572,6 +1833,22 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
 .stage-media>img{display:block;max-width:100%;max-height:72vh;width:auto;height:auto;border-radius:4px}
 #empty-msg{color:#aaa;font-size:1rem;padding:40px}
 .bbox-overlay{position:absolute;inset:0;pointer-events:none;z-index:45}
+/* deoldified compare slider (slideshow: slider only, no toggle buttons) */
+#tour-img-top{display:none;position:absolute;inset:0;width:100%;height:100%;
+              object-fit:contain;max-width:none;max-height:none;border-radius:4px;
+              pointer-events:none;z-index:1}
+.stage-media.compare{touch-action:none}
+.stage-media.compare #tour-img-top{display:block}
+#tour-slider{display:none;position:absolute;top:0;bottom:0;left:50%;width:40px;
+             transform:translateX(-50%);cursor:ew-resize;z-index:46;
+             align-items:center;justify-content:center;touch-action:none}
+.stage-media.compare #tour-slider{display:flex}
+#tour-slider .tour-slider-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
+             transform:translateX(-50%);background:#fff;box-shadow:0 0 4px rgba(0,0,0,.85)}
+#tour-slider .tour-slider-handle{width:36px;height:36px;border-radius:50%;background:#fff;
+             color:#111;display:flex;align-items:center;justify-content:center;
+             font-size:18px;font-weight:700;box-shadow:0 0 7px rgba(0,0,0,.75);
+             position:relative;user-select:none;line-height:1}
 /* Edge navigation bands: pinned to the SCREEN edges (fixed → also works in
    fullscreen and sits in front of the map). Transparent until hovered; the
    face boxes (z-index 45) stay above them so face taps still win. */
@@ -1645,6 +1922,29 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
 #map-status{padding:10px 12px;color:#aaa;font-size:.85rem;line-height:1.4}
 .leaflet-popup-content{margin:8px 10px;color:#222}
 
+/* clickable person detail panel (works in fullscreen too) */
+#person-panel{position:fixed;top:0;right:0;width:min(360px,90vw);height:100vh;
+              background:#161616;border-left:1px solid #333;z-index:120;
+              display:flex;flex-direction:column;box-shadow:-6px 0 24px rgba(0,0,0,.55)}
+#person-panel[hidden]{display:none}
+.pp-head{display:flex;justify-content:space-between;align-items:center;gap:10px;
+         padding:14px 16px;border-bottom:1px solid #2a2a2a;background:#1a1a1a}
+#pp-title{font-size:1.05rem;font-weight:700;color:#cfe0ff;overflow-wrap:anywhere}
+#pp-close{min-width:36px;padding:6px 10px;border:1px solid #3e5f9c;border-radius:6px;
+          color:#eaf0ff;background:#1d2b45;cursor:pointer;font-size:1.1rem;line-height:1}
+#pp-close:hover{border-color:#88aaff;background:#26385a}
+#pp-body{padding:16px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+#pp-body .pp-thumb{width:120px;height:120px;object-fit:cover;border-radius:8px;
+                   border:1px solid #333;align-self:center;background:#050505}
+#pp-body .pp-row{font-size:.92rem;color:#d4d4d4;line-height:1.45}
+#pp-body .pp-row b{color:#9fb6e6;font-weight:700}
+#pp-body .pp-groups{display:flex;flex-wrap:wrap;gap:6px}
+#pp-body .pp-group{font-size:.78rem;background:#243a5e;color:#bcd2ff;
+                   border:1px solid #3e5f9c;border-radius:10px;padding:2px 8px}
+#pp-body .pp-notes{font-size:.9rem;color:#cfcfcf;white-space:pre-wrap;
+                   overflow-wrap:anywhere;border-top:1px solid #2a2a2a;padding-top:10px}
+#pp-body .pp-empty{color:#888;font-size:.9rem}
+
 @media (max-width:900px){
   main{display:flex;flex-direction:column}
   #side{position:static}
@@ -1656,6 +1956,7 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
 
 
 _TOUR_JS = """const TOUR = Array.isArray(window.TOUR_DATA) ? window.TOUR_DATA : [];
+const PERSONS = (window.TOUR_PERSONS && typeof window.TOUR_PERSONS === 'object') ? window.TOUR_PERSONS : {};
 let filtered = TOUR.slice();
 let index = 0;
 let playing = false;
@@ -1665,9 +1966,11 @@ let labelMode = 'full';
 let map = null, marker = null, mapInit = false;
 
 const $ = id => document.getElementById(id);
+let tourSplit = 50;
 const els = {
   count: $('tour-count'), stage: $('stage'), media: $('stage-media'),
-  img: $('tour-img'), overlay: $('tour-overlay'), empty: $('empty-msg'),
+  img: $('tour-img'), imgTop: $('tour-img-top'), slider: $('tour-slider'),
+  overlay: $('tour-overlay'), empty: $('empty-msg'),
   info: $('info'), position: $('position'),
   prev: $('btn-prev'), next: $('btn-next'), play: $('btn-play'),
   navPrev: $('nav-prev'), navNext: $('nav-next'),
@@ -1678,7 +1981,9 @@ const els = {
   fFavorite: $('f-favorite'), fCaption: $('f-caption'), fReset: $('f-reset'),
   filters: $('filters'), filtersToggle: $('filters-toggle'),
   main: document.querySelector('main'), mapPanel: $('map-panel'),
-  mapToggle: $('map-toggle'), mapStatus: $('map-status')
+  mapToggle: $('map-toggle'), mapStatus: $('map-status'),
+  personPanel: $('person-panel'), ppTitle: $('pp-title'),
+  ppBody: $('pp-body'), ppClose: $('pp-close')
 };
 
 function text(v){ return v == null ? '' : String(v); }
@@ -1761,6 +2066,74 @@ function applyFilters(){
   render();
 }
 
+function setTourSplit(pct){
+  tourSplit = Math.max(0, Math.min(100, pct));
+  els.imgTop.style.clipPath = 'inset(0 ' + (100 - tourSplit).toFixed(3) + '% 0 0)';
+  els.slider.style.left = tourSplit.toFixed(3) + '%';
+}
+
+function setupPairMedia(record){
+  const pair = record && record.pair;
+  if(pair){
+    els.media.classList.add('compare');
+    els.imgTop.src = pair.bw;      // B&W layer clipped on the left, color base on the right
+    setTourSplit(50);
+  } else {
+    els.media.classList.remove('compare');
+    els.imgTop.src = '';
+  }
+}
+
+function genderLabel(g){
+  if(g === 'male') return 'Férfi';
+  if(g === 'female') return 'Nő';
+  return '';
+}
+
+function openPersonPanel(personId, fallbackName){
+  const info = (personId != null) ? PERSONS[String(personId)] : null;
+  const name = (info && info.name) || fallbackName || 'Ismeretlen';
+  els.ppTitle.textContent = name;
+  const parts = [];
+  if(info && info.thumb){
+    parts.push('<img class=\"pp-thumb\" src=\"' + esc(info.thumb) + '\" alt=\"' + esc(name) + '\">');
+  }
+  const rows = [];
+  if(info){
+    if(info.nickname) rows.push(['Becenév', info.nickname]);
+    if(info.marriedName) rows.push(['Asszonynév', info.marriedName]);
+    const gl = genderLabel(info.gender);
+    if(gl) rows.push(['Nem', gl]);
+    const birth = [info.birthDate, info.birthPlace].filter(Boolean).join(', ');
+    if(birth) rows.push(['Születés', birth]);
+    const death = [info.deathDate, info.deathPlace].filter(Boolean).join(', ');
+    if(death) rows.push(['Halálozás', death]);
+    if(info.familyCode) rows.push(['Családi kód', info.familyCode]);
+    if(info.groups && info.groups.length){
+      rows.push(['Csoportok',
+        '<span class=\"pp-groups\">' +
+        info.groups.map(g => '<span class=\"pp-group\">' + esc(g) + '</span>').join('') +
+        '</span>']);
+    }
+  }
+  rows.forEach(([k,v]) => {
+    const val = (k === 'Csoportok') ? v : esc(v);
+    parts.push('<div class=\"pp-row\"><b>' + esc(k) + ':</b> ' + val + '</div>');
+  });
+  if(info && info.notes){
+    parts.push('<div class=\"pp-notes\">' + esc(info.notes) + '</div>');
+  }
+  if(parts.length === (info && info.thumb ? 1 : 0)){
+    parts.push('<div class=\"pp-empty\">Nincs további adat ehhez a személyhez.</div>');
+  }
+  els.ppBody.innerHTML = parts.join('');
+  els.personPanel.hidden = false;
+}
+
+function closePersonPanel(){
+  els.personPanel.hidden = true;
+}
+
 function clearOverlay(){
   while(els.overlay.firstChild) els.overlay.removeChild(els.overlay.firstChild);
 }
@@ -1784,8 +2157,11 @@ function renderOverlay(record){
     if(Number(bbox.top) < 8) label.classList.add('inside');
     label.textContent = name;
     box.appendChild(label);
-    // Tap (touch) toggles the name even when labels are dimmed/off.
-    box.addEventListener('click', e => { e.stopPropagation(); box.classList.toggle('show'); });
+    // Click/tap opens the closable person detail panel (works in fullscreen).
+    box.addEventListener('click', e => {
+      e.stopPropagation();
+      openPersonPanel(face.person_id, name);
+    });
     els.overlay.appendChild(box);
   });
 }
@@ -1867,7 +2243,10 @@ function render(){
   const record = filtered[index];
   els.img.onload = () => renderOverlay(record);
   els.img.alt = record.title || record.fileName || '';
-  els.img.src = record.imagePath;
+  // With a deoldified pair the base layer is the color side (shown on the
+  // right); the B&W layer is clipped on top from the left via the slider.
+  els.img.src = record.pair ? record.pair.color : record.imagePath;
+  setupPairMedia(record);
   renderOverlay(record);
   renderInfo(record);
   updateMap(record);
@@ -1958,11 +2337,40 @@ els.stage.addEventListener('touchend', e => {
     go(dx < 0 ? 1 : -1);
   }
 }, { passive: true });
+// Deoldified compare slider: drag anywhere on the image to reveal the
+// colorized half over the B&W base. Active only when the image has a pair.
+(function initTourCompareDrag(){
+  let dragging = false;
+  function pctFromEvent(e){
+    const rect = els.media.getBoundingClientRect();
+    if(!rect.width) return tourSplit;
+    return ((e.clientX - rect.left) / rect.width) * 100;
+  }
+  els.media.addEventListener('pointerdown', e => {
+    if(!els.media.classList.contains('compare')) return;
+    // Clicking a face opens the person panel — don't move the slider there.
+    if(e.target.closest && e.target.closest('.tb')) return;
+    dragging = true;
+    setTourSplit(pctFromEvent(e));
+    e.preventDefault();
+  });
+  window.addEventListener('pointermove', e => {
+    if(!dragging || !els.media.classList.contains('compare')) return;
+    setTourSplit(pctFromEvent(e));
+  });
+  window.addEventListener('pointerup', () => { dragging = false; });
+  // Stop touch-drags on a paired image from triggering swipe navigation.
+  els.media.addEventListener('touchstart', e => {
+    if(els.media.classList.contains('compare')) e.stopPropagation();
+  }, { passive: true });
+})();
+
 els.speed.addEventListener('change', () => {
   speedMs = parseInt(els.speed.value, 10) || 4000;
   if(playing) startPlay();
 });
 els.full.addEventListener('click', toggleFullscreen);
+els.ppClose.addEventListener('click', closePersonPanel);
 document.querySelectorAll('.label-modes .lm').forEach(b =>
   b.addEventListener('click', () => setLabelMode(b.dataset.mode)));
 
@@ -1993,6 +2401,7 @@ document.addEventListener('click', e => {
 
 document.addEventListener('keydown', e => {
   if(/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if(e.key === 'Escape' && !els.personPanel.hidden){ closePersonPanel(); return; }
   if(e.key === 'ArrowLeft'){ e.preventDefault(); stopPlay(); go(-1); }
   else if(e.key === 'ArrowRight'){ e.preventDefault(); stopPlay(); go(1); }
   else if(e.key === ' '){ e.preventDefault(); togglePlay(); }
