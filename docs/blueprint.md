@@ -36,6 +36,7 @@ flowchart TB
         BROWSER["Képböngésző"]
         FAMILY["Családi keresés"]
         PLACES["Helyszínek"]
+        PERSONS_TAB["Személyek"]
         COLLAGE["Kollázs"]
         LOG["Log dock"]
         DIALOGS["Dialógusok"]
@@ -58,6 +59,7 @@ flowchart TB
         ID["IdentityService"]
         FAMILY_SVC["FamilyService"]
         PLACE_SVC["PlaceService"]
+        PERSON_SVC["PersonService"]
         EXPORT["ExportService"]
         IMG_LIB["ImageLibraryService"]
         BROWSE["ImageBrowserService"]
@@ -65,6 +67,13 @@ flowchart TB
         DUP["DuplicateUnknownFaceFinder"]
         UPDATE["UpdateService"]
         DEOLD["DeoldifiedPairingService"]
+        CONSISTENCY["IntraImageConsistencyService"]
+        REPAIR["IdentityRepairService"]
+        MERGE_SVC["MergeSuggestionService"]
+        DIAG["FaceDiagnosticsService"]
+        GROUP_SVC["PersonGroupService"]
+        PKG["ProjectPackageService"]
+        RECORD["ScreenRecorderService"]
     end
 
     subgraph GDRIVE["Google Drive réteg"]
@@ -94,6 +103,7 @@ flowchart TB
     MW --> BROWSER
     MW --> FAMILY
     MW --> PLACES
+    MW --> PERSONS_TAB
     MW --> COLLAGE
     MW --> LOG
     MW --> DIALOGS
@@ -106,6 +116,7 @@ flowchart TB
     BROWSER --> DEOLD
     FAMILY --> FAMILY_SVC
     PLACES --> PLACE_SVC
+    PERSONS_TAB --> PERSON_SVC
     COLLAGE --> COLL_SVC
     DIALOGS --> EXPORT
     DIALOGS --> UPDATE
@@ -269,11 +280,14 @@ erDiagram
     PERSONS ||--o{ FACES : assigned_to
     PERSONS ||--o{ RELATIONSHIPS : person_a
     PERSONS ||--o{ RELATIONSHIPS : person_b
+    PERSONS ||--o{ PERSON_GROUP_MEMBERSHIP : member_of
+    PERSON_GROUPS ||--o{ PERSON_GROUP_MEMBERSHIP : contains
     FACES ||--o{ FACE_CORRECTIONS : correction_a
     FACES ||--o{ FACE_CORRECTIONS : correction_b
     COLLAGES ||--o{ COLLAGE_NODES : contains
     IMAGES ||--o{ COLLAGE_NODES : referenced_by
     IMAGES ||--o| REMOTE_IMAGES : sourced_from
+    PERSONS ||--o{ MERGE_SUGGESTIONS : suggested_with
 
     IMAGES {
         int id PK
@@ -312,6 +326,7 @@ erDiagram
         float quality_score
         string quality_reasons
         bool is_low_quality
+        string crop_mode
     }
 
     PERSONS {
@@ -332,6 +347,19 @@ erDiagram
         string death_date
         text notes
         bool is_protected
+    }
+
+    PERSON_GROUPS {
+        int id PK
+        string name UK
+        string color
+        text description
+    }
+
+    PERSON_GROUP_MEMBERSHIP {
+        int id PK
+        int person_id FK
+        int group_id FK
     }
 
     RELATIONSHIPS {
@@ -379,6 +407,16 @@ erDiagram
         int face_id_a FK
         int face_id_b FK
         bool same_person
+    }
+
+    MERGE_SUGGESTIONS {
+        int id PK
+        int person_a_id FK
+        int person_b_id FK
+        float similarity_score
+        string reason
+        datetime created_at
+        bool dismissed
     }
 
     COLLAGES {
@@ -506,10 +544,11 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 | `EmbeddingService` | pending arcok embeddingjeinek előállítása, alacsony minőség opcionális kihagyása |
 | `RecognitionService` | felcímkézett személyekből profilépítés, adaptív felismerés, same-image assist |
 | `SuggestionService` | automatikusan nevezett személyek összevetése ismert személyekkel, accept/reject |
-| `ClusteringService` | DBSCAN alapú klaszterezés és re-cluster, same/different korrekciókkal |
+| `ClusteringService` | DBSCAN alapú klaszterezés és re-cluster, same/different korrekciókkal, pipeline integrációval |
 | `IdentityService` | átnevezés, merge, törlés, reassign, kizárás, kézi korrekciók |
 | `FamilyService` | családi kódok, kapcsolatok, rokonleírások, családi képfeltételek szerinti keresés |
 | `PlaceService` | helyszínek létrehozása, EXIF GPS kapcsolás, közeli helyek, merge, thumbnail |
+| `PersonService` | önálló Személyek oldal: személyek listázása szűrőkkel és arc/kép számokkal, strukturált adatok és név frissítése, személyhez tartozó arc cropok és képek lekérése, bélyegkép beállítása arc cropból, védett személy védelme |
 | `ImageBrowserService` | mappa- és képösszefoglalók a böngésző tabhoz |
 | `ImageLibraryService` | hordozható útvonalkezelés és migráció |
 | `FaceCropService` | stabil crop fájlnevek, crop újragenerálás, thumbnail frissítés |
@@ -517,10 +556,17 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 | `DuplicateUnknownFaceFinder` | ismert arcokra rálógó ismeretlen boxok keresése és törlése |
 | `CollageService` | Picasa `.cxf/.cfx` import, render, arc-projekció, annotált export |
 | `CollageParser` | kollázs XML parse, sérült XML recover, node geometria |
-| `DeoldifiedPairingService` | colorized/deoldified fájlok eredeti párjainak felismerése |
+| `DeoldifiedPairingService` | colorized/deoldified fájlok eredeti párjainak felismerése és szinkronizálása |
 | `ShortcutService` | központi, QSettingsben mentett billentyűparancs-definíciók és app-szintű dispatch |
 | `ExportService` | személy/kép/arc CSV, JSON, HTML, képfájl és kollázs HTML export |
 | `UpdateService` | GitHub release ellenőrzés, asset letöltés, platformfüggő update |
+| `IntraImageConsistencyService` | azonos képen levő arcok konzisztencia-javítása, fragmentáció feloldása |
+| `IdentityRepairService` | tömeges személyazonosító fragmentáció feloldása és konzisztencia-javítás |
+| `MergeSuggestionService` | háttér-motor név-alapú merge javaslatok generálásához, háttér-szálban |
+| `FaceDiagnosticsService` | arc-adatok diagnosztikája, fragmentáció kimutatása, javító javaslatokkal |
+| `PersonGroupService` | személycsoportok (Kórus, Munkahely, stb.) kezelése, kategorizáció |
+| `ProjectPackageService` | teljes projekt export/import `.facepack` ZIP formátumban |
+| `ScreenRecorderService` | ffmpeg-alapú képernyőrögzítés hanggal, idővonal-napló, szegmentált mentés |
 
 ---
 
@@ -592,6 +638,7 @@ flowchart TB
     TABS --> BROWSER["Képböngésző"]
     TABS --> FAMILY["Családi keresés"]
     TABS --> PLACES["Helyszínek"]
+    TABS --> PERSONS["Személyek"]
     TABS --> COLLAGE["Kollázs"]
 
     FACES --> SIDE["SidebarPanel\nszemélylista + thumbok"]
@@ -668,6 +715,18 @@ flowchart TB
 - közeli helyek felismerése,
 - helyek összevonása alias megőrzéssel.
 
+### Személyek tab
+
+A Helyszínek oldal mintájára felépített, önálló karbantartó oldal a `PERSONS` rekordokhoz (`app/ui/panels/persons_panel.py`):
+
+- minden személy táblázatos listája az összes mezővel: id, bélyegkép, név, családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett rekord-e,
+- rendezhető oszlopok és kereső/szűrő név (+ becenév és strukturált nevek) és családi kód alapján,
+- a kijelölt személyhez jobb oldalon megjelenő bélyegkép, arc cropok galériája és a kapcsolódó képek galériája (lazy-load `ThumbnailRunnable`-lel),
+- inline átnevezés a név cellában, illetve „Átnevezés” gomb; üres név nem menthető, védett személy nem nevezhető át,
+- „Adatok szerkesztése” gomb az újrahasznosított `PersonInfoDialog`-gal a strukturált mezőkhöz,
+- „Bélyegkép módosítása” gomb: a `ThumbnailPickerDialog` a személy arc cropjaiból enged választani, hiányzó crop esetén placeholder jelenik meg crash helyett,
+- minden módosítás után frissül a táblázat, a bélyegkép és a kapcsolódó panelek, és a `person_data_changed` jelzésen keresztül az Arcfelismerés oldal is.
+
 ### Kollázs tab
 
 - Picasa `.cxf/.cfx` import,
@@ -688,7 +747,9 @@ flowchart TB
 | `NoFaceImagesDialog` | arcnélküli képek átnézése |
 | `OverlappingUnknownFacesDialog` | ismert arcokra rálógó ismeretlen boxok törlése |
 | `SuggestionDialog` | névjavaslatok elfogadása / elutasítása |
-| `PersonInfoDialog` | strukturált személyadatok, nem, családi kód |
+| `SuggestionViewer` | teljes kép galéria, összehasonlítás és részletesebb elemzés névjavaslatoknál |
+| `PersonInfoDialog` | strukturált személyadatok, nem, családi kód, csoporttagság |
+| `ThumbnailPickerDialog` | a Személyek oldalon a személy arc cropjai közül választható új bélyegkép, hiányzó crop esetén placeholder |
 | `RenameDialog` | személy átnevezése |
 | `MergeDialog` | személyek összevonása |
 | `PlaceMergeDialog` | helyek összevonása |
@@ -698,6 +759,8 @@ flowchart TB
 | `CollageNodeDialog` | kollázs node metaadatok |
 | `TpuStatusDialog` | TPU diagnosztika és telepítési segítség |
 | `UpdateDialog` | release asset letöltés és update |
+| `FaceDiagnosticsDialog` | arc fragmentáció kimutatása, fragmentáció okainak elemzése |
+| `IdentityRepairDialog` | tömeges személyazonosító fragmentáció javítása, konzisztencia-helyreállítás |
 
 ### Billentyűparancsok
 
@@ -858,7 +921,86 @@ pytest
 
 ---
 
-## 16. Fejlesztési irányelvek
+## 16. Fragmentáció és konzisztencia
+
+**Fájlok**: `app/services/intra_image_consistency_service.py`, `app/services/identity_repair_service.py`, `app/services/face_diagnostics_service.py`
+
+A személyazonosítók fragmentációja akkor fordul elő, amikor:
+
+- kézi arc korrekciók ellentmondanak az automatikus hozzárendeléseknek,
+- ugyanaz az ember több személyhez van hozzárendelve,
+- alacsony minőségű arcok téves hozzárendeléseket vezetnek be.
+
+A `IntraImageConsistencyService` egy képen belüli fragmentációt javítja: ha egy képen többszörösen hozzárendelt arcok vannak, egy pass-en keresztül konzisztenssé teszi őket az összes megadott arc hozzárendeléséből. A `IdentityRepairService` ezt a tömeges szintre emeli: a teljes adatbázist elemzi, fragmentáció-klasztereket azonosít, és javaslatot tesz a merge műveleteknél.
+
+A `FaceDiagnosticsService` felismeri és jelzi a fragmentáció okát: alacsony minőség, ellentmondó korrekciók, stb. A `FaceDiagnosticsDialog` ezt interaktív módon jeleníti meg, és a javító műveletek közvetlenül indíthatók belőle.
+
+---
+
+## 17. Merge javaslatok és név-alapú keresés
+
+**Fájlok**: `app/services/merge_suggestion_service.py`, `app/services/name_matching.py`
+
+A `MergeSuggestionService` háttérben futó keresőmotor, amely név-alapú fuzzy keresést végez és merge javaslatokat kínál fel. A motor:
+
+- személyek neveit normalizálja és tokenizálja,
+- hasonlóságot számít (Levenshtein, szó sorrend, stb.),
+- `MergeSuggestion` rekordokat hoz létre a DB-ben,
+- `MatchJobWorker` QThread-ben futtatja a keresést.
+
+A javaslatok a UI-ban megjeleníthetők, felhasználó által módosíthatók és elvethetők. A dimissz-elt javaslatok nem jelennek meg újra.
+
+---
+
+## 18. Személycsoportok
+
+**Fájlok**: `app/services/person_group_service.py`, `app/ui/widgets/group_chip_select.py`
+
+A személycsoportok (Kórus, Munkahely, Horgászklub, stb.) sokhoz-sokhoz kapcsolatot biztosítanak személyek között, anélkül hogy kitöltenék a genealógiai felépítést. A `PersonGroup` modell és `PersonGroupMembership` join tábla támogat ezt.
+
+A `PersonGroupService`:
+
+- csoportokat hoz létre, nevez át, töröl,
+- tagságot kezeli,
+- export során csoportinformációkat tartalmazza.
+
+A `GroupChipSelect` widget a `PersonInfoDialog`-ban választható csoporttagságot biztosít chip alapú interfésszel.
+
+---
+
+## 19. Projekt csomagolás
+
+**Fájl**: `app/services/project_package_service.py`
+
+A projekt `.facepack` ZIP csomag formátumba exportálható/importálható. Ez egy teljes, hordozható projekt, amely tartalmazza:
+
+- a teljes SQLite adatbázist,
+- az összes arc crop képet,
+- a konfigurációt és beállításokat,
+- az opcionális képeket (ha a felhasználó ezt választotta).
+
+Az export azt a mappát pakolópzi, ahol a projekt él. Az import feloldja az összes útvonalat és képeket átmásolja az új helyre. Az `ImageLibraryService` relatív útvonala támogatja ezt a hordozhatóságot.
+
+---
+
+## 20. Képernyőrögzítés
+
+**Fájlok**: `app/services/screen_recorder_service.py`, `app/ui/widgets/recording_controls.py`, `app/services/recording_timeline_log.py`, `app/services/recording_metadata.py`
+
+A `ScreenRecorderService` ffmpeg-alapú képernyőrögzítés, amely:
+
+- hanggal együtt rögzít (mikrofon),
+- szegmentált fájlokba mentés támogatás (korlátos méret),
+- forced keyframe-ek a stabilitásért,
+- pause/resume lehetőség (ffmpeg restart).
+
+Az `RecordingTimelineLog` egy `.timeline.txt` napló mellett az imágokat időbélyeggel tárja, így könnyű visszanavigálni.
+
+A `RecordingControlsWidget` az alkalmazásban pausable/resumable play gombot biztosít. Az `RecordingMetadata` a projekt rögzítési metaadatait kezeli.
+
+---
+
+## 21. Fejlesztési irányelvek
 
 - DB schema változásnál frissíteni kell az ORM modelleket, az idempotens migrációkat és ezt a blueprintet.
 - Új képútvonalat kezelő funkciónál a `file_path` helyett lehetőség szerint az `ImageLibraryService` resolverét kell használni.
@@ -874,3 +1016,52 @@ pytest
 - Hosszabb futású munkát Qt workerben vagy QRunnable-ben kell végezni, nem a GUI szálon.
 - Exportnál, kollázsnál, preview-nál és képböngészőnél kezelni kell a hiányzó image library rootot és a Drive fetch hibákat.
 - Új UI szöveghez az `app/ui/i18n.py` kulcsait kell frissíteni.
+- Osoby-módosításnál (merge, reassign, kizárás) az `IntraImageConsistencyService` pass-en kell futtatni, hogy az azonos képen belüli konzisztencia javuljon.
+- Új arc-korrekció vagy módosítás után az `IdentityRepairService` scan-et ajánlott indítani fragmentáció-feloldáshoz.
+- Merge javaslatokat létrehozó kódban az `IdentityRepairService` scan eredményeiből kell kiindulni, nem önálló név-alapú keresésből.
+- Személycsoport szerkesztésnél a DB-ben `PersonGroupMembership` rekordokat kell változtatni, nem a `Person` tábla módosítása.
+- `.facepack` export/import esetén az `ImageLibraryService` relatív útvonal resolverét kell használni; abszolút utak nem hordozhatók.
+- Képernyőrögzítés szinkron üzeneteit a `RecordingTimelineLog`-ba kell írni idő-index-szel.
+- Fragment-rápaálóból javaslat elfogadása után a kiválasztott persona-hozzárendeléseket kell módosítani, ezt követően `IntraImageConsistencyService` pass.
+- A Személyek oldal adatműveleteit a `PersonService`-en keresztül kell végezni; üzleti logika ne kerüljön a `PersonsPanel` widgetbe.
+
+---
+
+## 22. Személyek oldal
+
+**Fájlok**: `app/services/person_service.py`, `app/ui/panels/persons_panel.py`
+
+A Személyek egy önálló karbantartó tab (a Helyszínek oldal mintájára), amely a `PERSONS` táblát teszi táblázatosan kezelhetővé, függetlenül az Arcfelismerés oldaltól.
+
+### Cél
+
+Egy helyen áttekinthető és szerkeszthető legyen az összes személy minden adata, a hozzájuk tartozó arcokkal és képekkel együtt, anélkül hogy az Arcfelismerés munkafolyamatba kellene belépni.
+
+### UI felépítés
+
+- Felül szűrősor: név (+ becenév és strukturált nevek) és családi kód kereső, „Alkalmaz” gomb, találatszám.
+- Bal oldali fő panel: rendezhető `QTableWidget` az összes mezővel (id, bélyegkép ikon, név, családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett-e). Az id numerikusan rendeződik, a kis bélyegkép ikonok háttérben (`ThumbnailRunnable`) töltődnek.
+- Jobb oldali részletező panel: nagy bélyegkép, arc/kép darabszám, műveletgombok, az arc cropok galériája és a kapcsolódó képek galériája (`PlaceGalleryWidget`, lazy-load).
+
+### Service réteg
+
+A `PersonService` metódusai (a session tranzakciót a hívó vezérli):
+
+- `list_persons(filters)` – minden személy `PersonSummary`-ként, arc- és képszámmal, név/családi kód szűréssel,
+- `list_face_crops(person_id)` – a személy arc cropjai (placeholderhez/bélyegkép-választáshoz),
+- `list_images_for_person(person_id)` – a kapcsolódó képek elérési útjai,
+- `rename_person(person_id, name)` – átnevezés üres-név- és védett-ellenőrzéssel,
+- `update_person(person_id, **fields)` – strukturált mezők frissítése, üres string → `None`, üres családi kód törlése,
+- `set_thumbnail_from_face(person_id, face_id)` – bélyegkép beállítása arc cropból, hiányzó/idegen crop esetén `ValueError`.
+
+### Bélyegkép módosítás
+
+A „Bélyegkép módosítása” gomb a `ThumbnailPickerDialog`-ot nyitja, amely a személyhez tartozó arc cropokat rácsban mutatja. Egy arcra kattintva az lesz a `thumbnail_path` (`thumbnail_is_manual = True`). Hiányzó vagy nem betölthető crop fájl esetén placeholder jelenik meg, az alkalmazás nem omlik össze. Mentés után a táblázat és a nagy bélyegkép is frissül.
+
+### Védett személyek
+
+A védett rekord (pl. `Ismeretlen`) neve nem szerkeszthető inline (a név cella nem editable), az „Átnevezés” gomb tiltott, és a `PersonService.rename_person` is `ValueError`-t dob védett személyre. A strukturált adatok és a bélyegkép továbbra is kezelhetők.
+
+### Kapcsolódó képek lazy-load
+
+Az arc cropok és a kapcsolódó képek is a meglévő `PlaceGalleryWidget`-tel jelennek meg, amely `ThumbnailRunnable` QRunnable-ökkel a háttérszálon generál bélyegképeket, így a betöltés nem fagyasztja a UI-t. A nagy előnézet dupla kattintásra teljes méretben nyílik meg.

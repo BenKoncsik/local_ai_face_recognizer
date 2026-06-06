@@ -58,6 +58,7 @@ from app.ui.panels.family_search_panel import FamilySearchPanel
 from app.ui.panels.image_browser_panel import ImageBrowserPanel
 from app.ui.panels.locations_panel import LocationsPanel
 from app.ui.panels.log_panel import LogPanel
+from app.ui.panels.persons_panel import PersonsPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
 from app.workers.match_job_worker import MatchJobWorker
@@ -323,7 +324,12 @@ class MainWindow(QMainWindow):
         self._locations_panel = LocationsPanel()
         self._tabs.addTab(self._locations_panel, t("tab_locations"))
 
-        # --- Tab 4: Kollázs nézet ---
+        # --- Tab 4: Személyek ---
+        self._persons_panel = PersonsPanel()
+        self._persons_panel.person_data_changed.connect(self._refresh_persons)
+        self._tabs.addTab(self._persons_panel, t("tab_persons"))
+
+        # --- Tab 5: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, t("tab_collage"))
 
@@ -590,7 +596,8 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(1, t("tab_image_browser"))
         self._tabs.setTabText(2, t("tab_family_search"))
         self._tabs.setTabText(3, t("tab_locations"))
-        self._tabs.setTabText(4, t("tab_collage"))
+        self._tabs.setTabText(4, t("tab_persons"))
+        self._tabs.setTabText(5, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_image_browser"):
@@ -599,6 +606,8 @@ class MainWindow(QMainWindow):
             self._family_search.retranslate()
         if hasattr(self, "_locations_panel"):
             self._locations_panel.retranslate()
+        if hasattr(self, "_persons_panel"):
+            self._persons_panel.retranslate()
 
     # ------------------------------------------------------------------
     # Logging
@@ -1472,6 +1481,7 @@ class MainWindow(QMainWindow):
             self._refresh_persons()
             self._image_browser.refresh()
             self._locations_panel.refresh()
+            self._persons_panel.refresh()
             QMessageBox.information(self, t("settings_title"), t("db_switched"))
             log.info("Database switched to: %s", new_db)
 
@@ -1969,6 +1979,7 @@ class MainWindow(QMainWindow):
         self._refresh_persons()
         self._image_browser.refresh()
         self._locations_panel.refresh()
+        self._persons_panel.refresh()
         if not success:
             QMessageBox.warning(self, t("warning"), summary)
             return
@@ -2601,7 +2612,7 @@ class MainWindow(QMainWindow):
 
         # Switch to collage tab and refresh
         self._collage_panel.refresh_collage_list()
-        self._tabs.setCurrentIndex(4)
+        self._tabs.setCurrentIndex(5)
 
         msg = t("collages_imported", n=imported)
         if errors:
@@ -2863,6 +2874,8 @@ class MainWindow(QMainWindow):
         self._image_browser.refresh()
         if hasattr(self, "_locations_panel"):
             self._locations_panel.refresh()
+        if hasattr(self, "_persons_panel"):
+            self._persons_panel.refresh()
         QMessageBox.information(
             self, t("pkg_import_title"), t("pkg_import_opened")
         )
