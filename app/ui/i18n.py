@@ -1026,6 +1026,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_deol_pair_lbl":        {"en": "View:",               "hu": "Nézet:"},
     "ibp_view_original_bw":     {"en": "Original B&W",        "hu": "Eredeti fekete-fehér"},
     "ibp_view_colorized":       {"en": "Colorized",            "hu": "Színezett változat"},
+    "ibp_view_compare":         {"en": "Compare",              "hu": "Összehasonlítás"},
+    "ibp_view_compare_tip":     {"en": "Drag the slider to reveal the colorized image on the "
+                                       "right and the black-and-white on the left.",
+                                 "hu": "Húzd a csúszkát: jobbra a színezett, balra a "
+                                       "fekete-fehér változat látszik."},
     "ibp_deol_sync":            {"en": "Copy data from pair",  "hu": "Adatok átvétele a párról"},
     "ibp_deol_sync_tip":        {"en": "Copy faces and image data from the paired image into "
                                        "the empty one. Only runs when exactly one of the two "

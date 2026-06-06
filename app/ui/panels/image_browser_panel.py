@@ -522,6 +522,8 @@ class _DrawableImageLabel(QLabel):
     bbox_edit_cancelled  = Signal()
     undo_requested       = Signal()
     redo_requested       = Signal()
+    # Deoldified compare divider dragged → emits split position as percent (0..100)
+    compare_dragged      = Signal(int)
 
     _BORDER_NORMAL = "QLabel { background: #1a1a1a; }"
     _BORDER_DRAW   = "QLabel { background: #1a1a1a; border: 2px solid #ffcc00; }"
@@ -557,7 +559,13 @@ class _DrawableImageLabel(QLabel):
         self._imode_drag_start: Optional[QPointF] = None
         self._imode_drag_start_bbox: Optional[Tuple[int, int, int, int]] = None
         self._last_op_type: str = "resize"   # set by mouseReleaseEvent
+        # Deoldified compare divider (drawn directly on the image)
+        self._compare: bool = False
+        self._compare_split: float = 0.5      # fraction 0..1 (left=B&W, right=color)
+        self._compare_dragging: bool = False
         self.setStyleSheet(self._BORDER_NORMAL)
+
+    _COMPARE_HIT = 16   # px hit radius around the compare divider line
 
     # ── Public setters ─────────────────────────────────────────────────
 
@@ -579,6 +587,46 @@ class _DrawableImageLabel(QLabel):
             self._exit_interactive_edit(commit=False, silent=True)
         self.setStyleSheet(self._BORDER_DRAW if enabled else self._BORDER_NORMAL)
         self.update()
+
+    def set_compare_mode(self, enabled: bool, split_percent: int = 50) -> None:
+        """Enable/disable the on-image compare divider at *split_percent*."""
+        self._compare = enabled
+        self._compare_split = max(0.0, min(1.0, split_percent / 100.0))
+        self._compare_dragging = False
+        if not enabled:
+            self.setCursor(Qt.CrossCursor)
+        self.update()
+
+    def set_compare_split(self, split_percent: int) -> None:
+        """Move the compare divider to *split_percent* (0..100)."""
+        self._compare_split = max(0.0, min(1.0, split_percent / 100.0))
+        self.update()
+
+    def _compare_divider_x(self) -> Optional[float]:
+        """Display-x of the divider line, or None when not applicable."""
+        if not self._compare or self._source_pix is None:
+            return None
+        t = self._imode_transform()
+        if t is None:
+            return None
+        eff, ox, _oy = t
+        disp_w = self._source_pix.width() * eff
+        return ox + self._compare_split * disp_w
+
+    def _set_compare_from_x(self, lx: float) -> None:
+        if self._source_pix is None:
+            return
+        t = self._imode_transform()
+        if t is None:
+            return
+        eff, ox, _oy = t
+        disp_w = self._source_pix.width() * eff
+        if disp_w <= 0:
+            return
+        frac = max(0.0, min(1.0, (lx - ox) / disp_w))
+        self._compare_split = frac
+        self.update()
+        self.compare_dragged.emit(int(round(frac * 100)))
 
     def set_interactive_edit(
         self,
@@ -782,6 +830,14 @@ class _DrawableImageLabel(QLabel):
         pos = event.position()
         lx, ly = pos.x(), pos.y()
 
+        if self._compare:
+            dx = self._compare_divider_x()
+            if dx is not None and abs(lx - dx) <= self._COMPARE_HIT:
+                self._compare_dragging = True
+                self._set_compare_from_x(lx)
+                return
+            # Not grabbing the divider → fall through (face select / pan).
+
         if self._imode:
             handle = self._hit_test_handle(lx, ly)
             if handle is not None:
@@ -813,6 +869,15 @@ class _DrawableImageLabel(QLabel):
         pos = event.position()
         lx, ly = pos.x(), pos.y()
 
+        if self._compare_dragging:
+            self._set_compare_from_x(lx)
+            return
+        if self._compare:
+            dx = self._compare_divider_x()
+            near = dx is not None and abs(lx - dx) <= self._COMPARE_HIT
+            self.setCursor(Qt.SplitHCursor if near else Qt.CrossCursor)
+            # fall through so hover/other behaviour still works when not near
+
         if self._imode and self._imode_handle is not None:
             self._apply_drag(self._imode_handle, self._imode_drag_start, pos)
             # Update cursor based on which handle is being dragged
@@ -836,6 +901,10 @@ class _DrawableImageLabel(QLabel):
             self.setCursor(Qt.CrossCursor if not self._imode else Qt.ArrowCursor)
             return
         if event.button() != Qt.LeftButton:
+            return
+
+        if self._compare_dragging:
+            self._compare_dragging = False
             return
 
         if self._imode and self._imode_handle is not None:
@@ -957,6 +1026,23 @@ class _DrawableImageLabel(QLabel):
                     QRect(int(ox), int(oy), int(disp_w), int(disp_h)),
                     self._source_pix,
                 )
+                if self._compare:
+                    dx = ox + self._compare_split * disp_w
+                    dx = max(ox, min(ox + disp_w, dx))
+                    cyc = oy + disp_h / 2
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    painter.setPen(QPen(QColor(255, 255, 255), 2))
+                    painter.drawLine(
+                        QPointF(dx, oy), QPointF(dx, oy + disp_h)
+                    )
+                    painter.setPen(QPen(QColor(0, 0, 0, 150), 1))
+                    painter.setBrush(QBrush(QColor(255, 255, 255)))
+                    painter.drawEllipse(QPointF(dx, cyc), 10.0, 10.0)
+                    painter.setPen(QPen(QColor(20, 20, 20), 1))
+                    painter.drawText(
+                        QRectF(dx - 10, cyc - 10, 20, 20),
+                        Qt.AlignCenter, "⇔",
+                    )
         else:
             painter.setPen(Qt.gray)
             painter.drawText(cr, Qt.AlignCenter | Qt.TextWordWrap, self.text())
@@ -1080,6 +1166,11 @@ class ImageBrowserPanel(QWidget):
         self._deol_pair_partner_id: Optional[int] = None  # the paired image's ID (either direction)
         self._deol_pair_color_path: str = ""           # path to colorized variant
         self._deol_viewing_color: bool = False         # True = showing colorized pixels
+        self._deol_compare: bool = False               # True = compare divider active now
+        self._deol_mode: Optional[str] = None          # remembered choice: 'bw'|'color'|'compare'
+        self._deol_split: int = 50                     # remembered split position (percent)
+        self._deol_bw_bgr: Optional[np.ndarray] = None     # cached B&W pixels for compare
+        self._deol_color_bgr: Optional[np.ndarray] = None  # cached colorized pixels for compare
 
         self._build_ui()
         self._setup_shortcuts()
@@ -1344,6 +1435,11 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_color.setStyleSheet(_nav_style)
         self._btn_view_color.clicked.connect(lambda: self._on_deol_view_toggle(True))
         _deol_row.addWidget(self._btn_view_color)
+        self._btn_view_compare = QPushButton()
+        self._btn_view_compare.setCheckable(True)
+        self._btn_view_compare.setStyleSheet(_nav_style)
+        self._btn_view_compare.clicked.connect(self._on_deol_compare_toggle)
+        _deol_row.addWidget(self._btn_view_compare)
         _deol_row.addStretch()
         self._btn_deol_sync = QPushButton()
         self._btn_deol_sync.setStyleSheet(_nav_style)
@@ -1368,6 +1464,7 @@ class ImageBrowserPanel(QWidget):
         self._image_label.bbox_edit_cancelled.connect(self._on_interactive_bbox_cancelled)
         self._image_label.undo_requested.connect(self._undo_bbox_edit)
         self._image_label.redo_requested.connect(self._redo_bbox_edit)
+        self._image_label.compare_dragged.connect(self._on_compare_dragged)
         im_layout.addWidget(self._image_label, stretch=1)
 
         # Register undo/redo with the global ShortcutService so Ctrl+Z/Y
@@ -1727,6 +1824,8 @@ class ImageBrowserPanel(QWidget):
         self._deol_lbl.setText(t("ibp_deol_pair_lbl"))
         self._btn_view_bw.setText(t("ibp_view_original_bw"))
         self._btn_view_color.setText(t("ibp_view_colorized"))
+        self._btn_view_compare.setText(t("ibp_view_compare"))
+        self._btn_view_compare.setToolTip(t("ibp_view_compare_tip"))
         self._btn_deol_sync.setText(t("ibp_deol_sync"))
         self._btn_deol_sync.setToolTip(t("ibp_deol_sync_tip"))
 
@@ -1912,10 +2011,14 @@ class ImageBrowserPanel(QWidget):
             self._run_deoldified_sync(image_id, announce=False)
 
     def _on_deol_view_toggle(self, show_colorized: bool) -> None:
-        """Switch between original B&W and colorized pixel view."""
-        if show_colorized == self._deol_viewing_color:
-            return
+        """User picked the single B&W or colorized view (remembered choice)."""
+        self._deol_mode = "color" if show_colorized else "bw"
+        self._apply_single_view(show_colorized, reset_zoom=True)
 
+    def _apply_single_view(
+        self, show_colorized: bool, *, reset_zoom: bool
+    ) -> None:
+        """Display one side of the pair, with the compare divider off."""
         from app.utils.image_utils import load_image_bgr
         from app.services.image_library_service import resolve_image_path
 
@@ -1934,15 +2037,125 @@ class ImageBrowserPanel(QWidget):
 
         img_bgr = load_image_bgr(path)
         if img_bgr is None:
-            log.warning("Cannot load image for deoldified toggle: %s", path)
+            log.warning("Cannot load image for deoldified view: %s", path)
             return
 
+        self._deol_compare = False
+        self._image_label.set_compare_mode(False)
+        self._btn_view_compare.setChecked(False)
         self._deol_viewing_color = show_colorized
         self._btn_view_bw.setChecked(not show_colorized)
         self._btn_view_color.setChecked(show_colorized)
         self._orig_img_bgr = img_bgr
-        self._reset_zoom()
+        if reset_zoom:
+            self._reset_zoom()
         self._redraw_faces()
+
+    def _deol_bw_path(self) -> Optional[str]:
+        """Resolve the on-disk path of the B&W side of the current pair."""
+        from app.services.image_library_service import resolve_image_path
+
+        if self._deol_pair_orig_id is not None:
+            with session_scope() as session:
+                orig = session.get(Image, self._deol_pair_orig_id)
+                if orig is None:
+                    return None
+                resolved = resolve_image_path(orig)
+                return str(resolved) if resolved else orig.file_path
+        return self._current_path  # current IS the B&W original
+
+    def _deol_ensure_pair_bgr(self) -> bool:
+        """Load and cache both sides of the pair, color resized to B&W shape."""
+        if self._deol_bw_bgr is not None and self._deol_color_bgr is not None:
+            return True
+        from app.utils.image_utils import load_image_bgr
+
+        bw_path = self._deol_bw_path()
+        bw = load_image_bgr(bw_path) if bw_path else None
+        color = load_image_bgr(self._deol_pair_color_path)
+        if bw is None or color is None:
+            return False
+        if color.shape[:2] != bw.shape[:2]:
+            color = cv2.resize(
+                color, (bw.shape[1], bw.shape[0]), interpolation=cv2.INTER_AREA
+            )
+        self._deol_bw_bgr = bw
+        self._deol_color_bgr = color
+        return True
+
+    def _deol_composite(self) -> Optional[np.ndarray]:
+        """Compose left=B&W, right=color split at the current slider position."""
+        bw = self._deol_bw_bgr
+        color = self._deol_color_bgr
+        if bw is None or color is None:
+            return None
+        h, w = bw.shape[:2]
+        split = max(0, min(w, int(round(w * self._deol_split / 100.0))))
+        out = color.copy()
+        out[:, :split] = bw[:, :split]
+        return out
+
+    def _on_deol_compare_toggle(self) -> None:
+        """User picked compare mode (remembered choice)."""
+        self._deol_mode = "compare"
+        if not self._enter_compare(reset_zoom=True):
+            # Pixels unavailable → fall back to the previous single view.
+            self._deol_mode = "color" if self._deol_viewing_color else "bw"
+            self._btn_view_compare.setChecked(False)
+
+    def _enter_compare(self, *, reset_zoom: bool) -> bool:
+        """Activate the on-image compare divider; False if pixels unavailable."""
+        if not self._deol_ensure_pair_bgr():
+            return False
+        comp = self._deol_composite()
+        if comp is None:
+            return False
+        self._deol_compare = True
+        self._deol_viewing_color = False
+        self._btn_view_bw.setChecked(False)
+        self._btn_view_color.setChecked(False)
+        self._btn_view_compare.setChecked(True)
+        self._orig_img_bgr = comp
+        if reset_zoom:
+            self._reset_zoom()
+        self._redraw_faces()
+        self._image_label.set_compare_mode(True, self._deol_split)
+        return True
+
+    def _on_compare_dragged(self, percent: int) -> None:
+        """Recompose the view as the on-image compare divider is dragged."""
+        self._deol_split = percent
+        if not self._deol_compare:
+            return
+        comp = self._deol_composite()
+        if comp is not None:
+            self._orig_img_bgr = comp
+            self._redraw_faces()
+
+    def _deol_apply_remembered_mode(self) -> None:
+        """Re-apply the remembered B&W/color/compare choice to a new image."""
+        if not self._deoldified_bar.isVisible() or self._deol_mode is None:
+            return
+        if self._deol_mode == "compare":
+            if not self._enter_compare(reset_zoom=False):
+                self._deol_mode = None
+        elif self._deol_mode == "color":
+            self._apply_single_view(True, reset_zoom=False)
+        elif self._deol_mode == "bw":
+            self._apply_single_view(False, reset_zoom=False)
+
+    def _deol_clear_for_new_image(self) -> None:
+        """Per-image reset: drop cached pixels and the compare divider.
+
+        Keeps the remembered mode/split so the choice persists across images.
+        """
+        self._deol_compare = False
+        self._deol_bw_bgr = None
+        self._deol_color_bgr = None
+        if hasattr(self, "_image_label"):
+            self._image_label.set_compare_mode(False)
+        if hasattr(self, "_btn_view_compare"):
+            self._btn_view_compare.setChecked(False)
 
     def _run_deoldified_sync(self, image_id: int, *, announce: bool) -> Optional[dict]:
         """Copy annotations between the current image and its deoldified pair.
@@ -2497,6 +2710,7 @@ class ImageBrowserPanel(QWidget):
         self._deol_pair_partner_id = None
         self._deol_pair_color_path = ""
         self._deol_viewing_color = False
+        self._deol_clear_for_new_image()
         self._deoldified_bar.setVisible(False)
 
         with session_scope() as session:
@@ -2638,6 +2852,7 @@ class ImageBrowserPanel(QWidget):
         self._orig_img_bgr = img_bgr
         self._reset_zoom()
         self._redraw_faces()
+        self._deol_apply_remembered_mode()
         self._clear_face_panel()
         self._reload_persons_combo()
         self._reload_places()
@@ -2656,6 +2871,7 @@ class ImageBrowserPanel(QWidget):
         self._deol_pair_orig_id = None
         self._deol_pair_color_path = ""
         self._deol_viewing_color = False
+        self._deol_clear_for_new_image()
         self._deoldified_bar.setVisible(False)
         self._image_label.set_source_pixmap(None)
         self._image_label.setText(t("ib3_select_image_hint"))
