@@ -1126,6 +1126,9 @@ class ImageBrowserPanel(QWidget):
         # Interactive bbox editor state
         self._interactive_edit_face_id: Optional[int] = None
         self._interactive_edit_orig_bbox: Optional[Tuple[int, int, int, int]] = None
+        # Whether manual-mark (draw) mode was active when the interactive edit
+        # started, so it can be restored after the edit finishes/cancels.
+        self._draw_mode_before_edit: bool = False
         self._undo_stack: List[_BboxEdit] = []
         self._redo_stack: List[_BboxEdit] = []
 
@@ -3072,6 +3075,9 @@ class ImageBrowserPanel(QWidget):
             return
         _, bx, by, bw, bh, *_ = entry
         self._hide_inline_editor()
+        # Remember whether the user was in manual-mark mode so we can return to
+        # it after the edit instead of silently dropping out of it.
+        self._draw_mode_before_edit = self._draw_mode_btn.isChecked()
         self._draw_mode_btn.setChecked(False)
         self._interactive_edit_face_id = face_id
         self._interactive_edit_orig_bbox = (bx, by, bw, bh)
@@ -3182,6 +3188,7 @@ class ImageBrowserPanel(QWidget):
         self._selected_face_id = face_id
         self._redraw_faces()
         self._show_face_info(face_id)
+        self._restore_draw_mode_after_edit()
 
     def _on_interactive_bbox_cancelled(self) -> None:
         """Called when the user presses Esc or otherwise cancels the edit."""
@@ -3202,6 +3209,19 @@ class ImageBrowserPanel(QWidget):
             self._selected_face_id = face_id
             self._redraw_faces()
             self._show_face_info(face_id)
+        self._restore_draw_mode_after_edit()
+
+    def _restore_draw_mode_after_edit(self) -> None:
+        """Re-enter manual-mark mode if it was active before the interactive edit.
+
+        Editing a frame temporarily leaves draw mode; without this the user is
+        silently dropped out of "Kézi kijelölés" after every edit.
+        """
+        if not self._draw_mode_before_edit:
+            return
+        self._draw_mode_before_edit = False
+        if not self._draw_mode_btn.isChecked():
+            self._draw_mode_btn.setChecked(True)
 
     def _undo_bbox_edit(self) -> None:
         """Undo the last bbox modification (Ctrl+Z)."""
