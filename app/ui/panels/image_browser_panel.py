@@ -1077,6 +1077,7 @@ class ImageBrowserPanel(QWidget):
 
         # Deoldified pairing state (reset on each image load)
         self._deol_pair_orig_id: Optional[int] = None  # original image ID when current is deoldified
+        self._deol_pair_partner_id: Optional[int] = None  # the paired image's ID (either direction)
         self._deol_pair_color_path: str = ""           # path to colorized variant
         self._deol_viewing_color: bool = False         # True = showing colorized pixels
 
@@ -1344,6 +1345,10 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_color.clicked.connect(lambda: self._on_deol_view_toggle(True))
         _deol_row.addWidget(self._btn_view_color)
         _deol_row.addStretch()
+        self._btn_deol_sync = QPushButton()
+        self._btn_deol_sync.setStyleSheet(_nav_style)
+        self._btn_deol_sync.clicked.connect(self._on_deol_sync_clicked)
+        _deol_row.addWidget(self._btn_deol_sync)
         self._deoldified_bar.setVisible(False)
         im_layout.addWidget(self._deoldified_bar)
 
@@ -1722,6 +1727,8 @@ class ImageBrowserPanel(QWidget):
         self._deol_lbl.setText(t("ibp_deol_pair_lbl"))
         self._btn_view_bw.setText(t("ibp_view_original_bw"))
         self._btn_view_color.setText(t("ibp_view_colorized"))
+        self._btn_deol_sync.setText(t("ibp_deol_sync"))
+        self._btn_deol_sync.setToolTip(t("ibp_deol_sync_tip"))
 
     def refresh(self) -> None:
         """Reload folder list from DB; keep the selected folder expanded if still present."""
@@ -1864,6 +1871,7 @@ class ImageBrowserPanel(QWidget):
                 if orig is None:
                     return
                 self._deol_pair_orig_id = orig.id
+                self._deol_pair_partner_id = orig.id
 
             self._deol_pair_color_path = image_path
             self._deol_viewing_color = True
@@ -1884,6 +1892,7 @@ class ImageBrowserPanel(QWidget):
                 color_img = svc.find_deoldified_for_original(img)
                 if color_img is None:
                     return
+                self._deol_pair_partner_id = color_img.id
                 color_resolved = resolve_image_path(color_img)
                 self._deol_pair_color_path = (
                     str(color_resolved) if color_resolved else color_img.file_path
@@ -1897,6 +1906,10 @@ class ImageBrowserPanel(QWidget):
                 "Deoldified pair: orig=%s → color=%s",
                 image_path, self._deol_pair_color_path,
             )
+
+        # Auto-sync annotations from the filled side into the empty side.
+        if settings.value("deoldified/auto_sync", True, type=bool):
+            self._run_deoldified_sync(image_id, announce=False)
 
     def _on_deol_view_toggle(self, show_colorized: bool) -> None:
         """Switch between original B&W and colorized pixel view."""
@@ -1930,6 +1943,75 @@ class ImageBrowserPanel(QWidget):
         self._orig_img_bgr = img_bgr
         self._reset_zoom()
         self._redraw_faces()
+
+    def _run_deoldified_sync(self, image_id: int, *, announce: bool) -> Optional[dict]:
+        """Copy annotations between the current image and its deoldified pair.
+
+        Data flows one way, from the side that has annotations into the side
+        that is empty; nothing happens when both sides are empty or both
+        already hold data.  When ``announce`` is True a result popup is shown.
+        Returns the sync summary dict, or None when nothing was copied.
+        """
+        if self._deol_pair_partner_id is None:
+            if announce:
+                QMessageBox.information(
+                    self, t("ibp_deol_sync"), t("ibp_deol_sync_no_pair")
+                )
+            return None
+
+        from app.services.deoldified_pairing_service import DeoldifiedPairingService
+
+        crops_dir = self._config.crops_dir_resolved if self._config else None
+        thumbnail_size = self._config.scan.thumbnail_size if self._config else None
+        crop_mode = (
+            self._config.embedding.crop_mode if self._config else "legacy"
+        )
+
+        with session_scope() as session:
+            current = session.get(Image, image_id)
+            partner = session.get(Image, self._deol_pair_partner_id)
+            if current is None or partner is None:
+                return None
+            svc = DeoldifiedPairingService(session)
+            result = svc.sync_pair_data(
+                current,
+                partner,
+                crops_dir=crops_dir,
+                thumbnail_size=thumbnail_size,
+                crop_mode=crop_mode,
+            )
+
+        if result is not None:
+            log.info(
+                "Deoldified sync: %d face(s), metadata=%s (%d → %d)",
+                result["faces_copied"],
+                result["metadata_fields"],
+                result["source_id"],
+                result["target_id"],
+            )
+            self._reload_current_face_data()
+
+        if announce:
+            if result is None:
+                QMessageBox.information(
+                    self, t("ibp_deol_sync"), t("ibp_deol_sync_skipped")
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    t("ibp_deol_sync"),
+                    t("ibp_deol_sync_done").format(
+                        faces=result["faces_copied"],
+                        fields=len(result["metadata_fields"]),
+                    ),
+                )
+        return result
+
+    def _on_deol_sync_clicked(self) -> None:
+        """Manual trigger for copying annotations between the deoldified pair."""
+        if self._current_image_id is None:
+            return
+        self._run_deoldified_sync(self._current_image_id, announce=True)
 
     def _fetch_face_data(self) -> None:
         """Reload face list from DB without triggering any UI update."""
@@ -2412,6 +2494,7 @@ class ImageBrowserPanel(QWidget):
 
         # Reset deoldified pairing state
         self._deol_pair_orig_id = None
+        self._deol_pair_partner_id = None
         self._deol_pair_color_path = ""
         self._deol_viewing_color = False
         self._deoldified_bar.setVisible(False)

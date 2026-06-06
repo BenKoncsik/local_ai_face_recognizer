@@ -11,7 +11,6 @@ from app.services.deoldified_pairing_service import (
     is_deoldified_path,
 )
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Pure filename-parsing tests (no DB required)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -195,6 +194,33 @@ class TestFindOriginalForDeoldified:
             result = svc.find_original_for_deoldified(color_img)
             assert result is None
 
+    def test_finds_original_in_different_folder(self, tmp_db) -> None:
+        """Original in a different folder must match by filename only."""
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw_folder/photo.JPG",
+                file_hash="orig_xfolder",
+                file_mtime=0.0,
+            )
+            color = Image(
+                file_path="/color_folder/photo-deoldified (artistic).JPG",
+                file_hash="color_xfolder",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+
+        with session_scope() as s:
+            color_img = s.query(Image).filter(
+                Image.file_hash == "color_xfolder"
+            ).first()
+            svc = DeoldifiedPairingService(s)
+            result = svc.find_original_for_deoldified(color_img)
+            assert result is not None
+            assert result.file_hash == "orig_xfolder"
+
     def test_returns_none_for_non_deoldified_image(self, tmp_db) -> None:
         from app.db.database import session_scope
         from app.db.models import Image
@@ -259,8 +285,8 @@ class TestFindDeoldifiedForOriginal:
             result = svc.find_deoldified_for_original(orig_img)
             assert result is None
 
-    def test_different_folder_not_matched(self, tmp_db) -> None:
-        """Colorized image in a different folder must not match."""
+    def test_different_folder_is_matched(self, tmp_db) -> None:
+        """Colorized image in a different folder must match by filename."""
         from app.db.database import session_scope
         from app.db.models import Image
 
@@ -279,6 +305,33 @@ class TestFindDeoldifiedForOriginal:
 
         with session_scope() as s:
             orig_img = s.query(Image).filter(Image.file_hash == "orig_a").first()
+            svc = DeoldifiedPairingService(s)
+            result = svc.find_deoldified_for_original(orig_img)
+            assert result is not None
+            assert result.file_hash == "color_b"
+
+    def test_different_stem_not_matched(self, tmp_db) -> None:
+        """A deoldified image with a different stem must not match."""
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/folderA/photo.jpg",
+                file_hash="orig_diff",
+                file_mtime=0.0,
+            )
+            color = Image(
+                file_path="/folderB/otherphoto-deoldified.jpg",
+                file_hash="color_diff",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+
+        with session_scope() as s:
+            orig_img = s.query(Image).filter(
+                Image.file_hash == "orig_diff"
+            ).first()
             svc = DeoldifiedPairingService(s)
             result = svc.find_deoldified_for_original(orig_img)
             assert result is None
@@ -332,3 +385,188 @@ class TestPairingWithFaceData:
             assert original.faces[0].person.name == "Test Person"
             # colorized image itself has no faces
             assert len(color_img.faces) == 0
+
+
+def _make_face(image_id: int, person_id: int):
+    from app.db.models import Face
+
+    return Face(
+        image_id=image_id,
+        person_id=person_id,
+        bbox_x=10,
+        bbox_y=20,
+        bbox_w=80,
+        bbox_h=80,
+        confidence=0.9,
+        detector_backend="cpu",
+        assignment_source="manual",
+    )
+
+
+class TestSyncPairData:
+    """One-directional copy of annotations between a deoldified pair."""
+
+    def test_copies_faces_and_metadata_into_empty_side(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image, Person
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw/photo.jpg",
+                file_hash="src_full",
+                file_mtime=0.0,
+                detection_done=True,
+                embedding_done=True,
+                photo_date="1984",
+                note="Kórus",
+            )
+            color = Image(
+                file_path="/color/photo-deoldified (artistic).jpg",
+                file_hash="dst_empty",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+            s.flush()
+            person = Person(name="Anna", is_auto_named=False)
+            s.add(person)
+            s.flush()
+            s.add(_make_face(orig.id, person.id))
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "src_full").first()
+            color = s.query(Image).filter(Image.file_hash == "dst_empty").first()
+            svc = DeoldifiedPairingService(s)
+            result = svc.sync_pair_data(color, orig)  # order must not matter
+
+            assert result is not None
+            assert result["source_id"] == orig.id
+            assert result["target_id"] == color.id
+            assert result["faces_copied"] == 1
+            assert "photo_date" in result["metadata_fields"]
+            assert "note" in result["metadata_fields"]
+
+        with session_scope() as s:
+            color = s.query(Image).filter(Image.file_hash == "dst_empty").first()
+            assert len(color.faces) == 1
+            assert color.faces[0].person.name == "Anna"
+            assert color.faces[0].assignment_source == "manual"
+            assert color.photo_date == "1984"
+            assert color.note == "Kórus"
+            assert color.detection_done is True
+            assert color.embedding_done is True
+            # source is unchanged
+            orig = s.query(Image).filter(Image.file_hash == "src_full").first()
+            assert len(orig.faces) == 1
+
+    def test_skips_when_both_sides_have_data(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image, Person
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw/p.jpg", file_hash="b_full", file_mtime=0.0
+            )
+            color = Image(
+                file_path="/color/p-deoldified.jpg",
+                file_hash="c_full",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+            s.flush()
+            p = Person(name="X", is_auto_named=False)
+            s.add(p)
+            s.flush()
+            s.add(_make_face(orig.id, p.id))
+            s.add(_make_face(color.id, p.id))
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "b_full").first()
+            color = s.query(Image).filter(Image.file_hash == "c_full").first()
+            svc = DeoldifiedPairingService(s)
+            assert svc.sync_pair_data(orig, color) is None
+
+    def test_skips_when_both_sides_empty(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw/e.jpg", file_hash="b_empty", file_mtime=0.0
+            )
+            color = Image(
+                file_path="/color/e-deoldified.jpg",
+                file_hash="c_empty",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "b_empty").first()
+            color = s.query(Image).filter(Image.file_hash == "c_empty").first()
+            svc = DeoldifiedPairingService(s)
+            assert svc.sync_pair_data(orig, color) is None
+
+    def test_copies_from_color_to_bw_when_bw_empty(self, tmp_db) -> None:
+        """Direction follows the data: a filled colorized image fills the B&W."""
+        from app.db.database import session_scope
+        from app.db.models import Image, Person
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw/r.jpg", file_hash="bw_empty2", file_mtime=0.0
+            )
+            color = Image(
+                file_path="/color/r-deoldified.jpg",
+                file_hash="color_full2",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+            s.flush()
+            p = Person(name="Béla", is_auto_named=False)
+            s.add(p)
+            s.flush()
+            s.add(_make_face(color.id, p.id))
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "bw_empty2").first()
+            color = s.query(Image).filter(Image.file_hash == "color_full2").first()
+            svc = DeoldifiedPairingService(s)
+            result = svc.sync_pair_data(orig, color)
+            assert result is not None
+            assert result["source_id"] == color.id
+            assert result["target_id"] == orig.id
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "bw_empty2").first()
+            assert len(orig.faces) == 1
+            assert orig.faces[0].person.name == "Béla"
+
+    def test_metadata_only_counts_as_data(self, tmp_db) -> None:
+        """An image with only a note (no faces) still counts as having data."""
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            orig = Image(
+                file_path="/bw/m.jpg",
+                file_hash="meta_only",
+                file_mtime=0.0,
+                note="only a note",
+            )
+            color = Image(
+                file_path="/color/m-deoldified.jpg",
+                file_hash="meta_empty",
+                file_mtime=0.0,
+            )
+            s.add_all([orig, color])
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "meta_only").first()
+            color = s.query(Image).filter(Image.file_hash == "meta_empty").first()
+            svc = DeoldifiedPairingService(s)
+            assert svc.image_has_data(orig) is True
+            assert svc.image_has_data(color) is False
+            result = svc.sync_pair_data(orig, color)
+            assert result is not None
+            assert result["faces_copied"] == 0
+            assert result["metadata_fields"] == ["note"]

@@ -1013,9 +1013,34 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                        "képek automatikusan párosítódnak az eredeti "
                                        "fekete-fehér képpel. Az arcadatok az eredetiről "
                                        "mindkét változaton megjelennek."},
+    "deoldified_sync_toggle":   {"en": "Automatically copy data between paired images",
+                                 "hu": "Adatok automatikus átvétele a párképek közt"},
+    "deoldified_sync_toggle_tip": {"en": "When a deoldified pair is opened, copy faces and image "
+                                       "data from the side that has them into the empty side. "
+                                       "Only runs when exactly one side is empty; never "
+                                       "overwrites existing data.",
+                                 "hu": "Deoldified pár megnyitásakor az arcok és képadatok "
+                                       "átmásolása a kitöltött oldalról az üresbe. Csak akkor "
+                                       "fut, ha pontosan az egyik oldal üres; meglévő adatot "
+                                       "nem ír felül."},
     "ibp_deol_pair_lbl":        {"en": "View:",               "hu": "Nézet:"},
     "ibp_view_original_bw":     {"en": "Original B&W",        "hu": "Eredeti fekete-fehér"},
     "ibp_view_colorized":       {"en": "Colorized",            "hu": "Színezett változat"},
+    "ibp_deol_sync":            {"en": "Copy data from pair",  "hu": "Adatok átvétele a párról"},
+    "ibp_deol_sync_tip":        {"en": "Copy faces and image data from the paired image into "
+                                       "the empty one. Only runs when exactly one of the two "
+                                       "images has data; never overwrites existing data.",
+                                 "hu": "Arcok és képadatok másolása a párképről az üres képbe. "
+                                       "Csak akkor fut le, ha a kettő közül pontosan az egyiken "
+                                       "van adat; meglévő adatot soha nem ír felül."},
+    "ibp_deol_sync_done":       {"en": "Copied {faces} face(s) and {fields} metadata field(s).",
+                                 "hu": "{faces} arc és {fields} metaadat-mező átmásolva."},
+    "ibp_deol_sync_skipped":    {"en": "Nothing copied: both images already have data, or both "
+                                       "are empty.",
+                                 "hu": "Nem történt másolás: mindkét képen van adat, vagy "
+                                       "mindkettő üres."},
+    "ibp_deol_sync_no_pair":    {"en": "No paired image found for the current image.",
+                                 "hu": "Nincs párkép a jelenlegi képhez."},
 
     # ── Image library ─────────────────────────────────────────────────────
     "img_lib_group":            {"en": "Image Library",

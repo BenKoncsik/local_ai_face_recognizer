@@ -260,6 +260,13 @@ class SettingsDialog(QDialog):
         self._deoldified_check.setToolTip(t("deoldified_toggle_tip"))
         deol_layout.addWidget(self._deoldified_check)
 
+        self._deoldified_sync_check = QCheckBox(t("deoldified_sync_toggle"))
+        self._deoldified_sync_check.setChecked(
+            _qsettings().value("deoldified/auto_sync", True, type=bool)
+        )
+        self._deoldified_sync_check.setToolTip(t("deoldified_sync_toggle_tip"))
+        deol_layout.addWidget(self._deoldified_sync_check)
+
         layout.addWidget(deol_group)
         layout.addStretch()
         return widget
@@ -835,6 +842,9 @@ class SettingsDialog(QDialog):
         _qsettings().setValue("updates/notify", self._notify_check.isChecked())
         _qsettings().setValue(
             "deoldified/auto_pair", self._deoldified_check.isChecked()
+        )
+        _qsettings().setValue(
+            "deoldified/auto_sync", self._deoldified_sync_check.isChecked()
         )
         _qsettings().setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
