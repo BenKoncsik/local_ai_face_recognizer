@@ -895,6 +895,15 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_filter_apply": {"en": "Apply", "hu": "Alkalmaz"},
     "places_name": {"en": "Name", "hu": "Név"},
     "places_coords": {"en": "Coordinates", "hu": "Koordináta"},
+    "places_coords_edit_tip": {
+        "en": "Double-click to edit coordinates (e.g. 47.4979, 19.0402)",
+        "hu": "Dupla kattintás a koordináták szerkesztéséhez (pl. 47.4979, 19.0402)",
+    },
+    "places_coords_invalid_title": {"en": "Invalid coordinates", "hu": "Érvénytelen koordináta"},
+    "places_coords_invalid_msg": {
+        "en": "Could not save coordinates: {error}",
+        "hu": "A koordináták mentése sikertelen: {error}",
+    },
     "places_image_count": {"en": "Images", "hu": "Képek"},
     "places_person_count": {"en": "Persons", "hu": "Személyek"},
     "places_source": {"en": "Source", "hu": "Forrás"},

@@ -98,6 +98,41 @@ class _WrappingNameDelegate(QStyledItemDelegate):
         h = int(doc.document().size().height()) + 6
         return QSize(option.rect.width(), max(option.rect.height(), h))
 
+
+class _NoEditDelegate(QStyledItemDelegate):
+    """Suppresses inline editing for read-only columns (the row-level
+    ``ItemIsEditable`` flag would otherwise make every cell editable)."""
+
+    def createEditor(self, parent, option, index):
+        return None
+
+
+# Column indices in the places tree.
+_COL_NAME = 0
+_COL_TYPE = 1
+_COL_COORDS = 2
+_COL_IMAGES = 3
+_COL_PERSONS = 4
+_COL_SOURCE = 5
+
+
+def _parse_coords(text: str) -> Optional[Tuple[float, float]]:
+    """Parse a free-form ``"lat, lon"`` string into a (lat, lon) tuple.
+
+    Accepts comma- or whitespace-separated values. Returns ``None`` when the
+    field is blank (meaning "clear the coordinates"). Raises ``ValueError`` for
+    anything that is non-empty but not a valid coordinate pair.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    parts = [p for p in cleaned.replace(",", " ").split() if p]
+    if len(parts) != 2:
+        raise ValueError("Expected two numbers: latitude and longitude")
+    lat = float(parts[0])
+    lon = float(parts[1])
+    return lat, lon
+
 # Collect per-image GPS only if the coordinate differs from the place centre by
 # more than this threshold (degrees) — avoids duplicating the main marker.
 _MIN_GPS_DIFF = 5e-5
@@ -163,7 +198,13 @@ class LocationsPanel(QWidget):
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
         self._tree.itemChanged.connect(self._on_tree_item_changed)
         self._name_delegate = _WrappingNameDelegate(self._tree)
-        self._tree.setItemDelegateForColumn(0, self._name_delegate)
+        self._tree.setItemDelegateForColumn(_COL_NAME, self._name_delegate)
+        # Lock down the columns that are not meant to be edited inline so they
+        # don't silently accept (and discard) typed-in values. Name and coords
+        # stay editable.
+        self._no_edit_delegate = _NoEditDelegate(self._tree)
+        for col in (_COL_TYPE, _COL_IMAGES, _COL_PERSONS, _COL_SOURCE):
+            self._tree.setItemDelegateForColumn(col, self._no_edit_delegate)
         splitter.addWidget(self._tree)
 
         detail_inner = QWidget()
@@ -357,6 +398,13 @@ class LocationsPanel(QWidget):
         # Name column editable inline (matches the legacy double-click rename).
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         item.setToolTip(0, t("places_name_edit_tip", default="Dupla kattintás a név szerkesztéséhez"))
+        item.setToolTip(
+            _COL_COORDS,
+            t(
+                "places_coords_edit_tip",
+                default="Dupla kattintás a koordináták szerkesztéséhez (pl. 47.4979, 19.0402)",
+            ),
+        )
         return item
 
     def _start_rename(self) -> None:
@@ -381,22 +429,35 @@ class LocationsPanel(QWidget):
             self._load_detail(int(place_id))
 
     def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        """Handle inline editing of the name column."""
-        if column != 0:
-            return
-
+        """Persist inline edits to the name and coordinates columns."""
         place_id = item.data(0, _ROLE_ID)
         if place_id is None:
             return
+        if column == _COL_NAME:
+            self._commit_name_edit(item, int(place_id))
+        elif column == _COL_COORDS:
+            self._commit_coords_edit(item, int(place_id))
 
-        new_name = item.text(0).strip()
+    def _restore_cell(self, item: QTreeWidgetItem, column: int, text: str) -> None:
+        """Reset a cell's text without re-triggering ``itemChanged``."""
+        self._tree.blockSignals(True)
+        item.setText(column, text)
+        self._tree.blockSignals(False)
+
+    def _coords_text(self, place: Place) -> str:
+        if place.latitude is None or place.longitude is None:
+            return ""
+        return f"{place.latitude:.6f}, {place.longitude:.6f}"
+
+    def _commit_name_edit(self, item: QTreeWidgetItem, place_id: int) -> None:
+        new_name = item.text(_COL_NAME).strip()
 
         if not new_name:
             QMessageBox.warning(self, t("empty_name_title"), t("empty_name_msg"))
             with session_scope() as session:
                 place = session.get(Place, place_id)
                 if place is not None:
-                    item.setText(0, place.name)
+                    self._restore_cell(item, _COL_NAME, place.name)
             return
 
         with session_scope() as session:
@@ -406,7 +467,7 @@ class LocationsPanel(QWidget):
 
         try:
             with session_scope() as session:
-                PlaceService(session).name_place(int(place_id), new_name)
+                PlaceService(session).name_place(place_id, new_name)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(
                 self,
@@ -416,11 +477,67 @@ class LocationsPanel(QWidget):
             with session_scope() as session:
                 place = session.get(Place, place_id)
                 if place is not None:
-                    item.setText(0, place.name)
+                    self._restore_cell(item, _COL_NAME, place.name)
             return
 
         if self._current_place_id == place_id:
-            self._load_detail(int(place_id))
+            self._load_detail(place_id)
+
+    def _commit_coords_edit(self, item: QTreeWidgetItem, place_id: int) -> None:
+        text = item.text(_COL_COORDS)
+        try:
+            parsed = _parse_coords(text)
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                t("places_coords_invalid_title", default="Invalid coordinates"),
+                t(
+                    "places_coords_invalid_msg",
+                    error=str(exc),
+                    default="Could not parse coordinates: {error}",
+                ),
+            )
+            with session_scope() as session:
+                place = session.get(Place, place_id)
+                if place is not None:
+                    self._restore_cell(item, _COL_COORDS, self._coords_text(place))
+            return
+
+        lat, lon = (parsed if parsed is not None else (None, None))
+
+        with session_scope() as session:
+            place = session.get(Place, place_id)
+            if place is not None and place.latitude == lat and place.longitude == lon:
+                self._restore_cell(item, _COL_COORDS, self._coords_text(place))
+                return
+
+        try:
+            with session_scope() as session:
+                PlaceService(session).set_coordinates(place_id, lat, lon)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                t("places_coords_invalid_title", default="Invalid coordinates"),
+                t(
+                    "places_coords_invalid_msg",
+                    error=str(exc),
+                    default="Could not save coordinates: {error}",
+                ),
+            )
+            with session_scope() as session:
+                place = session.get(Place, place_id)
+                if place is not None:
+                    self._restore_cell(item, _COL_COORDS, self._coords_text(place))
+            return
+
+        # Normalise the cell display to the canonical format.
+        with session_scope() as session:
+            place = session.get(Place, place_id)
+            if place is not None:
+                self._restore_cell(item, _COL_COORDS, self._coords_text(place))
+
+        if self._current_place_id == place_id:
+            self._load_detail(place_id)
 
     def _load_detail(self, place_id: int) -> None:
         self._current_place_id = place_id

@@ -282,6 +282,32 @@ class PlaceService:
             place.accuracy_radius_meters = default_radius_for(place.place_type)
         return place
 
+    def set_coordinates(
+        self,
+        place_id: int,
+        latitude: Optional[float],
+        longitude: Optional[float],
+    ) -> Place:
+        """Set (or clear) a place's coordinates.
+
+        Pass ``None`` for both to clear the coordinates. Latitude/longitude must
+        be provided together and fall within valid geographic ranges.
+        """
+        place = self._require_place(place_id)
+        if latitude is None and longitude is None:
+            place.latitude = None
+            place.longitude = None
+            return place
+        if latitude is None or longitude is None:
+            raise ValueError("Latitude and longitude must be provided together")
+        if not -90.0 <= latitude <= 90.0:
+            raise ValueError(f"Latitude out of range: {latitude}")
+        if not -180.0 <= longitude <= 180.0:
+            raise ValueError(f"Longitude out of range: {longitude}")
+        place.latitude = latitude
+        place.longitude = longitude
+        return place
+
     def set_parent(self, place_id: int, parent_id: Optional[int]) -> Place:
         """Attach a place to a parent, guarding against cycles."""
         place = self._require_place(place_id)

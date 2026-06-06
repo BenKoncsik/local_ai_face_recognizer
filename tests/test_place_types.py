@@ -71,6 +71,46 @@ def test_create_place_explicit_type_and_radius(db):
 
 
 # ---------------------------------------------------------------------------
+# set_coordinates
+# ---------------------------------------------------------------------------
+
+def test_set_coordinates_updates_place(db):
+    with session_scope() as session:
+        svc = PlaceService(session)
+        place = svc.create_place("Somewhere")
+        svc.set_coordinates(place.id, 47.4979, 19.0402)
+        assert place.latitude == 47.4979
+        assert place.longitude == 19.0402
+
+
+def test_set_coordinates_clears_when_both_none(db):
+    with session_scope() as session:
+        svc = PlaceService(session)
+        place = svc.create_place("Somewhere", 47.0, 19.0)
+        svc.set_coordinates(place.id, None, None)
+        assert place.latitude is None
+        assert place.longitude is None
+
+
+def test_set_coordinates_rejects_partial(db):
+    with session_scope() as session:
+        svc = PlaceService(session)
+        place = svc.create_place("Somewhere")
+        with pytest.raises(ValueError):
+            svc.set_coordinates(place.id, 47.0, None)
+
+
+def test_set_coordinates_rejects_out_of_range(db):
+    with session_scope() as session:
+        svc = PlaceService(session)
+        place = svc.create_place("Somewhere")
+        with pytest.raises(ValueError):
+            svc.set_coordinates(place.id, 200.0, 19.0)
+        with pytest.raises(ValueError):
+            svc.set_coordinates(place.id, 47.0, 400.0)
+
+
+# ---------------------------------------------------------------------------
 # find_nearby type awareness
 # ---------------------------------------------------------------------------
 
