@@ -20,6 +20,7 @@ import logging
 from typing import Callable, List, Optional
 
 import numpy as np
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import AppConfig
@@ -228,13 +229,21 @@ class DetectionService:
         self._dhash_registry[dhash] = (str(path), len(detections))
 
         # --- Remove stale AUTO-detected faces; keep manual ones AND named ones ---
-        # Collect kept named faces BEFORE deletion so we can dedup new detections.
-        kept_named: List[Detection] = [
+        # Collect the faces that will SURVIVE the cleanup below BEFORE deleting,
+        # so new detections can be deduped against *every* retained box.  The
+        # retained set is exactly the complement of the delete filter: manual
+        # boxes (any) plus assigned faces.  Crucially this also protects
+        # *manually drawn* faces (detector_backend="manual") — previously they
+        # were excluded, so an overlapping re-detection produced a duplicate
+        # "?" box for a face the user had already marked on the same image.
+        kept_existing: List[Detection] = [
             Detection(x=f.bbox_x, y=f.bbox_y, w=f.bbox_w, h=f.bbox_h, confidence=1.0)
             for f in self._session.query(Face).filter(
                 Face.image_id == image.id,
-                Face.person_id.isnot(None),
-                Face.detector_backend != "manual",
+                or_(
+                    Face.detector_backend == "manual",
+                    Face.person_id.isnot(None),
+                ),
             ).all()
         ]
 
@@ -245,17 +254,17 @@ class DetectionService:
             Face.person_id.is_(None),
         ).delete(synchronize_session="fetch")
 
-        # Skip any new detection that substantially overlaps an already-named face
+        # Skip any new detection that substantially overlaps a retained face
         # (prevents duplicate face records for the same person).
-        if kept_named:
+        if kept_existing:
             iou_thresh = self._config.detection.iou_merge_threshold
             detections = [
                 det for det in detections
-                if all(_iou(det, nd) < iou_thresh for nd in kept_named)
+                if all(_iou(det, nd) < iou_thresh for nd in kept_existing)
             ]
             diag_log.debug(
-                "Named-face dedup: %d kept named face(s); %d new detection(s) after dedup",
-                len(kept_named), len(detections),
+                "Retained-face dedup: %d retained face(s); %d new detection(s) after dedup",
+                len(kept_existing), len(detections),
             )
 
         for det in detections:

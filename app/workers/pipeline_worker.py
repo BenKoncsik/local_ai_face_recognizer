@@ -32,6 +32,10 @@ from app.services.intra_image_consistency_service import (
     IntraImageConsistencyService,
     IntraImageConsistencyStats,
 )
+from app.services.intra_image_duplicate_service import (
+    IntraImageDuplicateService,
+    IntraImageDuplicateStats,
+)
 from app.services.recognition_service import RecognitionService, RecognitionStats
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
@@ -154,6 +158,17 @@ class PipelineWorker(QThread):
         if self._abort:
             self.finished.emit(False, "Aborted after embedding")
             return
+
+        # --- Stage 3b: Same-image duplicate-detection cleanup ---
+        # Drop freshly detected boxes that are really the same physical face as
+        # one already marked on the same photo, before they get clustered into
+        # spurious Unknown identities.
+        dedup_stats = self._run_intra_image_dedup(exclude_low_quality)
+        if dedup_stats.faces_removed:
+            self.log_message.emit(
+                f"  Removed {dedup_stats.faces_removed} duplicate detection(s) "
+                f"of already-known faces."
+            )
 
         # --- Stage 4: Recognition ---
         self.log_message.emit(
@@ -294,6 +309,27 @@ class PipelineWorker(QThread):
                 progress_cb=cb,
             )
             return svc.process_pending(exclude_low_quality=exclude_low_quality)
+
+    def _run_intra_image_dedup(
+        self, exclude_low_quality: bool = False
+    ) -> IntraImageDuplicateStats:
+        """Remove same-image duplicate detections of already-known faces."""
+        try:
+            with session_scope() as session:
+                svc = IntraImageDuplicateService(
+                    session=session,
+                    config=self._config.intra_image_duplicate,
+                    exclude_low_quality=exclude_low_quality,
+                )
+                stats = svc.remove_duplicates()
+                self.progress.emit(
+                    1, 1, "Deduplicating",
+                    f"{stats.faces_removed} duplicate(s) removed",
+                )
+                return stats
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Same-image duplicate cleanup failed: %s", exc)
+            return IntraImageDuplicateStats()
 
     def _run_recognition(self, exclude_low_quality: bool = False) -> RecognitionStats:
         with session_scope() as session:

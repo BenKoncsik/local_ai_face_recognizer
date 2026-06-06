@@ -182,3 +182,66 @@ def test_detection_service_uses_face_id_for_crop_naming(monkeypatch, tmp_path):
     assert faces[0].crop_path is not None
     assert faces[1].crop_path is not None
     assert faces[0].crop_path != faces[1].crop_path
+
+
+def test_redetection_does_not_duplicate_manual_face(monkeypatch, tmp_path):
+    """A manually drawn face must protect its region from a re-detection.
+
+    Re-running detection over an image that already has a *manual* face box
+    should skip any new detection that overlaps it, instead of creating a
+    duplicate '?' box for a face the user already marked.
+    """
+    db_path = tmp_path / "faces.db"
+    init_db(db_path)
+
+    image_path = tmp_path / "p.jpg"
+    assert cv2.imwrite(str(image_path), np.full((240, 320, 3), 255, np.uint8))
+
+    with session_scope() as session:
+        image = Image(
+            file_path=str(image_path),
+            file_hash="hash",
+            file_mtime=image_path.stat().st_mtime,
+        )
+        session.add(image)
+        session.flush()
+        image_id = image.id
+
+        # A manually drawn face overlapping the dummy detector's first box
+        # (10,10,70,70).  detector_backend="manual" and unassigned.
+        manual = Face(
+            image_id=image_id,
+            bbox_x=15, bbox_y=15, bbox_w=70, bbox_h=70,
+            confidence=1.0,
+            detector_backend="manual",
+        )
+        session.add(manual)
+        session.flush()
+        manual_id = manual.id
+
+    monkeypatch.setattr(
+        "app.services.detection_service.save_face_crop",
+        lambda *a, **k: Path(tmp_path) / "crop.jpg",
+    )
+
+    cfg = AppConfig(base_dir=str(tmp_path))
+    cfg.storage.db_path = str(db_path)
+    cfg.storage.crops_dir = "crops"
+
+    with session_scope() as session:
+        service = DetectionService(
+            session=session, detector=_DummyDetector(), config=cfg
+        )
+        service.process([image_id])
+
+    with session_scope() as session:
+        faces = session.query(Face).order_by(Face.id).all()
+        backends = {f.id: f.detector_backend for f in faces}
+
+    # The manual face survives, and only the non-overlapping second detection
+    # (120,15,65,65) becomes a new auto face — no duplicate over the manual box.
+    assert manual_id in backends
+    assert backends[manual_id] == "manual"
+    auto = [f for f in faces if f.detector_backend == "dummy"]
+    assert len(auto) == 1, "overlapping detection must be deduped against the manual face"
+    assert len(faces) == 2

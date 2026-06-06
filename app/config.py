@@ -154,6 +154,41 @@ class IntraImageConsistencyConfig:
 
 
 @dataclass
+class IntraImageDuplicateConfig:
+    """Parameters for the same-image duplicate-detection cleanup.
+
+    Re-detecting an already-processed photo can produce a *second* box over a
+    face the user already marked, when the new box is shifted enough that the
+    geometric IoU dedup in detection misses it (or when crop sizes differ a
+    lot).  This embedding-based pass runs after embeddings exist and removes a
+    freshly-detected, still-unassigned face when it both spatially overlaps and
+    is embedding-near-identical to a retained (assigned or manual) face on the
+    *same* image — i.e. it is the same physical face detected twice.
+
+    It is deliberately conservative: a genuine second appearance of the same
+    person elsewhere in the frame does not overlap, so it is never removed.
+    """
+
+    # When False the pipeline skips the pass entirely.
+    enabled: bool = True
+
+    # Minimum cosine similarity between the new face and a retained face for
+    # them to be considered the *same physical face*.  High on purpose: two
+    # crops of one face score well above this, while two different people score
+    # far below it.
+    duplicate_similarity: float = 0.90
+
+    # Minimum bounding-box IoU required in addition to the embedding match.
+    # Guards against deleting a real, non-overlapping second appearance of the
+    # same person.  Set below the detection-time iou_merge_threshold (0.35) so
+    # this pass catches exactly the shifted/contained boxes that slip past it.
+    min_overlap: float = 0.10
+
+    # Skip images with more faces than this (keeps the pairwise work bounded).
+    max_faces_per_image: int = 80
+
+
+@dataclass
 class IdentityRepairConfig:
     """Parameters for the global Identity Repair Scan.
 
@@ -366,6 +401,9 @@ class AppConfig:
     intra_image: IntraImageConsistencyConfig = field(
         default_factory=IntraImageConsistencyConfig
     )
+    intra_image_duplicate: IntraImageDuplicateConfig = field(
+        default_factory=IntraImageDuplicateConfig
+    )
     identity_repair: IdentityRepairConfig = field(default_factory=IdentityRepairConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
@@ -508,6 +546,22 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
             max_faces_per_image=iic.get(
                 "max_faces_per_image", cfg.intra_image.max_faces_per_image
+            ),
+        )
+
+        iid = raw.get("intra_image_duplicate", {})
+        cfg.intra_image_duplicate = IntraImageDuplicateConfig(
+            enabled=iid.get("enabled", cfg.intra_image_duplicate.enabled),
+            duplicate_similarity=iid.get(
+                "duplicate_similarity",
+                cfg.intra_image_duplicate.duplicate_similarity,
+            ),
+            min_overlap=iid.get(
+                "min_overlap", cfg.intra_image_duplicate.min_overlap
+            ),
+            max_faces_per_image=iid.get(
+                "max_faces_per_image",
+                cfg.intra_image_duplicate.max_faces_per_image,
             ),
         )
 
