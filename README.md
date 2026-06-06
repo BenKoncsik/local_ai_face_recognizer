@@ -87,6 +87,20 @@ app/
 
 macOS and Windows are secondary targets. PySide6 and OpenCV work on both, but pycoral only supports Linux officially.
 
+### macOS: first launch (unsigned build)
+
+The released `.app` may not be notarized, so macOS Gatekeeper can block the first launch.
+
+After installing:
+
+**System Settings → Privacy & Security → Open Anyway**
+
+If it is still blocked:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Face-Local.app
+```
+
 ---
 
 ## Setup
@@ -422,6 +436,20 @@ app/
 - Kijelző / X11 vagy Wayland a GUI-hoz
 
 A macOS és a Windows másodlagos célplatformok. A PySide6 és az OpenCV mindkettőn működik, de a pycoral hivatalosan csak Linuxot támogat.
+
+### macOS: első indítás (aláíratlan build)
+
+A kiadott `.app` nincs feltétlenül notarizálva, ezért a macOS Gatekeeper az első indításkor blokkolhatja.
+
+Telepítés után:
+
+**System Settings → Privacy & Security → Open Anyway**
+
+Ha továbbra is blokkolja:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Face-Local.app
+```
 
 ---
 

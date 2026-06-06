@@ -153,6 +153,11 @@ class ShortcutService:
         qs.setValue(f"{_SETTINGS_NS}/enabled", self._enabled)
         for sc in self._shortcuts.values():
             qs.setValue(f"{_SETTINGS_NS}/{sc.id}", sc.current_key)
+        # Flush to disk explicitly. The transient QSettings object would
+        # otherwise only persist on destruction, which is unreliable on
+        # Windows (writes can be silently dropped) — so modified shortcuts
+        # were not being saved there.
+        qs.sync()
 
     # ── Accessors ─────────────────────────────────────────────────────────
 

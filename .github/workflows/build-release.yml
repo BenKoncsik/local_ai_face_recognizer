@@ -1456,27 +1456,49 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add docs/appcast.xml
-          if git diff --cached --quiet; then
-            echo "appcast.xml unchanged — no commit needed"
-            exit 0
-          fi
+          VERSION="${{ needs.prepare.outputs.package_version }}"
 
-          git commit -m "chore: update appcast.xml for ${{ needs.prepare.outputs.tag }} [skip ci]"
+          # Stash our freshly generated appcast; we re-apply it on top of the
+          # latest origin/main each attempt instead of rebasing (the generator
+          # rewrites the whole file, so a rebase would always conflict when a
+          # newer release pushed while this — possibly older — workflow ran).
+          cp docs/appcast.xml /tmp/appcast.new.xml
 
-          # Retry push with rebase in case another commit landed on main while this job ran.
           for attempt in 1 2 3; do
-            if git push origin HEAD:main; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "Push failed after 3 attempts" >&2
-              exit 1
-            fi
-            echo "Push rejected (attempt $attempt) — rebasing onto origin/main and retrying..."
             git fetch origin main
-            git rebase origin/main
+            git reset --hard origin/main
+
+            # Never downgrade the Sparkle feed: if origin/main already advertises
+            # a newer release than ours, a stale/parallel workflow must not roll it
+            # back to an older version. Skip cleanly (success, not error).
+            REMOTE_VER="$(grep -oP 'sparkle:shortVersionString="\K[0-9.]+' docs/appcast.xml | head -1 || true)"
+            if [ -n "$REMOTE_VER" ]; then
+              NEWEST="$(printf '%s\n%s\n' "$REMOTE_VER" "$VERSION" | sort -V | tail -1)"
+              if [ "$NEWEST" != "$VERSION" ]; then
+                echo "origin/main already has appcast for $REMOTE_VER (newer than $VERSION) — skipping downgrade"
+                exit 0
+              fi
+            fi
+
+            cp /tmp/appcast.new.xml docs/appcast.xml
+            git add docs/appcast.xml
+            if git diff --cached --quiet; then
+              echo "appcast.xml already up to date on origin/main — nothing to commit"
+              exit 0
+            fi
+
+            git commit -m "chore: update appcast.xml for v${VERSION} [skip ci]"
+
+            if git push origin HEAD:main; then
+              echo "appcast.xml pushed"
+              exit 0
+            fi
+
+            echo "Push rejected (attempt $attempt) — re-applying onto fresh origin/main and retrying..."
           done
+
+          echo "Push failed after 3 attempts" >&2
+          exit 1
 
       - name: Upload assets to GitHub release
         env:

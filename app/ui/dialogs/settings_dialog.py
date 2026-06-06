@@ -839,17 +839,13 @@ class SettingsDialog(QDialog):
             self._fq_reanalyze_btn.setEnabled(True)
 
     def _on_accept(self) -> None:
-        _qsettings().setValue("updates/notify", self._notify_check.isChecked())
-        _qsettings().setValue(
-            "deoldified/auto_pair", self._deoldified_check.isChecked()
-        )
-        _qsettings().setValue(
-            "deoldified/auto_sync", self._deoldified_sync_check.isChecked()
-        )
-        _qsettings().setValue(
+        qs = _qsettings()
+        qs.setValue("updates/notify", self._notify_check.isChecked())
+        qs.setValue("deoldified/auto_pair", self._deoldified_check.isChecked())
+        qs.setValue("deoldified/auto_sync", self._deoldified_sync_check.isChecked())
+        qs.setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
         )
-        qs = _qsettings()
         qs.setValue("recording/output_dir", self._rec_dir_edit.text().strip())
         qs.setValue("recording/quality", self._rec_quality_combo.currentData())
         qs.setValue("recording/fps", self._rec_fps_spin.value())
@@ -898,6 +894,10 @@ class SettingsDialog(QDialog):
         qs.setValue(
             "recording/auto_reduce_fps", self._rec_auto_fps_check.isChecked()
         )
+        # Flush explicitly — the transient QSettings objects above would
+        # otherwise only persist on destruction, which is unreliable on
+        # Windows and can silently drop the writes.
+        qs.sync()
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)
