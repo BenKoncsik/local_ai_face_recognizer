@@ -58,3 +58,20 @@ def search_persons(
     matched = [e for e in entries if q in e._normalized]
     matched.sort(key=lambda e: (not e._normalized.startswith(q), e._normalized))
     return matched[:max_results]
+
+
+def filter_entries(
+    query: str,
+    entries: List[PersonEntry],
+    max_results: int = 50,
+) -> List[PersonEntry]:
+    """Substring-filter *entries* while preserving their incoming order.
+
+    Unlike :func:`search_persons`, this does **not** re-rank by name relevance.
+    It is used when the caller has already ordered *entries* (e.g. by face-match
+    similarity) and wants the search to keep that ordering intact.
+    """
+    if not query.strip():
+        return entries[:max_results]
+    q = normalize(query.strip())
+    return [e for e in entries if q in e._normalized][:max_results]

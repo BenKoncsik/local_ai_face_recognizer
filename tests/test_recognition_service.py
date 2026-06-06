@@ -156,6 +156,48 @@ class TestRecognitionAssignments:
             assert s.get(Face, candidate).person_id is None
 
 
+class TestScorePersons:
+    """Tests for :meth:`RecognitionService.score_persons` (face-match ordering)."""
+
+    def test_scores_rank_closest_person_highest(self, tmp_db):
+        with session_scope() as s:
+            img = _add_image(s)
+            kovacs = _add_person(s, "Kovács Béla")
+            nagy = _add_person(s, "Nagy Anna")
+            _add_face(s, img, kovacs, _axis_vec(DIM, 0, noise=0.02, seed=1))
+            _add_face(s, img, kovacs, _axis_vec(DIM, 0, noise=0.02, seed=2))
+            _add_face(s, img, nagy, _axis_vec(DIM, 64, noise=0.02, seed=3))
+            _add_face(s, img, nagy, _axis_vec(DIM, 64, noise=0.02, seed=4))
+
+            probe = _axis_vec(DIM, 0, noise=0.02, seed=5)
+            scores = RecognitionService(s).score_persons(probe)
+
+        assert set(scores) == {kovacs, nagy}
+        assert scores[kovacs] > scores[nagy]
+
+    def test_protected_and_auto_named_are_excluded(self, tmp_db):
+        with session_scope() as s:
+            img = _add_image(s)
+            known = _add_person(s, "Known")
+            unknown = _add_person(s, "Ismeretlen", protected=True)
+            auto = _add_person(s, "Unknown 1", auto=True)
+            _add_face(s, img, known, _axis_vec(DIM, 0))
+            _add_face(s, img, unknown, _axis_vec(DIM, 0))
+            _add_face(s, img, auto, _axis_vec(DIM, 0))
+
+            scores = RecognitionService(s).score_persons(_axis_vec(DIM, 0))
+
+        assert set(scores) == {known}
+
+    def test_missing_embedding_returns_empty(self, tmp_db):
+        with session_scope() as s:
+            img = _add_image(s)
+            known = _add_person(s, "Known")
+            _add_face(s, img, known, _axis_vec(DIM, 0))
+
+            assert RecognitionService(s).score_persons(None) == {}
+
+
 class TestAdaptiveThreshold:
     """Tests for the quality-aware per-face threshold (Pass 1)."""
 

@@ -794,6 +794,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_assign_btn":         {"en": "Assign",          "hu": "Hozzárendelés"},
     "pss_search_placeholder": {"en": "Search person…",  "hu": "Személy keresése…"},
     "pss_no_results":         {"en": "No results",      "hu": "Nincs találat"},
+    "pss_match_sort":         {"en": "Order by face match", "hu": "Arc-egyezőség szerinti sorrend"},
+    "pss_match_percent":      {"en": "{name} – {pct}%",  "hu": "{name} – {pct}%"},
     "ibp_new_hdr":            {"en": "Create new person:", "hu": "Új személy létrehozása:"},
     "ibp_new_placeholder":    {"en": "Person name…",    "hu": "Személy neve…"},
     "ibp_create_btn":         {"en": "Create & Assign", "hu": "Létrehozás és hozzárendelés"},

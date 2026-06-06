@@ -2526,7 +2526,24 @@ class MainWindow(QMainWindow):
                 id = -1
                 faces: list = []
 
-            dlg = MergeDialog(_FakePerson(), persons, parent=self)
+            # Optional face-match ordering: score the face being reassigned
+            # against the known people so the user can sort candidates by
+            # similarity.  A missing embedding yields an empty mapping, which
+            # the selector treats as "no match data" (default ordering).
+            match_scores: dict[int, float] = {}
+            face_for_scoring = session.get(Face, self._current_face_id)
+            if face_for_scoring is not None:
+                try:
+                    match_scores = RecognitionService(
+                        session, self._config.recognition
+                    ).score_persons(face_for_scoring.get_embedding())
+                except Exception:  # noqa: BLE001
+                    log.exception("Face-match scoring failed; using default order")
+                    match_scores = {}
+
+            dlg = MergeDialog(
+                _FakePerson(), persons, parent=self, match_scores=match_scores
+            )
             dlg.setWindowTitle(t("reassign_title"))
             if dlg.exec() != MergeDialog.Accepted:
                 return

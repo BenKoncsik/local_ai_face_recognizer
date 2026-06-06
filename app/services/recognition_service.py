@@ -454,6 +454,25 @@ class RecognitionService:
             margin=actual_margin,
         ), None
 
+    def score_persons(self, embedding: Optional[np.ndarray]) -> Dict[int, float]:
+        """Score *embedding* against every known person's profile.
+
+        Returns a mapping of ``person_id`` → similarity score (higher is a
+        closer match), restricted to the same non-protected, non-auto-named
+        people that automatic recognition considers.  Persons without enough
+        trusted training examples to build a profile are simply absent from the
+        result.  An empty mapping is returned when *embedding* is missing or
+        cannot be normalised, so callers can safely fall back to the default
+        ordering without special-casing ``None``.
+        """
+        normalised = self._normalise(embedding)
+        if normalised is None:
+            return {}
+        return {
+            person_id: self._score(normalised, profile)
+            for person_id, profile in self.build_profiles().items()
+        }
+
     def _score(self, embedding: np.ndarray, profile: PersonRecognitionProfile) -> float:
         centroid_similarity = float(np.dot(embedding, profile.centroid))
         example_similarities = profile.examples @ embedding

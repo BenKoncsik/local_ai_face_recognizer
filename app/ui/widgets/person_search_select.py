@@ -17,10 +17,11 @@ Usage
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -32,11 +33,13 @@ from PySide6.QtWidgets import (
 
 from app.db.models import Person
 from app.ui.i18n import t
-from app.utils.person_search import PersonEntry, search_persons
+from app.utils.person_search import PersonEntry, filter_entries, search_persons
 
 _ROLE_ID = Qt.UserRole
 _MAX_VISIBLE_ITEMS = 8
+_MIN_VISIBLE_ITEMS = 5  # keep the scroll area usable in tight popups
 _ITEM_HEIGHT = 24  # px — approximate row height
+_MATCH_SORT_QSETTINGS_KEY = "person_search/match_sort"
 
 
 class PersonSearchSelect(QWidget):
@@ -61,6 +64,7 @@ class PersonSearchSelect(QWidget):
 
         self._entries: List[PersonEntry] = []
         self._selected_id: Optional[int] = None
+        self._match_scores: Dict[int, float] = {}
 
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -76,9 +80,49 @@ class PersonSearchSelect(QWidget):
         self._search.installEventFilter(self)
         layout.addWidget(self._search)
 
+        # Optional "order by face-match similarity" toggle.  Hidden until the
+        # caller supplies match scores via :meth:`set_match_scores`, so the
+        # default behaviour (and every selector that has no face context) is
+        # unchanged.
+        # Gap above the checkbox so it is not crammed against the search box.
+        # Shown/hidden together with the checkbox (see set_match_scores).
+        self._match_spacer_top = QWidget()
+        self._match_spacer_top.setFixedHeight(8)
+        self._match_spacer_top.setVisible(False)
+        layout.addWidget(self._match_spacer_top)
+
+        self._match_checkbox = QCheckBox(t("pss_match_sort"))
+        self._match_checkbox.setChecked(self._load_match_pref())
+        self._match_checkbox.setVisible(False)
+        # Shrink only the *font* (via QFont, not a stylesheet) so the long label
+        # fits inside a narrow popup such as the 230px inline assign editor.
+        # A widget-level QCheckBox stylesheet would drop the theme's styled
+        # ::indicator and let a default indicator overlap the text, so we leave
+        # the indicator and spacing to the global theme.
+        _cb_font = self._match_checkbox.font()
+        if _cb_font.pointSize() > 0:
+            _cb_font.setPointSize(max(1, _cb_font.pointSize() - 2))
+        self._match_checkbox.setFont(_cb_font)
+        self._match_checkbox.setMinimumWidth(0)
+        self._match_checkbox.toggled.connect(self._on_match_toggled)
+        layout.addWidget(self._match_checkbox)
+
+        # Dedicated gap below the checkbox so it is not crammed against the
+        # list.  A QCheckBox ignores setContentsMargins (it has no inner
+        # layout), so we use a real spacer widget that is shown/hidden together
+        # with the checkbox — no extra gap when the checkbox is absent.
+        self._match_spacer = QWidget()
+        self._match_spacer.setFixedHeight(8)
+        self._match_spacer.setVisible(False)
+        layout.addWidget(self._match_spacer)
+
         self._list = QListWidget()
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list.setMaximumHeight(_ITEM_HEIGHT * _MAX_VISIBLE_ITEMS + 4)
+        # Guarantee a usable scrollable height: without a minimum the list
+        # collapses to ~1 row when the host popup (e.g. the inline assign
+        # editor) sizes itself to the content's size hint.
+        self._list.setMinimumHeight(_ITEM_HEIGHT * _MIN_VISIBLE_ITEMS)
         self._list.setMinimumWidth(0)
         self._list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._list.itemClicked.connect(self._on_item_clicked)
@@ -125,6 +169,23 @@ class PersonSearchSelect(QWidget):
         self._entries = list(entries)
         self._refresh_list()
 
+    def set_match_scores(self, scores: Optional[Dict[int, float]]) -> None:
+        """Provide per-person face-match similarity scores.
+
+        *scores* maps ``person_id`` → similarity (higher is a closer match).
+        When non-empty, the "order by face-match similarity" checkbox becomes
+        visible; if it is checked the list is reordered best-match-first and a
+        percentage is shown next to each scored person.  Passing ``None`` or an
+        empty mapping hides the checkbox and restores the default ordering, so
+        a missing embedding never breaks the selector.
+        """
+        self._match_scores = dict(scores or {})
+        has_scores = bool(self._match_scores)
+        self._match_checkbox.setVisible(has_scores)
+        self._match_spacer_top.setVisible(has_scores)
+        self._match_spacer.setVisible(has_scores)
+        self._refresh_list()
+
     def current_person_id(self) -> Optional[int]:
         """Return the currently selected person_id, or ``None``."""
         item = self._list.currentItem()
@@ -155,18 +216,40 @@ class PersonSearchSelect(QWidget):
     def retranslate(self) -> None:
         self._search.setPlaceholderText(t("pss_search_placeholder"))
         self._no_results.setText(t("pss_no_results"))
+        self._match_checkbox.setText(t("pss_match_sort"))
 
     # ──────────────────────────────────────────────────────────────────
     # Internal helpers
     # ──────────────────────────────────────────────────────────────────
 
+    def _match_active(self) -> bool:
+        """True when results should be ordered by face-match similarity."""
+        return self._match_checkbox.isChecked() and bool(self._match_scores)
+
+    def _entries_by_match(self) -> List[PersonEntry]:
+        """Entries ordered best-match-first; unscored persons keep their order."""
+        scored = [e for e in self._entries if e.person_id in self._match_scores]
+        scored.sort(key=lambda e: self._match_scores[e.person_id], reverse=True)
+        rest = [e for e in self._entries if e.person_id not in self._match_scores]
+        return scored + rest
+
+    def _display_text_for(self, entry: PersonEntry) -> str:
+        """Append the match percentage when ordering by similarity."""
+        if self._match_active() and entry.person_id in self._match_scores:
+            pct = max(0, min(100, round(self._match_scores[entry.person_id] * 100)))
+            return t("pss_match_percent", name=entry.display_text, pct=pct)
+        return entry.display_text
+
     def _refresh_list(self) -> None:
         query = self._search.text()
-        visible = search_persons(query, self._entries)
+        if self._match_active():
+            visible = filter_entries(query, self._entries_by_match())
+        else:
+            visible = search_persons(query, self._entries)
         self._list.blockSignals(True)
         self._list.clear()
         for entry in visible:
-            item = QListWidgetItem(entry.display_text)
+            item = QListWidgetItem(self._display_text_for(entry))
             item.setData(_ROLE_ID, entry.person_id)
             self._list.addItem(item)
         self._list.blockSignals(False)
@@ -174,6 +257,26 @@ class PersonSearchSelect(QWidget):
         has_items = self._list.count() > 0
         self._list.setVisible(has_items)
         self._no_results.setVisible(not has_items and bool(query.strip()))
+
+    @staticmethod
+    def _load_match_pref() -> bool:
+        try:
+            from app.app_settings import app_qsettings
+
+            return bool(
+                app_qsettings().value(_MATCH_SORT_QSETTINGS_KEY, False, type=bool)
+            )
+        except Exception:  # noqa: BLE001 — settings are best-effort, never fatal
+            return False
+
+    def _on_match_toggled(self, checked: bool) -> None:
+        try:
+            from app.app_settings import app_qsettings
+
+            app_qsettings().setValue(_MATCH_SORT_QSETTINGS_KEY, bool(checked))
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_list()
 
     def _sync_selection(self) -> None:
         """Re-highlight the row for ``self._selected_id`` after a list rebuild."""

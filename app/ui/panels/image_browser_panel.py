@@ -440,9 +440,11 @@ class _InlineFaceEditor(QFrame):
         person_id: Optional[int],
         persons: List[Person],
         priority_ids: Optional[List[int]] = None,
+        match_scores: Optional[dict[int, float]] = None,
     ) -> None:
         self._name_lbl.setText(person_name or "?")
         self._person_search.set_persons(persons, priority_ids=priority_ids)
+        self._person_search.set_match_scores(match_scores)
         if person_id is not None:
             self._person_search.set_current_by_id(person_id)
         self._new_edit.clear()
@@ -3561,6 +3563,28 @@ class ImageBrowserPanel(QWidget):
     # Inline face editor
     # ──────────────────────────────────────────────────────────────────
 
+    def _compute_match_scores(self, face_id: int) -> dict[int, float]:
+        """Score *face_id*'s embedding against known people for match ordering.
+
+        Returns an empty mapping (default ordering, no checkbox) when the face
+        has no embedding or scoring fails — a missing embedding must never break
+        the assign panel.
+        """
+        from app.services.recognition_service import RecognitionService
+
+        recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+        try:
+            with session_scope() as session:
+                face = session.get(Face, face_id)
+                if face is None:
+                    return {}
+                return RecognitionService(session, recognition_cfg).score_persons(
+                    face.get_embedding()
+                )
+        except Exception:  # noqa: BLE001 — ordering is best-effort, never fatal
+            log.exception("Face-match scoring failed; using default order")
+            return {}
+
     def _show_inline_editor(self, face_id: int) -> None:
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         if entry is None:
@@ -3573,6 +3597,7 @@ class ImageBrowserPanel(QWidget):
             person_id,
             self._all_persons,
             priority_ids=list(self._recent_assignment_person_ids),
+            match_scores=self._compute_match_scores(face_id),
         )
         self._inline_editor.adjustSize()
 

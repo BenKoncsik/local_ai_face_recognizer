@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
@@ -27,6 +27,7 @@ class MergeDialog(QDialog):
         source_person: Person,
         all_persons: List[Person],
         parent: Optional[QWidget] = None,
+        match_scores: Optional[Dict[int, float]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("merge_into"))
@@ -49,6 +50,8 @@ class MergeDialog(QDialog):
 
         self._selector = PersonSearchSelect()
         self._selector.set_entries(entries)
+        if match_scores:
+            self._selector.set_match_scores(match_scores)
 
         layout.addWidget(self._selector)
         layout.addWidget(

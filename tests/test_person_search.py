@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.utils.person_search import PersonEntry, normalize, search_persons
+from app.utils.person_search import (
+    PersonEntry,
+    filter_entries,
+    normalize,
+    search_persons,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -149,3 +154,38 @@ class TestSearchPersons:
         original = list(SAMPLE)
         search_persons("panni", SAMPLE)
         assert SAMPLE == original
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# filter_entries() — order-preserving filter (face-match mode)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFilterEntries:
+    def test_empty_query_returns_all_in_order(self):
+        assert filter_entries("", SAMPLE) == SAMPLE
+
+    def test_preserves_incoming_order(self):
+        # Reverse the input: a relevance re-sort would reorder, filter must not.
+        reversed_sample = list(reversed(SAMPLE))
+        result = filter_entries("", reversed_sample)
+        assert result == reversed_sample
+
+    def test_does_not_rerank_by_prefix(self):
+        entries = [
+            PersonEntry(1, "Kovács Anna"),  # infix match on "anna"
+            PersonEntry(2, "Anna Béla"),    # prefix match on "anna"
+        ]
+        result = filter_entries("anna", entries)
+        # Unlike search_persons, the original order is kept (infix first).
+        assert [e.person_id for e in result] == [1, 2]
+
+    def test_filters_accent_insensitive(self):
+        result = filter_entries("panni", SAMPLE)
+        assert {e.person_id for e in result} == {3, 4, 5}
+
+    def test_no_results(self):
+        assert filter_entries("xyzxyz", SAMPLE) == []
+
+    def test_max_results(self):
+        many = [PersonEntry(i, f"Person {i}") for i in range(100)]
+        assert len(filter_entries("person", many, max_results=10)) == 10
