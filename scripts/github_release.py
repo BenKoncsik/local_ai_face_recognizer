@@ -164,6 +164,12 @@ def build_release_notes(
     for result in build_results or []:
         lines.append(f"- {result}")
 
+    macos_ok = any(
+        "macos build: success" in str(result).lower() for result in build_results or []
+    )
+    if macos_ok:
+        lines.extend(build_macos_install_notes())
+
     lines.extend(["", "## Elkészült jegyek"])
     issue_numbers = extract_issue_numbers_from_commits(commits)
     if issue_numbers:
@@ -180,6 +186,21 @@ def build_release_notes(
         lines.append("- Nincs új commit az előző release óta.")
 
     return "\n".join(lines) + "\n"
+
+
+def build_macos_install_notes() -> list[str]:
+    return [
+        "",
+        "## macOS telepítés",
+        "",
+        "Telepítés után:",
+        "- System Settings → Privacy & Security → **Open Anyway**",
+        "",
+        "Ha továbbra is blokkolja:",
+        "```",
+        "xattr -dr com.apple.quarantine /Applications/Face-Local.app",
+        "```",
+    ]
 
 
 def find_previous_release_tag(tag: str, target: str, repo: str | None = None) -> str | None:
