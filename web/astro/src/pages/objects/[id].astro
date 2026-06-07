@@ -1,0 +1,101 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { loadObjects, loadPhotos, type ObjectSummary, type Photo } from '../../lib/data';
+import { link } from '../../lib/links';
+
+export function getStaticPaths() {
+  const objects = loadObjects();
+  const photos = loadPhotos();
+  // index object id -> photos it appears in (build-time join; no runtime cost).
+  const byObject = new Map<number, Photo[]>();
+  for (const ph of photos) {
+    for (const o of ph.objects ?? []) {
+      if (!byObject.has(o.object_id)) byObject.set(o.object_id, []);
+      const list = byObject.get(o.object_id)!;
+      if (!list.includes(ph)) list.push(ph);
+    }
+  }
+  return objects.map((object) => ({
+    params: { id: String(object.id) },
+    props: { object, photos: byObject.get(object.id) ?? [] },
+  }));
+}
+
+interface Props { object: ObjectSummary; photos: Photo[]; }
+const { object, photos } = Astro.props;
+---
+<Layout title={object.name} active="objects">
+  <a class="back" href={link('/objects/page/1/')}>‹ Objektumok</a>
+
+  <div class="detail">
+    <div class="portrait">
+      {object.thumb ? (
+        <img src={object.thumb} alt={object.name} width={object.thumbW || undefined} height={object.thumbH || undefined} decoding="async" />
+      ) : (
+        <div class="ph">📦</div>
+      )}
+    </div>
+    <div class="meta">
+      <h1>{object.name || '(névtelen)'}</h1>
+      <p class="muted">{object.imageCount} fotó{object.occurrenceCount ? ` · ${object.occurrenceCount} előfordulás` : ''}</p>
+
+      {object.description && <p class="desc">{object.description}</p>}
+
+      {object.persons.length > 0 && (
+        <section class="rels">
+          <h2>Kapcsolódó személyek</h2>
+          <ul>
+            {object.persons.map((p) => (
+              <li>
+                <a href={link(`/persons/${p.id}/`)}>{p.name}</a>
+                {p.roleLabel && <span class="muted"> — {p.roleLabel}</span>}
+                {p.note && <span class="muted note"> ({p.note})</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {object.notes && <p class="notes">{object.notes}</p>}
+    </div>
+  </div>
+
+  {photos.length > 0 && (
+    <section class="photos">
+      <h2>Fotók ({photos.length})</h2>
+      <div class="card-grid">
+        {photos.map((ph) => (
+          <a class="card" href={link(`/photos/${ph.id}/`)}>
+            <div class="thumb-wrap">
+              <img src={ph.thumb} alt={ph.fileName} width={ph.thumbW || undefined} height={ph.thumbH || undefined} loading="lazy" decoding="async" />
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  <style>
+    .back { display: inline-block; margin-bottom: 14px; color: #ffb020; text-decoration: none; }
+    .back:hover { text-decoration: underline; }
+    .detail { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+    .portrait { flex: none; width: 220px; }
+    .portrait img, .portrait .ph {
+      width: 220px; height: 220px; object-fit: cover; border-radius: 10px; background: #050505; border: 1px solid #333;
+    }
+    .portrait .ph { display: flex; align-items: center; justify-content: center; font-size: 4rem; color: #6b531a; }
+    .meta { flex: 1; min-width: 280px; }
+    .meta h1 { font-size: 1.5rem; color: #ffd98a; }
+    .muted { color: #888; }
+    .note { font-style: italic; }
+    .desc { margin: 12px 0; color: #ddd; white-space: pre-wrap; }
+    .notes { margin: 12px 0; color: #ccc; white-space: pre-wrap; border-top: 1px solid #2a2a2a; padding-top: 10px; }
+    .rels { margin-top: 16px; }
+    .rels h2, .photos h2 { font-size: 1.05rem; color: #ffce6e; margin-bottom: 8px; }
+    .rels ul { list-style: none; display: grid; gap: 4px; }
+    .rels a { color: #88aaff; text-decoration: none; }
+    .rels a:hover { text-decoration: underline; }
+    .photos { margin-top: 28px; }
+    .photos h2 { color: #cde; }
+  </style>
+</Layout>

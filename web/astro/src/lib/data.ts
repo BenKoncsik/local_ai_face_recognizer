@@ -36,6 +36,31 @@ export interface FaceRecord {
   bbox: { left: number; top: number; width: number; height: number };
 }
 
+export interface BBoxPct {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface PointPct {
+  left: number;
+  top: number;
+}
+
+// A tagged object's appearance in one photo. Mirrors the Python exporter's
+// _object_record_for_export. Coordinates use the same image-relative percentage
+// space as faces. `bbox`/`point`/`confidence` are optional — a record may carry
+// only a name (e.g. legacy data or geometry-less occurrences).
+export interface ObjectRecord {
+  object_id: number;
+  name: string;
+  confidence: number | null;
+  note: string;
+  bbox: BBoxPct | null;
+  point: PointPct | null;
+}
+
 export interface PairVariant {
   bw: string;
   color: string;
@@ -56,6 +81,8 @@ export interface Photo {
   folder: string;
   date: string;
   faces: FaceRecord[];
+  // Optional: bundles produced before object-tagging export won't have this key.
+  objects?: ObjectRecord[];
   personIds: number[];
   persons: string[];
   pair: PairVariant | null;
@@ -94,13 +121,40 @@ export interface Person {
   relationships: PersonRelationship[];
 }
 
+// A person linked to an object, with a localized role label.
+export interface ObjectPersonRef {
+  id: number;
+  name: string;
+  role: string;
+  roleLabel: string;
+  note: string;
+}
+
+// A tagged-object collection record (mirrors Person for the objects pages).
+export interface ObjectSummary {
+  id: number;
+  name: string;
+  description: string;
+  notes: string;
+  thumb: string | null;
+  thumbW: number;
+  thumbH: number;
+  imageCount: number;
+  imageIds: string[];
+  occurrenceCount: number;
+  noteCount: number;
+  persons: ObjectPersonRef[];
+}
+
 export interface Manifest {
   generatedAt: string;
   pageSize: number;
   personCount: number;
   photoCount: number;
+  objectCount: number;
   hasMap: boolean;
   hasSlideshow: boolean;
+  hasObjects: boolean;
   hasCollages: boolean;
   title: string;
 }
@@ -113,8 +167,10 @@ export function loadManifest(): Manifest {
     pageSize: PAGE_SIZE,
     personCount: 0,
     photoCount: 0,
+    objectCount: 0,
     hasMap: false,
     hasSlideshow: false,
+    hasObjects: false,
     hasCollages: false,
     title: 'Face Gallery',
   });
@@ -122,6 +178,10 @@ export function loadManifest(): Manifest {
 
 export function loadPersons(): Person[] {
   return readJson<Person[]>('persons.json', []);
+}
+
+export function loadObjects(): ObjectSummary[] {
+  return readJson<ObjectSummary[]>('objects.json', []);
 }
 
 export function loadPhotos(): Photo[] {

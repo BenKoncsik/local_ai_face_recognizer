@@ -1,0 +1,74 @@
+---
+import type { ObjectRecord } from '../lib/data';
+import { link } from '../lib/links';
+interface Props { objects: ObjectRecord[]; }
+const { objects } = Astro.props;
+const pct = (v: number) => `${Number(v || 0).toFixed(4)}%`;
+
+// Only geometry-bearing occurrences get an on-image overlay. Objects without a
+// bbox or point are still listed below the photo (see photos/[id].astro), but
+// have nothing to anchor on the image, so they are skipped here.
+const drawable = (objects || []).filter((o) => o.bbox || o.point);
+---
+<div class="obj-overlay">
+  {drawable.map((o) => {
+    const title = o.note ? `${o.name} — ${o.note}` : o.name || 'Objektum';
+    const href = link(`/objects/${o.object_id}/`);
+    if (o.bbox) {
+      const style = `left:${pct(o.bbox.left)};top:${pct(o.bbox.top)};width:${pct(o.bbox.width)};height:${pct(o.bbox.height)}`;
+      const inside = Number(o.bbox.top) < 6;
+      return (
+        <a class="obj-box" style={style} href={href} title={title} aria-label={`Objektum: ${o.name || ''}`}>
+          {o.name && <span class:list={['obj-label', { inside }]}>{o.name}</span>}
+        </a>
+      );
+    }
+    const style = `left:${pct(o.point!.left)};top:${pct(o.point!.top)}`;
+    return (
+      <a class="obj-point" style={style} href={href} title={title} aria-label={`Objektum: ${o.name || ''}`}>
+        <span class="dot"></span>
+        {o.name && <span class="obj-label point">{o.name}</span>}
+      </a>
+    );
+  })}
+</div>
+
+<style>
+  .obj-overlay { position: absolute; inset: 0; pointer-events: none; }
+
+  /* Amber + dashed, clearly distinct from the green solid face boxes. */
+  .obj-box {
+    position: absolute; outline: 2px dashed rgba(255, 176, 32, .85);
+    background: rgba(255, 176, 32, .05); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+    pointer-events: auto; cursor: pointer; text-decoration: none;
+    transition: outline-color .15s, background .15s, box-shadow .15s;
+  }
+  .obj-box:hover, .obj-box:focus {
+    outline-color: rgba(255, 204, 102, .98);
+    background: rgba(255, 176, 32, .14);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 18px rgba(255, 176, 32, .35); z-index: 3;
+  }
+
+  .obj-point {
+    position: absolute; transform: translate(-50%, -50%);
+    pointer-events: auto; cursor: pointer; text-decoration: none; display: flex; align-items: center;
+  }
+  .obj-point .dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(255, 176, 32, .9); border: 2px solid rgba(20, 14, 0, .85);
+    box-shadow: 0 0 8px rgba(255, 176, 32, .6);
+  }
+  .obj-point:hover .dot { background: rgba(255, 204, 102, 1); }
+
+  .obj-label {
+    position: absolute; left: 0; top: 0; transform: translateY(calc(-100% - 4px));
+    max-width: min(280px, 70vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: rgba(28, 18, 0, .92); color: #ffce6e; border: 1px solid rgba(255, 176, 32, .85);
+    border-radius: 4px; padding: 2px 6px; font-size: 12px; font-weight: 700; line-height: 1.25;
+    opacity: 0; pointer-events: none; transition: opacity .12s;
+  }
+  .obj-box:hover .obj-label, .obj-box:focus .obj-label { opacity: 1; }
+  .obj-label.inside { transform: none; top: 2px; left: 2px; }
+  .obj-label.point { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+  .obj-point:hover .obj-label.point { opacity: 1; }
+</style>

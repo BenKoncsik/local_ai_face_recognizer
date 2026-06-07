@@ -1,0 +1,28 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import ObjectCard from '../../../components/ObjectCard.astro';
+import Pagination from '../../../components/Pagination.astro';
+import { loadObjects, pagePaths, type PageInfo, type ObjectSummary } from '../../../lib/data';
+import { link } from '../../../lib/links';
+
+export function getStaticPaths() {
+  const objects = loadObjects();
+  // Stable order: by name (Hungarian collation) then id.
+  objects.sort((a, b) => a.name.localeCompare(b.name, 'hu') || a.id - b.id);
+  return pagePaths(objects);
+}
+
+interface Props { page: PageInfo<ObjectSummary>; }
+const { page } = Astro.props;
+const hrefFor = (p: number) => link(`/objects/page/${p}/`);
+---
+<Layout title="Objektumok" active="objects">
+  <div class="page-head">
+    <h1>Objektumok</h1>
+    <span class="muted">{page.total} objektum · {page.page}/{page.pageCount}. oldal</span>
+  </div>
+  <div class="card-grid">
+    {page.items.map((object) => <ObjectCard object={object} />)}
+  </div>
+  <Pagination page={page.page} pageCount={page.pageCount} hrefFor={hrefFor} />
+</Layout>

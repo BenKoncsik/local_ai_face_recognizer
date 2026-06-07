@@ -19,6 +19,7 @@ const pageTitle = title ? `${title} – ${manifest.title}` : manifest.title;
 const nav = [
   { key: 'gallery', href: link('/'), label: 'Galéria' },
   { key: 'persons', href: link('/persons/page/1/'), label: 'Személyek' },
+  manifest.hasObjects ? { key: 'objects', href: link('/objects/page/1/'), label: 'Objektumok' } : null,
   { key: 'photos', href: link('/photos/page/1/'), label: 'Fotók' },
   manifest.hasMap ? { key: 'map', href: '/map.html', label: 'Térkép' } : null,
   manifest.hasSlideshow ? { key: 'slideshow', href: '/slideshow.html', label: 'Diavetítés' } : null,

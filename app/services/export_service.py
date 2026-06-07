@@ -195,170 +195,6 @@ class ExportService:
         log.info("JSON export: %d person(s) → %s", len(records), out)
         return out
 
-    def export_html(
-        self,
-        target_dir: str,
-        person_id: Optional[int] = None,
-    ) -> Path:
-        """Generate a static HTML gallery to *target_dir*.
-
-        Creates:
-          index.html   – searchable gallery with per-person filtering
-          images/      – normalized original images used by the HTML overlay
-          thumbs/      – face-crop thumbnails
-        """
-        out = Path(target_dir)
-        img_dir = out / "images"
-        thumb_dir = out / "thumbs"
-        img_dir.mkdir(parents=True, exist_ok=True)
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-
-        persons = self._get_persons(person_id)
-
-        # --- build data structures ---
-        # image_path -> list of (person, face) records. Face bounding boxes are
-        # exported as percentages so CSS overlays stay aligned after resizing.
-        image_faces: Dict[str, List[Tuple[Person, Face]]] = {}
-        image_by_path: Dict[str, Image] = {}
-        faceless_image_paths: set[str] = set()
-        # person_name → list of thumb filenames
-        person_thumbs: Dict[str, List[str]] = {}
-        # person_name → list of image record ids
-        person_images: Dict[str, List[str]] = {}
-
-        for person in persons:
-            faces = self._get_faces(person.id)
-            person_thumbs.setdefault(person.name, [])
-            person_images.setdefault(person.name, [])
-            for face in faces:
-                if face.image:
-                    ip = face.image.file_path
-                    image_faces.setdefault(ip, []).append((person, face))
-                    image_by_path[ip] = face.image
-                if face.crop_path and Path(face.crop_path).exists():
-                    dst_thumb = thumb_dir / f"face_{face.id}.jpg"
-                    shutil.copy2(face.crop_path, dst_thumb)
-                    person_thumbs[person.name].append(dst_thumb.name)
-
-        if person_id is None:
-            faceless_images = (
-                self._session.query(Image)
-                .filter(~Image.faces.any())
-                .order_by(Image.file_path)
-                .all()
-            )
-            if faceless_images:
-                no_face_group = "Arc nélküli képek"
-                person_thumbs.setdefault(no_face_group, [])
-                person_images.setdefault(no_face_group, [])
-                for image in faceless_images:
-                    image_faces.setdefault(image.file_path, [])
-                    image_by_path[image.file_path] = image
-                    faceless_image_paths.add(image.file_path)
-
-        # --- export normalized originals and HTML overlay metadata ---
-        saved_names: set[str] = set()
-
-        image_records: Dict[str, dict] = {}
-        map_records: List[dict] = []
-        tour_records: List[dict] = []
-        image_order: List[str] = []
-        for img_path, face_list in image_faces.items():
-            img = load_image_bgr(img_path)
-            if img is None:
-                continue
-
-            img_h, img_w = img.shape[:2]
-            dst_name = _image_export_filename(img_path)
-            if not save_image_bgr(img_dir / dst_name, img):
-                continue
-            saved_names.add(dst_name)
-
-            face_records = []
-            persons_in_image: List[str] = []
-            has_identified = False
-            for person, face in face_list:
-                bbox = _face_bbox_for_export(face, img_w, img_h)
-                if bbox is None:
-                    continue
-                face_records.append(
-                    {
-                        "face_id": face.id,
-                        "person_id": person.id,
-                        "name": person.name,
-                        "bbox": bbox,
-                    }
-                )
-                _append_unique(person_images.setdefault(person.name, []), dst_name)
-                _append_unique(persons_in_image, person.name)
-                if not person.is_auto_named:
-                    has_identified = True
-
-            if img_path in faceless_image_paths:
-                _append_unique(person_images.setdefault("Arc nélküli képek", []), dst_name)
-
-            source = Path(img_path)
-            db_image = image_by_path.get(img_path)
-            image_records[dst_name] = {
-                "id": dst_name,
-                "src": f"images/{dst_name}",
-                "file_name": source.name,
-                "folder_name": source.parent.name,
-                "width": img_w,
-                "height": img_h,
-                "faces": face_records,
-            }
-            pair = self._build_deoldified_pair_export(
-                db_image, img_path, dst_name, img_dir, saved_names
-            )
-            if pair is not None:
-                image_records[dst_name]["pair"] = pair
-            map_record = _build_map_export_record(db_image, dst_name, source, face_records)
-            if map_record is not None:
-                map_records.append(map_record)
-            tour_records.append(
-                _build_tour_export_record(
-                    db_image, dst_name, source, face_records,
-                    persons_in_image, has_identified, img_w, img_h, pair,
-                )
-            )
-            image_order.append(dst_name)
-
-        # --- build JS data ---
-        persons_data = (
-            [
-                {
-                    "name": pname,
-                    "thumbs": person_thumbs.get(pname, []),
-                    "images": person_images.get(pname, []),
-                }
-                for pname in sorted(person_thumbs.keys())
-            ]
-        )
-
-        # --- render HTML ---
-        html = (
-            _HTML_TEMPLATE
-            .replace("__PERSONS_JSON__", _json_for_script(persons_data))
-            .replace("__IMAGES_JSON__", _json_for_script(image_records))
-            .replace("__IMAGE_ORDER_JSON__", _json_for_script(image_order))
-        )
-        (out / "index.html").write_text(html, encoding="utf-8")
-        _write_map_export_files(out, map_records)
-
-        # Rich person details for the slideshow's clickable person panel.
-        person_objs: Dict[int, Person] = {}
-        for face_list in image_faces.values():
-            for person, _face in face_list:
-                person_objs[person.id] = person
-        person_details = self._build_person_details_export(
-            list(person_objs.values()), thumb_dir
-        )
-        _write_tour_export_files(out, tour_records, person_details)
-
-        log.info("HTML export: %d person(s) → %s", len(persons), out)
-        return out
-
     # ------------------------------------------------------------------
     # Astro static-site export
     # ------------------------------------------------------------------
@@ -374,10 +210,9 @@ class ExportService:
     ) -> Path:
         """Export a paginated, lazy-loading static site via the Astro project.
 
-        Unlike :meth:`export_html` (which inlines the whole dataset into one
-        ``index.html``), this writes a chunked JSON + multi-size image *bundle*
-        into the Astro project, then optionally runs ``npm run build`` and
-        copies the generated ``dist/`` into *target_dir*.
+        Writes a chunked JSON + multi-size image *bundle* into the Astro
+        project, then optionally runs ``npm run build`` and copies the generated
+        ``dist/`` into *target_dir*.
 
         The browser only ever loads one paginated page of pre-baked HTML plus a
         minimal ``search-index.json`` — so the site stays fast with thousands of
@@ -441,11 +276,20 @@ class ExportService:
                 image_by_path[image.file_path] = image
                 faceless_image_paths.add(image.file_path)
 
+        # Object occurrences keyed by image id, so the per-image loop (which has
+        # the image's pixel dimensions) can convert their coordinates to the same
+        # image-relative percentages the face overlay uses. Objects are a domain
+        # separate from faces — missing/empty is normal and must not break export.
+        objects_by_image = self._build_object_occurrence_map()
+
         # --- per-image variants + photo records ---
         photos: List[dict] = []
         person_image_ids: Dict[int, List[str]] = {pid: [] for pid in person_face_thumbs}
         map_records: List[dict] = []
         tour_records: List[dict] = []
+        # DB image id → exported photo id, so object records (joined on image id)
+        # can reference the photos actually written by this export.
+        image_id_to_photo_id: Dict[int, str] = {}
 
         # Resizing every image is the bulk of the work → map it to 5–72%.
         total_images = len(image_faces) or 1
@@ -487,6 +331,13 @@ class ExportService:
             source = Path(img_path)
             db_image = image_by_path.get(img_path)
             pair = self._build_astro_pair(db_image, img_path, images_root)
+            object_records: List[dict] = []
+            if db_image is not None:
+                image_id_to_photo_id[db_image.id] = photo_id
+                for occ, obj_name in objects_by_image.get(db_image.id, []):
+                    record = _object_record_for_export(occ, obj_name, img_w, img_h)
+                    if record is not None:
+                        object_records.append(record)
             photos.append(
                 {
                     "id": photo_id,
@@ -503,6 +354,7 @@ class ExportService:
                     "folder": source.parent.name,
                     "date": (db_image.photo_date if db_image else "") or "",
                     "faces": face_records,
+                    "objects": object_records,
                     "personIds": person_ids,
                     "persons": persons_in_image,
                     "pair": pair,
@@ -524,6 +376,7 @@ class ExportService:
             tour = _build_tour_export_record(
                 db_image, photo_id, source, face_records,
                 persons_in_image, has_identified, img_w, img_h, pair,
+                objects=object_records,
             )
             tour["imagePath"] = _no_slash(variants["medium"])
             tour["thumbnailPath"] = _no_slash(variants["thumb"])
@@ -569,6 +422,12 @@ class ExportService:
                 }
             )
 
+        _report(78, "Objektumok feldolgozása…")
+        # --- object records (collection page, mirrors person records) ---
+        object_records = self._build_object_export_records(
+            images_root, image_id_to_photo_id
+        )
+
         # --- search index (minimal) ---
         search_index: List[dict] = []
         for p in person_records:
@@ -582,6 +441,11 @@ class ExportService:
             search_index.append({
                 "id": ph["id"], "name": label, "type": "photo",
                 "thumb": ph["thumb"], "url": f"photos/{ph['id']}/",
+            })
+        for o in object_records:
+            search_index.append({
+                "id": o["id"], "name": o["name"], "type": "object",
+                "thumb": o["thumb"], "url": f"objects/{o['id']}/",
             })
 
         # --- write bundle ---
@@ -599,6 +463,15 @@ class ExportService:
             }
             for p in person_records
         }
+        # Slideshow object panel data, keyed by stringified id (mirrors persons).
+        object_details = {
+            str(o["id"]): {
+                "id": o["id"], "name": o["name"], "description": o["description"],
+                "notes": o["notes"], "persons": o["persons"],
+                "imageCount": o["imageCount"], "thumb": _no_slash(o["thumb"]),
+            }
+            for o in object_records
+        }
 
         _report(80, "Galéria adatok kiírása…")
         # Parity views (map / slideshow) reuse the existing, tested standalone
@@ -608,7 +481,9 @@ class ExportService:
         if map_records:
             _write_map_export_files(public_dir, map_records)
         if tour_records:
-            _write_tour_export_files(public_dir, tour_records, person_details)
+            _write_tour_export_files(
+                public_dir, tour_records, person_details, object_details
+            )
         try:
             if self._has_collages():
                 self.export_collage_html(str(public_dir))
@@ -621,23 +496,27 @@ class ExportService:
             "pageSize": ASTRO_PAGE_SIZE,
             "personCount": len(person_records),
             "photoCount": len(photos),
+            "objectCount": len(object_records),
             "hasMap": bool(map_records),
             "hasSlideshow": bool(tour_records),
+            "hasObjects": bool(object_records),
             "hasCollages": has_collages,
             "title": "Face Gallery",
         }
         _write_json(data_dir / "manifest.json", manifest)
         _write_json(data_dir / "persons.json", person_records)
+        _write_json(data_dir / "objects.json", object_records)
         _write_json(data_dir / "photos.json", photos)
         _write_json(data_dir / "map-data.json", map_records)
         # The search index is consumed by the browser at runtime (not at build
         # time), so it ships under public/ → dist/assets/data/.
         _write_json(public_dir / "assets" / "data" / "search-index.json", search_index)
         _write_json(data_dir / "slideshow-data.json",
-                    {"records": tour_records, "persons": person_details})
+                    {"records": tour_records, "persons": person_details,
+                     "objects": object_details})
 
-        log.info("Astro bundle: %d person(s), %d photo(s) → %s",
-                 len(person_records), len(photos), data_dir)
+        log.info("Astro bundle: %d person(s), %d object(s), %d photo(s) → %s",
+                 len(person_records), len(object_records), len(photos), data_dir)
 
         if not run_build:
             _report(100, "Kész.")
@@ -661,6 +540,97 @@ class ExportService:
         """True when at least one collage exists (parity collage export)."""
         from app.services.collage_service import CollageService
         return bool(CollageService(self._session).list_collages())
+
+    def _build_object_occurrence_map(
+        self,
+    ) -> Dict[int, List[Tuple["ObjectOccurrence", str]]]:
+        """Return ``image_id → [(occurrence, object_name)]`` for every image.
+
+        Tagged objects are an optional, manually-curated domain that is wholly
+        separate from face recognition.  Old databases predate the object tables,
+        so any failure here (missing tables, no rows) degrades to an empty map —
+        the Astro export simply emits no object overlays.
+        """
+        from app.db.models import ObjectOccurrence, TaggedObject
+
+        result: Dict[int, List[Tuple["ObjectOccurrence", str]]] = {}
+        try:
+            rows = (
+                self._session.query(ObjectOccurrence, TaggedObject.name)
+                .join(TaggedObject, TaggedObject.id == ObjectOccurrence.object_id)
+                .order_by(ObjectOccurrence.id)
+                .all()
+            )
+        except Exception as exc:  # noqa: BLE001 — objects are optional metadata
+            log.warning("Object occurrences unavailable for export: %s", exc)
+            return result
+        for occ, name in rows:
+            result.setdefault(occ.image_id, []).append((occ, name))
+        return result
+
+    def _build_object_export_records(
+        self,
+        images_root: Path,
+        image_id_to_photo_id: Dict[int, str],
+    ) -> List[dict]:
+        """Build the per-object collection records (mirrors ``person_records``).
+
+        Each record carries the object's identity (name/description/notes), an
+        exported thumbnail, aggregate counts, the linked persons (with role
+        labels) and the exported photo ids it appears in.  Tagged objects are an
+        optional domain — any failure degrades to an empty list so the export
+        still succeeds on databases without the object tables.
+        """
+        try:
+            from app.services.object_service import ObjectService
+        except Exception as exc:  # noqa: BLE001 — objects are optional
+            log.warning("Object export unavailable: %s", exc)
+            return []
+
+        svc = ObjectService(self._session)
+        try:
+            summaries = svc.list_objects()
+            thumb_specs = svc.get_thumbnail_specs()
+        except Exception as exc:  # noqa: BLE001 — old DB without object tables
+            log.warning("Object export skipped: %s", exc)
+            return []
+
+        records: List[dict] = []
+        for summ in summaries:
+            oid = summ.object_id
+            thumb_path, tw, th = _export_object_thumb(
+                thumb_specs.get(oid), oid, images_root
+            )
+            persons = []
+            for link in svc.get_object_persons(oid):
+                persons.append({
+                    "id": link.person_id,
+                    "name": link.name,
+                    "role": link.role,
+                    "roleLabel": _OBJECT_ROLE_LABELS_HU.get(link.role, link.role),
+                    "note": link.note or "",
+                })
+            # Photo ids this object appears in (only those actually exported).
+            image_ids: List[str] = []
+            for occ in svc.get_occurrences(oid):
+                pid = image_id_to_photo_id.get(occ.image_id)
+                if pid is not None and pid not in image_ids:
+                    image_ids.append(pid)
+            records.append({
+                "id": oid,
+                "name": summ.name or "",
+                "description": summ.description or "",
+                "notes": summ.notes or "",
+                "thumb": thumb_path,
+                "thumbW": tw,
+                "thumbH": th,
+                "imageCount": len(image_ids),
+                "imageIds": image_ids,
+                "occurrenceCount": summ.occurrence_count,
+                "noteCount": summ.note_count,
+                "persons": persons,
+            })
+        return records
 
     def _build_astro_pair(
         self,
@@ -899,100 +869,6 @@ class ExportService:
                 )
         return rows
 
-    def _build_deoldified_pair_export(
-        self,
-        db_image: Optional[Image],
-        img_path: str,
-        dst_name: str,
-        img_dir: Path,
-        saved_names: set,
-    ) -> Optional[dict]:
-        """Find the deoldified counterpart of an image and export both sides.
-
-        Returns ``{"bw": "images/...", "color": "images/..."}`` so the HTML
-        viewer can toggle between, and slide-compare, the black-and-white
-        original and the colorized version.  Returns None when there is no
-        paired image on disk.
-        """
-        from app.services.deoldified_pairing_service import (
-            DeoldifiedPairingService,
-            is_deoldified_path,
-        )
-        from app.services.image_library_service import resolve_image_path
-
-        if db_image is None:
-            return None
-
-        svc = DeoldifiedPairingService(self._session)
-        current_is_color = is_deoldified_path(img_path)
-        partner = (
-            svc.find_original_for_deoldified(db_image)
-            if current_is_color
-            else svc.find_deoldified_for_original(db_image)
-        )
-        if partner is None:
-            return None
-
-        resolved = resolve_image_path(partner)
-        partner_disk = str(resolved) if resolved else partner.file_path
-        partner_name = _image_export_filename(partner.file_path)
-        if partner_name not in saved_names:
-            partner_img = load_image_bgr(partner_disk)
-            if partner_img is None:
-                return None
-            if not save_image_bgr(img_dir / partner_name, partner_img):
-                return None
-            saved_names.add(partner_name)
-
-        partner_src = f"images/{partner_name}"
-        current_src = f"images/{dst_name}"
-        if current_is_color:
-            return {"color": current_src, "bw": partner_src}
-        return {"color": partner_src, "bw": current_src}
-
-    def _build_person_details_export(
-        self,
-        persons: List[Person],
-        thumb_dir: Path,
-    ) -> Dict[str, dict]:
-        """Build a person_id → details map for the slideshow person panel.
-
-        Keyed by stringified person id (JSON object keys are strings).  Copies
-        each person's representative thumbnail into ``thumbs/`` when available.
-        """
-        from app.services.person_group_service import PersonGroupService
-
-        group_svc = PersonGroupService(self._session)
-        details: Dict[str, dict] = {}
-        for person in persons:
-            groups = [g.name for g in group_svc.get_person_groups(person.id)]
-            thumb = None
-            if person.thumbnail_path and Path(person.thumbnail_path).exists():
-                dst = thumb_dir / f"person_{person.id}.jpg"
-                try:
-                    shutil.copy2(person.thumbnail_path, dst)
-                    thumb = f"thumbs/{dst.name}"
-                except OSError:
-                    thumb = None
-            details[str(person.id)] = {
-                "id": person.id,
-                "name": person.name,
-                "isAutoNamed": bool(person.is_auto_named),
-                "gender": person.gender or "",
-                "familyCode": person.family_code or "",
-                "externalFamilyCode": person.external_family_code or "",
-                "nickname": person.nickname or "",
-                "marriedName": person.married_name or "",
-                "birthDate": person.birth_date or "",
-                "birthPlace": person.birth_place or "",
-                "deathDate": person.death_date or "",
-                "deathPlace": person.death_place or "",
-                "notes": person.notes or "",
-                "groups": groups,
-                "thumb": thumb,
-            }
-        return details
-
 
 def _image_export_filename(image_path: str) -> str:
     """Return a stable browser-friendly filename for an exported source image."""
@@ -1046,6 +922,68 @@ def _face_bbox_for_export(
 
 def _percent(value: float, total: int) -> float:
     return round((value / float(total)) * 100.0, 6)
+
+
+def _object_record_for_export(
+    occ: "ObjectOccurrence",
+    name: str,
+    image_w: int,
+    image_h: int,
+) -> Optional[dict]:
+    """Build one export record for a tagged-object occurrence.
+
+    Coordinates are emitted in the *same* image-relative percentage space the
+    face overlay uses (see :func:`_face_bbox_for_export`), so the Astro frontend
+    can position face and object overlays with identical CSS maths.
+
+    The record always carries the object's id/name/note so it can be listed even
+    when geometry is absent.  ``bbox`` is populated when the occurrence has a
+    bounding box, otherwise ``point`` is populated when it has a click point;
+    both are ``None`` when no geometry was recorded.
+    """
+    record: dict = {
+        "object_id": occ.object_id,
+        "name": name or "",
+        "confidence": (
+            round(occ.confidence, 4) if occ.confidence is not None else None
+        ),
+        "note": occ.note or "",
+        "bbox": None,
+        "point": None,
+    }
+
+    if image_w <= 0 or image_h <= 0:
+        return record
+
+    has_bbox = (
+        occ.bbox_x is not None
+        and occ.bbox_y is not None
+        and occ.bbox_w is not None
+        and occ.bbox_h is not None
+        and occ.bbox_w > 0
+        and occ.bbox_h > 0
+    )
+    if has_bbox:
+        x1 = max(0.0, min(float(occ.bbox_x), float(image_w)))
+        y1 = max(0.0, min(float(occ.bbox_y), float(image_h)))
+        x2 = max(x1, min(float(occ.bbox_x) + float(occ.bbox_w), float(image_w)))
+        y2 = max(y1, min(float(occ.bbox_y) + float(occ.bbox_h), float(image_h)))
+        if x2 > x1 and y2 > y1:
+            record["bbox"] = {
+                "left": _percent(x1, image_w),
+                "top": _percent(y1, image_h),
+                "width": _percent(x2 - x1, image_w),
+                "height": _percent(y2 - y1, image_h),
+            }
+    elif occ.point_x is not None and occ.point_y is not None:
+        px = max(0.0, min(float(occ.point_x), float(image_w)))
+        py = max(0.0, min(float(occ.point_y), float(image_h)))
+        record["point"] = {
+            "left": _percent(px, image_w),
+            "top": _percent(py, image_h),
+        }
+
+    return record
 
 
 def _append_unique(values: List[str], value: str) -> None:
@@ -1153,6 +1091,7 @@ def _build_tour_export_record(
     width: int,
     height: int,
     pair: Optional[dict] = None,
+    objects: Optional[List[dict]] = None,
 ) -> dict:
     """Build one rich per-image record for the slideshow / image-tour page.
 
@@ -1186,6 +1125,7 @@ def _build_tour_export_record(
         "gpsLongitude": round(longitude, 8) if longitude is not None else None,
         "persons": persons,
         "faces": face_records,
+        "objects": objects or [],
         "width": width,
         "height": height,
         "isFavorite": False,
@@ -1200,13 +1140,16 @@ def _write_tour_export_files(
     out: Path,
     records: List[dict],
     persons: Optional[Dict[str, dict]] = None,
+    objects: Optional[Dict[str, dict]] = None,
 ) -> None:
     persons = persons or {}
+    objects = objects or {}
     data_json = json.dumps(records, ensure_ascii=False, indent=2)
     (out / "slideshow-data.json").write_text(data_json + "\n", encoding="utf-8")
     (out / "slideshow-data.js").write_text(
         "window.TOUR_DATA = " + _json_for_script(records, indent=2) + ";\n"
-        + "window.TOUR_PERSONS = " + _json_for_script(persons, indent=2) + ";\n",
+        + "window.TOUR_PERSONS = " + _json_for_script(persons, indent=2) + ";\n"
+        + "window.TOUR_OBJECTS = " + _json_for_script(objects, indent=2) + ";\n",
         encoding="utf-8",
     )
     (out / "slideshow.html").write_text(_TOUR_HTML_TEMPLATE, encoding="utf-8")
@@ -1329,6 +1272,55 @@ def _export_person_thumb(person: Person, images_root: Path) -> Tuple[Optional[st
     return result
 
 
+# Hungarian labels for object↔person roles (mirrors app.ui.i18n object_role_*),
+# defined locally so the service layer stays independent of the Qt UI module.
+_OBJECT_ROLE_LABELS_HU = {
+    "owner": "Tulajdonos",
+    "former_owner": "Korábbi tulajdonos",
+    "driver": "Sofőr",
+    "creator": "Készítő",
+    "user": "Használó",
+    "family": "Családtag",
+    "other": "Egyéb",
+}
+
+
+def _export_object_thumb(
+    spec: Optional[Tuple],
+    object_id: int,
+    images_root: Path,
+) -> Tuple[Optional[str], int, int]:
+    """Export a tagged object's thumbnail; (web_path, w, h) or (None, 0, 0).
+
+    *spec* is ``(image_path, bbox_or_None)`` as returned by
+    :meth:`ObjectService.get_thumbnail_specs` — a manual crop file (bbox None)
+    or a source image to crop to the occurrence's bounding box.
+    """
+    if not spec:
+        return None, 0, 0
+    path, bbox = spec
+    if not path or not Path(path).exists():
+        return None, 0, 0
+    img = load_image_bgr(path)
+    if img is None:
+        return None, 0, 0
+    if bbox is not None:
+        h, w = img.shape[:2]
+        bx, by, bw, bh = bbox
+        x1 = max(0, min(int(bx), w))
+        y1 = max(0, min(int(by), h))
+        x2 = max(x1, min(int(bx) + int(bw), w))
+        y2 = max(y1, min(int(by) + int(bh), h))
+        if x2 > x1 and y2 > y1:
+            img = img[y1:y2, x1:x2]
+    result = _export_one_variant(
+        img, f"object_{object_id}", images_root, "objects",
+        ASTRO_THUMB_EDGE, ASTRO_THUMB_QUALITY)
+    if result is None:
+        return None, 0, 0
+    return result
+
+
 def _copy_asset(src: str, dst_dir: Path, name: str) -> Optional[str]:
     """Copy a small asset (e.g. a face crop) verbatim; return its filename."""
     try:
@@ -1407,8 +1399,7 @@ def _run_astro_build(project: Path) -> None:
     if shutil.which(npm) is None:
         raise RuntimeError(
             "Node.js/npm not found on PATH \u2014 the Astro export requires Node "
-            "to build. Install Node.js (https://nodejs.org) or use the classic "
-            "'Statikus weboldal' (export_html) export instead."
+            "to build. Install Node.js (https://nodejs.org) and try again."
         )
     if not (project / "node_modules").is_dir():
         log.info("Installing Astro dependencies (npm install) \u2026")
@@ -1420,477 +1411,6 @@ def _run_astro_build(project: Path) -> None:
 def _copy_tree_into(src: Path, dst: Path) -> None:
     """Copy the contents of *src* into *dst* (merging into an existing dir)."""
     shutil.copytree(src, dst, dirs_exist_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# Static HTML template
-# ---------------------------------------------------------------------------
-
-_HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="hu">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Face Gallery</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#111;color:#ddd;font-family:system-ui,sans-serif}
-  button,input{font:inherit}
-  header{background:#1a1a1a;padding:16px 24px;border-bottom:1px solid #333;
-         display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-  header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
-  .nav-link{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;
-            border-radius:6px;padding:7px 10px;background:#1d2b45;white-space:nowrap}
-  .nav-link:hover,.nav-link:focus{border-color:#88aaff;background:#26385a;outline:none}
-  #search{flex:1;min-width:180px;padding:8px 12px;background:#222;
-          border:1px solid #444;border-radius:6px;color:#fff;font-size:1rem}
-  #search:focus{outline:none;border-color:#88aaff}
-  #count{font-size:.85rem;color:#888;white-space:nowrap}
-
-  #persons{display:flex;flex-wrap:wrap;gap:20px;padding:20px}
-  .person-card{background:#1c1c1c;border:1px solid #333;border-radius:8px;
-               padding:14px;width:260px;transition:border-color .2s}
-  .person-card.hidden{display:none}
-  .person-card:hover{border-color:#88aaff}
-  .person-name{font-weight:bold;font-size:1rem;margin-bottom:10px;color:#eee}
-  .thumbs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
-  .thumbs img{width:56px;height:56px;object-fit:cover;border-radius:4px;
-              border:1px solid #444;cursor:pointer;transition:border-color .2s}
-  .thumbs img:hover{border-color:#88aaff}
-  .images-label{font-size:.75rem;color:#888;margin-bottom:6px}
-  .img-strip{display:flex;flex-wrap:wrap;gap:4px}
-  .image-tile{position:relative;display:inline-block;line-height:0;background:#050505;
-              border:1px solid #333;border-radius:4px;overflow:hidden;cursor:pointer;
-              transition:border-color .2s,opacity .2s}
-  .image-tile:hover,.image-tile:focus{border-color:#88aaff;opacity:.92;outline:none}
-  .image-tile>img{display:block;height:86px;max-width:220px;width:auto;object-fit:contain}
-  .media-wrap{position:relative;display:inline-block;line-height:0}
-  .media-wrap>img{display:block}
-  .bbox-overlay{position:absolute;inset:0;pointer-events:none}
-  .bbox{position:absolute;outline:2px solid rgba(72,220,122,.42);
-        background:rgba(72,220,122,.06);box-shadow:0 0 0 1px rgba(0,0,0,.35);
-        pointer-events:auto;cursor:pointer;transition:outline-color .15s,
-        outline-width .15s,background .15s,box-shadow .15s}
-  .bbox:hover,.bbox:focus{outline-color:rgba(125,255,166,.98);outline-width:3px;
-        background:rgba(72,220,122,.13);box-shadow:0 0 0 1px rgba(0,0,0,.55),
-        0 0 18px rgba(72,220,122,.35);z-index:3}
-  .bbox-label{position:absolute;left:0;top:0;transform:translateY(calc(-100% - 4px));
-              max-width:min(280px,70vw);overflow:hidden;text-overflow:ellipsis;
-              white-space:nowrap;background:rgba(12,18,12,.9);color:#75ff75;
-              border:1px solid rgba(50,220,50,.85);border-radius:4px;
-              padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25;
-              opacity:0;pointer-events:none;transition:opacity .12s}
-  .bbox:hover .bbox-label,.bbox:focus .bbox-label{opacity:1}
-  .bbox-label.inside{transform:none;top:2px;left:2px}
-
-  /* lightbox */
-  #lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);
-      z-index:100;align-items:center;justify-content:center;flex-direction:column;
-      gap:12px;padding:18px}
-  #lb.open{display:flex}
-  #lb-toolbar{width:min(92vw,1200px);display:flex;align-items:center;justify-content:center;
-              gap:10px;flex-wrap:wrap;color:#ddd}
-  #lb-caption{min-width:180px;text-align:center;color:#aaa;font-size:.9rem;
-              overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .lb-nav{padding:7px 12px;border:1px solid #3e5f9c;border-radius:6px;
-          color:#eaf0ff;background:#1d2b45;cursor:pointer}
-  .lb-nav:hover:not(:disabled){border-color:#88aaff;background:#26385a}
-  .lb-nav:disabled{opacity:.35;cursor:default}
-  #lb-media{max-width:92vw;max-height:82vh;border-radius:6px;
-            box-shadow:0 0 0 2px #88aaff;background:#050505}
-  #lb-media img{max-width:92vw;max-height:82vh;width:auto;height:auto;border-radius:6px}
-  #lb-close{position:fixed;top:16px;right:20px;font-size:2rem;cursor:pointer;
-             color:#aaa;line-height:1;background:none;border:none}
-  #lb-close:hover{color:#fff}
-
-  /* deoldified pair controls + compare slider */
-  #lb-pair-controls{display:none;width:min(92vw,1200px);align-items:center;
-                    justify-content:center;gap:8px;flex-wrap:wrap}
-  #lb-pair-controls.show{display:flex}
-  .lb-nav.active{background:#2f6df0;border-color:#88aaff;color:#fff}
-  #lb-img-top{display:none;position:absolute;inset:0;width:100%;height:100%;
-              object-fit:contain;border-radius:6px;pointer-events:none}
-  #lb-media.compare #lb-img-top{display:block}
-  #lb-slider{display:none;position:absolute;top:0;bottom:0;left:50%;width:40px;
-             transform:translateX(-50%);cursor:ew-resize;z-index:6;
-             align-items:center;justify-content:center;touch-action:none}
-  #lb-media.compare #lb-slider{display:flex}
-  #lb-slider .lb-slider-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
-             transform:translateX(-50%);background:#fff;box-shadow:0 0 4px rgba(0,0,0,.85)}
-  #lb-slider .lb-slider-handle{width:36px;height:36px;border-radius:50%;background:#fff;
-             color:#111;display:flex;align-items:center;justify-content:center;
-             font-size:18px;font-weight:700;box-shadow:0 0 7px rgba(0,0,0,.75);
-             position:relative;user-select:none}
-  #lb-media.compare>#lb-overlay{z-index:5}
-</style>
-</head>
-<body>
-<header>
-  <h1>Face Gallery</h1>
-  <a class="nav-link" href="slideshow.html">Diavetítés</a>
-  <a class="nav-link" href="map.html">Térkép</a>
-  <input id="search" type="text" placeholder="Keresés / Search…" oninput="filter()">
-  <span id="count"></span>
-</header>
-<div id="persons"></div>
-
-<!-- lightbox -->
-<div id="lb">
-  <button id="lb-close" onclick="closeLb()">✕</button>
-  <div id="lb-toolbar">
-    <button id="lb-prev" class="lb-nav" onclick="showRelativeImage(-1)">Előző kép</button>
-    <div id="lb-caption"></div>
-    <button id="lb-next" class="lb-nav" onclick="showRelativeImage(1)">Következő kép</button>
-  </div>
-  <div id="lb-pair-controls">
-    <button id="lb-color" class="lb-nav" onclick="setPairView('color')">Színes</button>
-    <button id="lb-bw" class="lb-nav" onclick="setPairView('bw')">Fekete-fehér</button>
-    <button id="lb-compare" class="lb-nav" onclick="toggleCompare()">Összehasonlítás</button>
-  </div>
-  <div id="lb-media" class="media-wrap">
-    <img id="lb-img" src="" alt="">
-    <img id="lb-img-top" alt="" aria-hidden="true">
-    <div id="lb-overlay" class="bbox-overlay"></div>
-    <div id="lb-slider" aria-hidden="true">
-      <div class="lb-slider-line"></div>
-      <div class="lb-slider-handle">⇔</div>
-    </div>
-  </div>
-</div>
-
-<script>
-const PERSONS = __PERSONS_JSON__;
-const IMAGES = __IMAGES_JSON__;
-const IMAGE_ORDER = __IMAGE_ORDER_JSON__;
-let currentImageId = null;
-let currentRecord = null;
-let currentPair = null;       // {bw, color} when the image has a deoldified pair
-let compareOn = false;        // slider compare mode active
-let pairMode = 'color';       // single-view mode: 'color' | 'bw'
-let currentSplit = 50;        // compare slider position (percent)
-
-function clearOverlay(overlay){
-  while(overlay.firstChild)overlay.removeChild(overlay.firstChild);
-}
-
-function setPercentStyle(el, prop, value){
-  const n=Number(value);
-  el.style[prop]=Number.isFinite(n)?n.toFixed(6)+'%':'0%';
-}
-
-function createFaceBox(face){
-  const bbox=face.bbox||{};
-  const box=document.createElement('div');
-  box.className='bbox';
-  box.tabIndex=0;
-  box.setAttribute('role','button');
-  const name=face.name||'Ismeretlen arc';
-  box.title=name;
-  box.setAttribute('aria-label','Arc: '+name);
-  setPercentStyle(box,'left',bbox.left);
-  setPercentStyle(box,'top',bbox.top);
-  setPercentStyle(box,'width',bbox.width);
-  setPercentStyle(box,'height',bbox.height);
-  if(face.name){
-    const label=document.createElement('div');
-    label.className='bbox-label';
-    if(Number(bbox.top)<6)label.classList.add('inside');
-    label.textContent=face.name;
-    box.appendChild(label);
-  }
-  return box;
-}
-
-function renderOverlay(record, overlay){
-  clearOverlay(overlay);
-  if(!record||!Array.isArray(record.faces))return;
-  record.faces.forEach(face=>{
-    overlay.appendChild(createFaceBox(face));
-  });
-}
-
-function imageTitle(record){
-  if(!record)return'';
-  const parts=[];
-  if(record.folder_name)parts.push(record.folder_name);
-  if(record.file_name)parts.push(record.file_name);
-  return parts.join(' / ');
-}
-
-function updatePairButtons(){
-  const bw=document.getElementById('lb-bw');
-  const color=document.getElementById('lb-color');
-  const cmp=document.getElementById('lb-compare');
-  if(bw)bw.classList.toggle('active',!compareOn&&pairMode==='bw');
-  if(color)color.classList.toggle('active',!compareOn&&pairMode==='color');
-  if(cmp)cmp.classList.toggle('active',compareOn);
-}
-
-function setCompareSplit(pct){
-  currentSplit=Math.max(0,Math.min(100,pct));
-  const top=document.getElementById('lb-img-top');
-  top.style.clipPath='inset(0 '+(100-currentSplit).toFixed(3)+'% 0 0)';
-  document.getElementById('lb-slider').style.left=currentSplit.toFixed(3)+'%';
-}
-
-function refreshPairMedia(){
-  const media=document.getElementById('lb-media');
-  const img=document.getElementById('lb-img');
-  const top=document.getElementById('lb-img-top');
-  if(!currentPair){
-    media.classList.remove('compare');
-    top.src='';
-    if(currentRecord)img.src=currentRecord.src;
-    return;
-  }
-  if(compareOn){
-    media.classList.add('compare');
-    top.src=currentPair.bw;        // B&W layer clipped on the left, color base on the right
-    img.src=currentPair.color;
-    setCompareSplit(currentSplit);
-  }else{
-    media.classList.remove('compare');
-    top.src='';
-    img.src=(pairMode==='bw')?currentPair.bw:currentPair.color;
-  }
-  updatePairButtons();
-}
-
-function setPairView(mode){
-  if(!currentPair)return;
-  compareOn=false;
-  pairMode=mode;
-  refreshPairMedia();
-}
-
-function toggleCompare(){
-  if(!currentPair)return;
-  compareOn=!compareOn;
-  if(compareOn)currentSplit=50;
-  refreshPairMedia();
-}
-
-function openLb(imageId){
-  const record=IMAGES[imageId];
-  if(!record)return;
-  currentImageId=imageId;
-  currentRecord=record;
-  currentPair=record.pair||null;
-  compareOn=false;
-  pairMode='color';
-  currentSplit=50;
-  document.getElementById('lb-pair-controls').classList.toggle('show',!!currentPair);
-  const img=document.getElementById('lb-img');
-  const overlay=document.getElementById('lb-overlay');
-  img.onload=()=>renderOverlay(record,overlay);
-  img.alt=imageTitle(record);
-  refreshPairMedia();
-  if(!currentPair)img.src=record.src;
-  document.getElementById('lb').classList.add('open');
-  renderOverlay(record,overlay);
-  updateLbNav();
-}
-
-function openThumb(src,title){
-  currentImageId=null;
-  currentRecord=null;
-  currentPair=null;
-  compareOn=false;
-  document.getElementById('lb-pair-controls').classList.remove('show');
-  document.getElementById('lb-media').classList.remove('compare');
-  document.getElementById('lb-img-top').src='';
-  const img=document.getElementById('lb-img');
-  img.onload=null;
-  img.src=src;
-  img.alt=title||'';
-  clearOverlay(document.getElementById('lb-overlay'));
-  document.getElementById('lb').classList.add('open');
-  setThumbNav(title||'Arc kivágás');
-}
-
-function closeLb(){
-  document.getElementById('lb').classList.remove('open');
-  document.getElementById('lb-media').classList.remove('compare');
-  currentImageId=null;
-  currentRecord=null;
-  currentPair=null;
-  compareOn=false;
-}
-
-(function initCompareDrag(){
-  const media=document.getElementById('lb-media');
-  let dragging=false;
-  function pctFromEvent(e){
-    const rect=media.getBoundingClientRect();
-    if(!rect.width)return currentSplit;
-    return ((e.clientX-rect.left)/rect.width)*100;
-  }
-  media.addEventListener('pointerdown',function(e){
-    if(!compareOn)return;
-    dragging=true;
-    setCompareSplit(pctFromEvent(e));
-    e.preventDefault();
-  });
-  window.addEventListener('pointermove',function(e){
-    if(!compareOn||!dragging)return;
-    setCompareSplit(pctFromEvent(e));
-  });
-  window.addEventListener('pointerup',function(){dragging=false;});
-})();
-
-function setThumbNav(title){
-  document.getElementById('lb-prev').disabled=true;
-  document.getElementById('lb-next').disabled=true;
-  document.getElementById('lb-caption').textContent=title;
-}
-
-function updateLbNav(){
-  const idx=IMAGE_ORDER.indexOf(currentImageId);
-  const prev=document.getElementById('lb-prev');
-  const next=document.getElementById('lb-next');
-  if(idx<0){
-    prev.disabled=true;
-    next.disabled=true;
-    return;
-  }
-  prev.disabled=idx===0;
-  next.disabled=idx===IMAGE_ORDER.length-1;
-  const record=IMAGES[currentImageId];
-  const names=[...new Set((record.faces||[]).map(f=>f.name).filter(Boolean))];
-  let caption=(idx+1)+' / '+IMAGE_ORDER.length;
-  const title=imageTitle(record);
-  if(title)caption+=' - '+title;
-  if(names.length)caption+=' - '+names.join(', ');
-  document.getElementById('lb-caption').textContent=caption;
-}
-
-function showRelativeImage(delta){
-  const idx=IMAGE_ORDER.indexOf(currentImageId);
-  const nextIdx=idx+delta;
-  if(idx<0||nextIdx<0||nextIdx>=IMAGE_ORDER.length)return;
-  openLb(IMAGE_ORDER[nextIdx]);
-}
-
-function openImageFromHash(){
-  const hash=window.location.hash.startsWith('#')?window.location.hash.slice(1):'';
-  const params=new URLSearchParams(hash);
-  const imageId=params.get('image');
-  if(imageId&&IMAGES[imageId])openLb(imageId);
-}
-
-document.getElementById('lb').addEventListener('click',function(e){
-  if(e.target===this)closeLb();
-});
-document.addEventListener('keydown',function(e){
-  const open=document.getElementById('lb').classList.contains('open');
-  if(!open)return;
-  if(e.key==='Escape')closeLb();
-  if(e.key==='ArrowLeft'){
-    e.preventDefault();
-    showRelativeImage(-1);
-  }
-  if(e.key==='ArrowRight'){
-    e.preventDefault();
-    showRelativeImage(1);
-  }
-  if((e.key==='c'||e.key==='C')&&currentPair){
-    e.preventDefault();
-    toggleCompare();
-  }
-});
-
-function createImageTile(imageId,personName){
-  const rec=IMAGES[imageId];
-  if(!rec)return null;
-  const tile=document.createElement('div');
-  tile.className='image-tile';
-  tile.tabIndex=0;
-  tile.title=imageTitle(rec)||personName||'';
-  tile.onclick=()=>openLb(imageId);
-  tile.addEventListener('keydown',e=>{
-    if(e.key==='Enter'||e.key===' '){
-      e.preventDefault();
-      openLb(imageId);
-    }
-  });
-  const img=document.createElement('img');
-  img.src=rec.src;
-  img.alt=imageTitle(rec)||personName||'';
-  tile.appendChild(img);
-  const overlay=document.createElement('div');
-  overlay.className='bbox-overlay';
-  renderOverlay(rec,overlay);
-  tile.appendChild(overlay);
-  return tile;
-}
-
-function buildCards(){
-  const wrap=document.getElementById('persons');
-  while(wrap.firstChild)wrap.removeChild(wrap.firstChild);
-  PERSONS.forEach(p=>{
-    const card=document.createElement('div');
-    card.className='person-card';
-    card.dataset.name=String(p.name||'').toLocaleLowerCase('hu-HU');
-
-    const nameEl=document.createElement('div');
-    nameEl.className='person-name';
-    nameEl.textContent=p.name+' ('+p.images.length+' kép)';
-    card.appendChild(nameEl);
-
-    if(p.thumbs.length){
-      const thumbs=document.createElement('div');
-      thumbs.className='thumbs';
-      p.thumbs.forEach(t=>{
-        const img=document.createElement('img');
-        img.src='thumbs/'+t;
-        img.title=p.name;
-        img.alt=p.name;
-        img.onclick=()=>openThumb('thumbs/'+t,p.name);
-        thumbs.appendChild(img);
-      });
-      card.appendChild(thumbs);
-    }
-
-    if(p.images.length){
-      const lbl=document.createElement('div');
-      lbl.className='images-label';
-      lbl.textContent='Eredeti képek / Original photos:';
-      card.appendChild(lbl);
-      const strip=document.createElement('div');
-      strip.className='img-strip';
-      p.images.forEach(imageId=>{
-        const tile=createImageTile(imageId,p.name);
-        if(tile)strip.appendChild(tile);
-      });
-      card.appendChild(strip);
-    }
-
-    wrap.appendChild(card);
-  });
-  updateCount();
-}
-
-function filter(){
-  const q=document.getElementById('search').value.toLocaleLowerCase('hu-HU').trim();
-  document.querySelectorAll('.person-card').forEach(c=>{
-    c.classList.toggle('hidden', q && !c.dataset.name.includes(q));
-  });
-  updateCount();
-}
-
-function updateCount(){
-  const total=document.querySelectorAll('.person-card').length;
-  const vis=document.querySelectorAll('.person-card:not(.hidden)').length;
-  document.getElementById('count').textContent=vis+' / '+total+' személy';
-}
-
-buildCards();
-openImageFromHash();
-window.addEventListener('hashchange',openImageFromHash);
-</script>
-</body>
-</html>
-"""
 
 
 _MAP_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -2442,6 +1962,33 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
 .labels-off .tb-label{opacity:0}
 .tb:hover .tb-label,.tb:focus .tb-label,.tb.show .tb-label{opacity:1}
 
+/* Tagged objects: amber + dashed (boxes) or amber dots (points), clearly
+   distinct from the green solid face frames. Labels follow the label-mode. */
+.tob{position:absolute;outline:2px dashed rgba(255,176,32,.85);background:rgba(255,176,32,.05);
+     pointer-events:auto;cursor:pointer;transition:outline-color .15s,background .15s}
+.tob:hover,.tob:focus,.tob.show{outline-color:rgba(255,204,102,.98);
+     background:rgba(255,176,32,.14);z-index:3;outline-width:3px}
+.labels-off .tob{outline-color:transparent;background:transparent}
+.labels-off .tob:hover,.labels-off .tob:focus,.labels-off .tob.show{
+     outline-color:rgba(255,204,102,.98);background:rgba(255,176,32,.14)}
+.tobp{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;
+     display:flex;align-items:center;z-index:3}
+.tobp-dot{width:14px;height:14px;border-radius:50%;background:rgba(255,176,32,.9);
+     border:2px solid rgba(20,14,0,.85);box-shadow:0 0 8px rgba(255,176,32,.6)}
+.tobp:hover .tobp-dot,.tobp:focus .tobp-dot{background:rgba(255,204,102,1)}
+.tob-label{position:absolute;left:0;top:0;transform:translateY(calc(-100% - 4px));
+          max-width:min(280px,70vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          background:rgba(28,18,0,.92);color:#ffce6e;border:1px solid rgba(255,176,32,.85);
+          border-radius:4px;padding:2px 6px;font-size:12px;font-weight:700;line-height:1.25;
+          transition:opacity .12s}
+.tob-label.inside{transform:none;top:2px;left:2px}
+.tob-label.point{left:12px;top:50%;transform:translateY(-50%)}
+.labels-full .tob-label{opacity:1}
+.labels-dim .tob-label{opacity:.28}
+.labels-off .tob-label{opacity:0}
+.tob:hover .tob-label,.tob:focus .tob-label,.tob.show .tob-label,
+.tobp:hover .tob-label,.tobp:focus .tob-label{opacity:1}
+
 #controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#1a1a1a;
           border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px}
 #controls button{min-width:42px;padding:8px 12px;border:1px solid #3e5f9c;border-radius:6px;
@@ -2514,6 +2061,7 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
 
 _TOUR_JS = """const TOUR = Array.isArray(window.TOUR_DATA) ? window.TOUR_DATA : [];
 const PERSONS = (window.TOUR_PERSONS && typeof window.TOUR_PERSONS === 'object') ? window.TOUR_PERSONS : {};
+const OBJECTS = (window.TOUR_OBJECTS && typeof window.TOUR_OBJECTS === 'object') ? window.TOUR_OBJECTS : {};
 let filtered = TOUR.slice();
 let index = 0;
 let playing = false;
@@ -2692,6 +2240,40 @@ function closePersonPanel(){
   els.personPanel.hidden = true;
 }
 
+// The clickable detail panel is shared by persons and objects. Objects show
+// their description and notes (mirrors the person panel's bio + notes).
+function openObjectPanel(objectId, fallbackName){
+  const info = (objectId != null) ? OBJECTS[String(objectId)] : null;
+  const name = (info && info.name) || fallbackName || 'Objektum';
+  els.ppTitle.textContent = name;
+  const parts = [];
+  if(info && info.thumb){
+    parts.push('<img class=\"pp-thumb\" src=\"' + esc(info.thumb) + '\" alt=\"' + esc(name) + '\">');
+  }
+  if(info && info.description){
+    parts.push('<div class=\"pp-row\">' + esc(info.description) + '</div>');
+  }
+  if(info && info.persons && info.persons.length){
+    const people = info.persons.map(p => {
+      const lab = p.roleLabel || p.role;
+      return '<span class=\"pp-group\">' + esc(p.name) + (lab ? ' — ' + esc(lab) : '') + '</span>';
+    }).join('');
+    parts.push('<div class=\"pp-row\"><b>Kapcsolódó személyek:</b></div>'
+      + '<div class=\"pp-groups\">' + people + '</div>');
+  }
+  if(info && info.imageCount){
+    parts.push('<div class=\"pp-row\"><b>Képek száma:</b> ' + esc(info.imageCount) + '</div>');
+  }
+  if(info && info.notes){
+    parts.push('<div class=\"pp-notes\">' + esc(info.notes) + '</div>');
+  }
+  if(parts.length === (info && info.thumb ? 1 : 0)){
+    parts.push('<div class=\"pp-empty\">Nincs további adat ehhez az objektumhoz.</div>');
+  }
+  els.ppBody.innerHTML = parts.join('');
+  els.personPanel.hidden = false;
+}
+
 function clearOverlay(){
   while(els.overlay.firstChild) els.overlay.removeChild(els.overlay.firstChild);
 }
@@ -2722,6 +2304,49 @@ function renderOverlay(record){
     });
     els.overlay.appendChild(box);
   });
+  // Tagged objects: amber boxes (bbox) or dots (point), distinct from faces.
+  // Clicking opens the same panel, filled with the object's description.
+  (record.objects || []).forEach(obj => {
+    const name = obj.name || 'Objektum';
+    const title = obj.note ? (name + ' — ' + obj.note) : name;
+    let el;
+    if(obj.bbox){
+      el = document.createElement('div');
+      el.className = 'tob';
+      setPct(el, 'left', obj.bbox.left);
+      setPct(el, 'top', obj.bbox.top);
+      setPct(el, 'width', obj.bbox.width);
+      setPct(el, 'height', obj.bbox.height);
+      const label = document.createElement('div');
+      label.className = 'tob-label';
+      if(Number(obj.bbox.top) < 8) label.classList.add('inside');
+      label.textContent = name;
+      el.appendChild(label);
+    } else if(obj.point){
+      el = document.createElement('div');
+      el.className = 'tobp';
+      setPct(el, 'left', obj.point.left);
+      setPct(el, 'top', obj.point.top);
+      const dot = document.createElement('span');
+      dot.className = 'tobp-dot';
+      el.appendChild(dot);
+      const label = document.createElement('div');
+      label.className = 'tob-label point';
+      label.textContent = name;
+      el.appendChild(label);
+    } else {
+      return;  // no geometry → nothing to anchor on the image
+    }
+    el.tabIndex = 0;
+    el.title = title;
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', 'Objektum: ' + name);
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      openObjectPanel(obj.object_id, name);
+    });
+    els.overlay.appendChild(el);
+  });
 }
 
 function renderInfo(record){
@@ -2738,6 +2363,10 @@ function renderInfo(record){
   const place = [record.locationName, record.city].filter((v,i,a)=>v && a.indexOf(v)===i).join(', ');
   if(place) rows.push(['Helyszín', place]);
   if(record.persons && record.persons.length) rows.push(['Személyek', record.persons.join(', ')]);
+  if(record.objects && record.objects.length){
+    const objNames = [...new Set(record.objects.map(o => o.name).filter(Boolean))];
+    if(objNames.length) rows.push(['Objektumok', objNames.join(', ')]);
+  }
   if(record.folder) rows.push(['Mappa', record.folder]);
   if(record.fileName) rows.push(['Fájl', record.fileName]);
   rows.forEach(([k,v]) => { html += '<div class=\"info-row\"><b>' + esc(k) + ':</b> ' + esc(v) + '</div>'; });
@@ -2906,8 +2535,8 @@ els.stage.addEventListener('touchend', e => {
   }
   els.media.addEventListener('pointerdown', e => {
     if(!els.media.classList.contains('compare')) return;
-    // Clicking a face opens the person panel — don't move the slider there.
-    if(e.target.closest && e.target.closest('.tb')) return;
+    // Clicking a face/object opens its panel — don't move the slider there.
+    if(e.target.closest && e.target.closest('.tb, .tob, .tobp')) return;
     dragging = true;
     setTourSplit(pctFromEvent(e));
     e.preventDefault();
@@ -2951,10 +2580,11 @@ document.addEventListener('fullscreenchange', () => {
   if(map) setTimeout(() => map.invalidateSize(), 80);
 });
 
-// Clicking anywhere outside a face hides any tapped-open frame/label.
+// Clicking anywhere outside a face/object hides any tapped-open frame/label.
 document.addEventListener('click', e => {
-  if(e.target.closest && e.target.closest('.tb')) return;
-  document.querySelectorAll('.tb.show').forEach(b => b.classList.remove('show'));
+  if(e.target.closest && e.target.closest('.tb, .tob, .tobp')) return;
+  document.querySelectorAll('.tb.show, .tob.show, .tobp.show')
+    .forEach(b => b.classList.remove('show'));
 });
 
 document.addEventListener('keydown', e => {

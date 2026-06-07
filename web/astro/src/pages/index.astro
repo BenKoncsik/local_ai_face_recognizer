@@ -6,6 +6,7 @@ const m = loadManifest();
 
 const tiles = [
   { href: link('/persons/page/1/'), label: 'Személyek', count: m.personCount, icon: '👤' },
+  m.hasObjects ? { href: link('/objects/page/1/'), label: 'Objektumok', count: m.objectCount, icon: '📦' } : null,
   { href: link('/photos/page/1/'), label: 'Fotók', count: m.photoCount, icon: '🖼️' },
   m.hasMap ? { href: '/map.html', label: 'Térkép', icon: '🗺️' } : null,
   m.hasSlideshow ? { href: '/slideshow.html', label: 'Diavetítés', icon: '▶️' } : null,
@@ -15,7 +16,7 @@ const tiles = [
 <Layout title={null} active="gallery">
   <section class="hero">
     <h1>{m.title}</h1>
-    <p class="muted">{m.personCount} személy · {m.photoCount} fotó</p>
+    <p class="muted">{m.personCount} személy · {m.photoCount} fotó{m.hasObjects ? ` · ${m.objectCount} objektum` : ''}</p>
   </section>
   <div class="tiles">
     {tiles.map((t) => (

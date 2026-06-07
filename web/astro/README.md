@@ -1,9 +1,9 @@
 # Face Gallery — Astro static export
 
-Scalable static-site export for the local AI face recognizer. Replaces the
-single-giant-HTML export (`ExportService.export_html`) with a **paginated,
+Scalable static-site export for the local AI face recognizer — a **paginated,
 lazy-loading, thumbnail-based** site that stays fast with thousands of
-persons/photos. Pure SSG — no backend after the build.
+persons/photos. Pure SSG — no backend after the build. This is the only HTML
+gallery export; the older single-page `export_html` generator was removed.
 
 ## How it works
 

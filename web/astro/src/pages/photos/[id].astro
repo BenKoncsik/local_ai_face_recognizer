@@ -1,6 +1,7 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import FaceOverlay from '../../components/FaceOverlay.astro';
+import ObjectOverlay from '../../components/ObjectOverlay.astro';
 import { loadPhotos, type Photo } from '../../lib/data';
 import { link } from '../../lib/links';
 
@@ -29,6 +30,14 @@ const people = Array.from(
       .map((f) => [f.person_id, { id: f.person_id as number, name: f.name }])
   ).values()
 );
+
+// Tagged objects in this photo (separate domain from faces). Optional key on
+// older bundles → default to []. Deduplicate the list by object id for the
+// summary section while keeping every occurrence for the on-image overlay.
+const objects = photo.objects ?? [];
+const objectList = Array.from(
+  new Map(objects.map((o) => [o.object_id, o])).values()
+);
 const hasPair = !!photo.pair;
 ---
 <Layout title={photo.fileName} active="photos">
@@ -49,6 +58,7 @@ const hasPair = !!photo.pair;
     <img id="base-img" src={photo.medium} alt={photo.fileName} width={photo.mediumW || undefined} height={photo.mediumH || undefined} decoding="async" />
     {hasPair && <img id="top-img" alt="" aria-hidden="true" />}
     <FaceOverlay faces={photo.faces} />
+    <ObjectOverlay objects={objects} />
     {/* Hidden sources for the colour/B&W pair. Their src attributes are
         rewritten to page-relative paths by astro-relative-links, so JS can read
         the resolved .src and the compare works from file:// too. */}
@@ -83,6 +93,22 @@ const hasPair = !!photo.pair;
       <h2>Személyek a képen</h2>
       <ul>
         {people.map((p) => <li><a href={link(`/persons/${p.id}/`)}>{p.name}</a></li>)}
+      </ul>
+    </section>
+  )}
+
+  {objectList.length > 0 && (
+    <section class="objects">
+      <h2>Objektumok a képen</h2>
+      <ul>
+        {objectList.map((o) => (
+          <li>
+            <a class="obj-chip" href={link(`/objects/${o.object_id}/`)} title={o.note || undefined}>
+              <span class="obj-name">{o.name || 'Névtelen objektum'}</span>
+              {o.note && <span class="obj-note">{o.note}</span>}
+            </a>
+          </li>
+        ))}
       </ul>
     </section>
   )}
@@ -125,6 +151,15 @@ const hasPair = !!photo.pair;
     .people ul { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
     .people a { color: #dbe6ff; text-decoration: none; border: 1px solid #3e5f9c; border-radius: 999px; padding: 4px 12px; background: #1d2b45; }
     .people a:hover { border-color: #88aaff; }
+
+    /* Amber palette mirrors the object overlay so the two domains read as one. */
+    .objects { max-width: 1100px; margin: 20px auto 0; }
+    .objects h2 { font-size: 1.05rem; color: #ffce6e; margin-bottom: 8px; }
+    .objects ul { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+    .obj-chip { display: inline-flex; align-items: baseline; gap: 8px; color: #ffd98a; border: 1px solid #6b531a; border-radius: 999px; padding: 4px 12px; background: #2a2008; text-decoration: none; }
+    .obj-chip:hover { border-color: #ffb020; }
+    .obj-chip .obj-name { font-weight: 600; }
+    .obj-chip .obj-note { color: #bfae7e; font-size: .85rem; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 
   {hasPair && (

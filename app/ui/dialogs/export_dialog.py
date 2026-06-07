@@ -164,18 +164,6 @@ class ExportDialog(QDialog):
         img_layout.addWidget(self._images_btn)
         layout.addWidget(img_box)
 
-        # --- HTML gallery ---
-        html_box = QGroupBox(t("export_html_group"))
-        html_layout = QVBoxLayout(html_box)
-        html_desc = QLabel(t("export_html_desc"))
-        html_desc.setWordWrap(True)
-        html_desc.setStyleSheet("color: #aaa; font-size: 11px;")
-        html_layout.addWidget(html_desc)
-        self._html_btn = QPushButton(f"🌐  {t('export_generate_html')}")
-        self._html_btn.clicked.connect(self._on_export_html)
-        html_layout.addWidget(self._html_btn)
-        layout.addWidget(html_box)
-
         # --- Astro static site (scalable) ---
         astro_box = QGroupBox(t("export_astro_group"))
         astro_layout = QVBoxLayout(astro_box)
@@ -367,32 +355,6 @@ class ExportDialog(QDialog):
                 target_path=path, person_id=self._scope_person_id()
             )
         QMessageBox.information(self, t("json_exported"), t("json_saved", path=out))
-
-    def _on_export_html(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, t("html_gallery_folder"), str(Path.home())
-        )
-        if not folder:
-            return
-        import subprocess, sys
-        with session_scope() as session:
-            out = ExportService(session).export_html(
-                target_dir=folder, person_id=self._scope_person_id()
-            )
-        index = out / "index.html"
-        reply = QMessageBox.information(
-            self,
-            t("html_gallery_done"),
-            t("html_gallery_open", path=index),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", str(index)])
-            elif sys.platform == "win32":
-                subprocess.Popen(["start", str(index)], shell=True)
-            else:
-                subprocess.Popen(["xdg-open", str(index)])
 
     def _on_export_astro(self) -> None:
         folder = QFileDialog.getExistingDirectory(

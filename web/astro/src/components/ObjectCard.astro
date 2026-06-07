@@ -1,0 +1,35 @@
+---
+import type { ObjectSummary } from '../lib/data';
+import { link } from '../lib/links';
+interface Props { object: ObjectSummary; }
+const { object } = Astro.props;
+const href = link(`/objects/${object.id}/`);
+const sub = object.imageCount
+  ? `${object.imageCount} kép`
+  : (object.description || '');
+---
+<a class="card obj-card" href={href}>
+  <div class="thumb-wrap">
+    {object.thumb ? (
+      <img
+        src={object.thumb}
+        alt={object.name}
+        width={object.thumbW || undefined}
+        height={object.thumbH || undefined}
+        loading="lazy"
+        decoding="async"
+      />
+    ) : (
+      <span class="placeholder">📦</span>
+    )}
+  </div>
+  <div class="body">
+    <div class="title">{object.name || '(névtelen)'}</div>
+    <div class="sub">{sub}</div>
+  </div>
+</a>
+
+<style>
+  /* Amber accent so object cards read as the same domain as the overlays. */
+  .obj-card:hover, .obj-card:focus { border-color: #ffb020; }
+</style>

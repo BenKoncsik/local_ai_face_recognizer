@@ -51,11 +51,17 @@
   type Entry = {
     id: string | number;
     name: string;
-    type: 'person' | 'photo';
+    type: 'person' | 'photo' | 'object';
     birthYear?: string;
     deathYear?: string;
     thumb?: string | null;
     url: string;
+  };
+
+  const TYPE_LABELS: Record<string, string> = {
+    person: 'személy',
+    photo: 'fotó',
+    object: 'objektum',
   };
 
   const input = document.getElementById('site-search') as HTMLInputElement | null;
@@ -100,10 +106,12 @@
     }
 
     function lifespan(e: Entry): string {
-      if (e.type !== 'person') return e.name ? 'Fotó' : '';
-      const b = e.birthYear || '';
-      const d = e.deathYear || '';
-      return b || d ? `${b}–${d}` : '';
+      if (e.type === 'person') {
+        const b = e.birthYear || '';
+        const d = e.deathYear || '';
+        return b || d ? `${b}–${d}` : '';
+      }
+      return '';
     }
 
     function render(items: Entry[]): void {
@@ -122,7 +130,7 @@
           return `<a href="${esc(resultHref(e.url))}" role="option">${img}<span><span class="r-name">${esc(
             e.name || '(névtelen)'
           )}</span>${sub ? `<br><span class="r-sub">${esc(sub)}</span>` : ''}</span><span class="r-type">${
-            e.type === 'person' ? 'személy' : 'fotó'
+            TYPE_LABELS[e.type] || e.type
           }</span></a>`;
         })
         .join('');
