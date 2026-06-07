@@ -2728,6 +2728,9 @@ class MainWindow(QMainWindow):
             "Személyadatok mentve: %s %s",
             dlg.last_name(), dlg.first_name()
         )
+        # Reflect the saved structured data in the sidebar and the Persons tab
+        # table (the dialog only wrote to the DB).
+        self._refresh_persons()
 
     @Slot()
     def _on_recluster(self) -> None:
@@ -3195,6 +3198,11 @@ class MainWindow(QMainWindow):
             self._sidebar.populate(persons)
         if hasattr(self, "_family_search"):
             self._family_search.refresh()
+        # Keep the standalone Persons tab table in sync with edits made
+        # anywhere (image browser, sidebar dialog, batch ops).  It reloads
+        # immediately when visible, otherwise lazily on next show.
+        if hasattr(self, "_persons_panel"):
+            self._persons_panel.mark_stale()
         log.debug("Sidebar refreshed: %d person(s)", len(persons))
 
     @Slot(int)

@@ -190,6 +190,10 @@ class PersonsPanel(QWidget):
         self._current_person_id: Optional[int] = None
         self._current_person_name: str = ""
         self._thumb_keys: Dict[str, int] = {}  # thumb cache key → row
+        # Set when a person changed elsewhere (e.g. the image browser or the
+        # sidebar's PersonInfoDialog) while this tab was not visible; consumed
+        # by showEvent so the table reloads from the DB the moment it is shown.
+        self._needs_refresh = False
         # Last batch move, kept so it can be undone from the notification bar.
         self._last_move_result: Optional[BulkReassignResult] = None
         self._build_ui()
@@ -409,6 +413,10 @@ class PersonsPanel(QWidget):
         self._count_lbl.setText(t("persons_count", n=len(summaries)))
         self._start_thumbnail_loads(summaries)
 
+        # A full reload always reflects the committed DB state, so any pending
+        # cross-tab staleness is now resolved.
+        self._needs_refresh = False
+
         # Preserve selection if the person still exists, else clear detail.
         if self._current_person_id is not None and self._select_person_row(
             self._current_person_id
@@ -417,6 +425,25 @@ class PersonsPanel(QWidget):
         else:
             self._current_person_id = None
             self._clear_detail()
+
+    def mark_stale(self) -> None:
+        """Flag the table as out-of-date after an edit made elsewhere.
+
+        Refreshes immediately when the tab is visible so the change shows at
+        once; otherwise defers the (potentially expensive) full reload until
+        the tab is next shown — see :meth:`showEvent`.  This keeps frequent
+        ``person_data_changed`` emissions (e.g. one per face assignment in the
+        image browser) from rebuilding a hidden table on every signal.
+        """
+        if self.isVisible():
+            self.refresh()
+        else:
+            self._needs_refresh = True
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        if self._needs_refresh:
+            self.refresh()
 
     def _populate_row(self, row: int, s: PersonSummary) -> None:
         id_item = _NumericItem(s.person_id)
