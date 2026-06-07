@@ -507,6 +507,17 @@ class Face(Base):
     # Whether this face was manually excluded from clustering
     is_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Whether this face is excluded from name-matching merges.  Unlike
+    # ``is_excluded`` (which removes the face from clustering/recognition
+    # entirely), a merge-excluded face stays visible and assigned to its
+    # current (usually Unknown) person, but is held back when that person is
+    # merged into a named identity and never counts as a positive example for
+    # the merge.  This is the persistent backing for the "exclude from merge"
+    # action in the name-suggestion gallery.
+    is_merge_excluded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     # How the current person_id was assigned: NULL for legacy/manual data,
     # "manual", "manual_merge", "recognition", "clustering", etc.
     assignment_source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

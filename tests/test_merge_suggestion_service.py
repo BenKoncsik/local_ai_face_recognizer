@@ -255,3 +255,105 @@ class TestDecisions:
             assert dto.candidate_name == "Unknown 1"
             assert dto.target_name == "Anna"
             assert dto.confidence > 0
+
+
+# ---------------------------------------------------------------------------
+# Merge exclusion ("exclude from merge" workflow)
+# ---------------------------------------------------------------------------
+
+class TestMergeExclusion:
+    def test_excluded_face_dropped_from_profile(self, tmp_db):
+        from app.services.identity_service import IdentityService
+
+        with session_scope() as session:
+            _, auto = _seed_match(session)
+            auto_face_ids = [
+                f.id for f in session.get(Person, auto).faces
+            ]
+        # Exclude one of the auto person's faces from the merge.
+        with session_scope() as session:
+            IdentityService(session).set_face_merge_excluded(
+                auto_face_ids[0], True
+            )
+        with session_scope() as session:
+            svc = MergeSuggestionService(session, MatchingConfig())
+            profiles = {p.person_id: p for p in svc.load_candidates()}
+            # The candidate now has only 2 usable faces (3 minus the excluded).
+            assert profiles[auto].face_count == 2
+
+    def test_accept_keeps_excluded_face_in_source(self, tmp_db):
+        from app.db.models import MERGE_STATUS_ACCEPTED
+        from app.services.identity_service import IdentityService
+
+        with session_scope() as session:
+            named, auto = _seed_match(session)
+            excluded_id = session.get(Person, auto).faces[0].id
+        with session_scope() as session:
+            IdentityService(session).set_face_merge_excluded(excluded_id, True)
+
+        future = datetime.utcnow() + timedelta(days=1)
+        with session_scope() as session:
+            svc = MergeSuggestionService(session, MatchingConfig())
+            res = svc.score_candidates(
+                svc.load_candidates(), svc.load_targets(), svc.load_suppressed_pairs()
+            )
+            svc.persist_results(res, "job", future)
+            row = session.query(MergeSuggestion).one()
+            svc.accept(row.id)
+
+        with session_scope() as session:
+            # Source survives, holding only the excluded face (flag cleared).
+            source = session.get(Person, auto)
+            assert source is not None
+            assert [f.id for f in source.faces] == [excluded_id]
+            assert source.faces[0].is_merge_excluded is False
+            # Target received the 3 named + 2 non-excluded auto faces.
+            survivor = session.get(Person, named)
+            assert len(survivor.faces) == 5
+            # The suggestion is resolved, not still pending.
+            resolved = session.get(MergeSuggestion, row.id)
+            assert resolved is not None
+            assert resolved.status == MERGE_STATUS_ACCEPTED
+
+    def test_accept_all_excluded_raises(self, tmp_db):
+        from app.services.identity_service import IdentityService
+
+        with session_scope() as session:
+            named, auto = _seed_match(session)
+            all_ids = [f.id for f in session.get(Person, auto).faces]
+        future = datetime.utcnow() + timedelta(days=1)
+        with session_scope() as session:
+            svc = MergeSuggestionService(session, MatchingConfig())
+            res = svc.score_candidates(
+                svc.load_candidates(), svc.load_targets(), svc.load_suppressed_pairs()
+            )
+            svc.persist_results(res, "job", future)
+            row_id = session.query(MergeSuggestion).one().id
+        # Exclude every auto face.
+        with session_scope() as session:
+            ident = IdentityService(session)
+            for fid in all_ids:
+                ident.set_face_merge_excluded(fid, True)
+        with session_scope() as session:
+            svc = MergeSuggestionService(session, MatchingConfig())
+            with pytest.raises(ValueError):
+                svc.accept(row_id)
+        # Both persons untouched.
+        with session_scope() as session:
+            assert session.get(Person, named) is not None
+            assert session.get(Person, auto) is not None
+
+    def test_toggle_persists(self, tmp_db):
+        from app.services.identity_service import IdentityService
+
+        with session_scope() as session:
+            _, auto = _seed_match(session)
+            fid = session.get(Person, auto).faces[0].id
+        with session_scope() as session:
+            IdentityService(session).set_face_merge_excluded(fid, True)
+        with session_scope() as session:
+            assert session.get(Face, fid).is_merge_excluded is True
+        with session_scope() as session:
+            IdentityService(session).set_face_merge_excluded(fid, False)
+        with session_scope() as session:
+            assert session.get(Face, fid).is_merge_excluded is False

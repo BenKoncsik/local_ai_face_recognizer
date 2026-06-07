@@ -128,15 +128,40 @@ class IdentityService:
         log.info("Renamed person %d: %r → %r", person_id, old_name, person.name)
         return person
 
-    def merge_persons(self, source_id: int, target_id: int) -> Person:
-        """Move all faces from *source* into *target* and delete *source*.
+    def merge_persons(
+        self,
+        source_id: int,
+        target_id: int,
+        respect_merge_exclusions: bool = False,
+    ) -> Person:
+        """Move faces from *source* into *target*.
+
+        Normally every face of *source* moves into *target* and the now-empty
+        *source* person is deleted.
+
+        When *respect_merge_exclusions* is True, faces flagged with
+        :attr:`Face.is_merge_excluded` are held back: only the non-excluded
+        faces move to *target*, and the excluded faces stay assigned to
+        *source* (which therefore survives the merge instead of being deleted).
+        This backs the "exclude from merge" workflow in the name-suggestion
+        gallery, where a few stray faces of a different person must not be
+        merged into the named identity.  The merge-exclusion flag is cleared on
+        the faces that stay behind, so the leftover Unknown cluster is clean for
+        any future suggestion.
 
         Args:
-            source_id: Person to merge FROM (will be deleted).
+            source_id: Person to merge FROM.
             target_id: Person to merge INTO (will be kept).
+            respect_merge_exclusions: Keep ``is_merge_excluded`` faces in
+                *source* instead of moving them.
 
         Returns:
-            The surviving :class:`Person` row.
+            The surviving *target* :class:`Person` row.
+
+        Raises:
+            ValueError: if merging a person with itself, or if
+                *respect_merge_exclusions* is set and **every** source face is
+                excluded (nothing left to merge).
         """
         source = self._require_person(source_id)
         target = self._require_person(target_id)
@@ -144,14 +169,26 @@ class IdentityService:
         if source_id == target_id:
             raise ValueError("Cannot merge a person with itself")
 
-        face_ids = [f.id for f in source.faces]
+        if respect_merge_exclusions:
+            move_ids = [f.id for f in source.faces if not f.is_merge_excluded]
+            keep_ids = [f.id for f in source.faces if f.is_merge_excluded]
+        else:
+            move_ids = [f.id for f in source.faces]
+            keep_ids = []
+
+        if not move_ids:
+            raise ValueError(
+                "All faces are excluded from the merge — nothing to merge."
+            )
+
         log.info(
-            "Merging person %d (%r) → %d (%r) — %d face(s)",
-            source_id, source.name, target_id, target.name, len(face_ids),
+            "Merging person %d (%r) → %d (%r) — moving %d face(s), keeping %d excluded",
+            source_id, source.name, target_id, target.name,
+            len(move_ids), len(keep_ids),
         )
 
-        # Re-assign faces
-        self._session.query(Face).filter(Face.person_id == source_id).update(
+        # Re-assign only the faces that are being moved.
+        self._session.query(Face).filter(Face.id.in_(move_ids)).update(
             {
                 Face.person_id: target_id,
                 Face.assignment_source: "manual_merge",
@@ -161,24 +198,27 @@ class IdentityService:
             synchronize_session="fetch",
         )
 
-        # Migrate corrections
-        self._session.query(FaceCorrection).filter(
-            FaceCorrection.face_id_a.in_(face_ids)
-        ).update(
-            {FaceCorrection.face_id_a: FaceCorrection.face_id_a},
-            synchronize_session=False,
-        )
-
         # Record the merge as same-person pairs for future re-clustering
-        target_faces = [f.id for f in target.faces if f.id not in face_ids]
-        for a in face_ids:
+        target_faces = [f.id for f in target.faces if f.id not in move_ids]
+        for a in move_ids:
             for b in target_faces[:5]:  # sample — avoid O(n²) explosion
                 self._record_correction(a, b, same_person=True)
 
         # The bulk UPDATE above moved the faces in the DB, but ``source.faces``
-        # is a stale loaded collection.  Expire it so deleting ``source`` does
-        # not nullify the FK of faces that now belong to ``target``.
+        # is a stale loaded collection.  Expire it so the source state below
+        # reflects what actually remains.
         self._session.expire(source, ["faces"])
+
+        if keep_ids:
+            # Excluded faces stay with the source: it survives as a (smaller)
+            # cluster.  Clear the flag so the leftover faces are not treated as
+            # excluded by any future merge of this person.
+            self._session.query(Face).filter(Face.id.in_(keep_ids)).update(
+                {Face.is_merge_excluded: False},
+                synchronize_session="fetch",
+            )
+            self._session.commit()
+            return target
 
         self._session.delete(source)
         self._session.commit()
@@ -459,6 +499,31 @@ class IdentityService:
         log.info("Excluded face %d from clustering", face_id)
         # Excluding the last face may leave the source Unknown cluster empty.
         self.cleanup_empty_unknown_persons()
+        return face
+
+    def set_face_merge_excluded(self, face_id: int, excluded: bool) -> Face:
+        """Flag (or un-flag) a face as excluded from name-matching merges.
+
+        The face stays assigned to its current person and visible everywhere;
+        it is only held back when its person is merged into a named identity
+        (see :meth:`merge_persons` with ``respect_merge_exclusions=True``) and
+        is dropped from the candidate's matching profile so it never counts as a
+        positive example for the merge.  The flag is persistent.
+
+        Args:
+            face_id:  Face to flag.
+            excluded: ``True`` to exclude from the merge, ``False`` to restore.
+
+        Returns:
+            The updated :class:`Face` row.
+        """
+        face = self._require_face(face_id)
+        face.is_merge_excluded = bool(excluded)
+        self._session.commit()
+        log.info(
+            "Face %d %s merge", face_id,
+            "excluded from" if excluded else "restored to",
+        )
         return face
 
     # ------------------------------------------------------------------

@@ -208,6 +208,7 @@ class _SuggestionRow(QFrame):
     rejected  = Signal(int)
     deferred  = Signal(int)
     focused   = Signal()
+    exclusions_changed = Signal()
 
     def __init__(
         self,
@@ -242,6 +243,7 @@ class _SuggestionRow(QFrame):
                 suggestion.candidate_name,
                 suggestion.candidate_face_count,
                 suggestion.candidate_person_id,
+                allow_merge_exclusion=True,
             )
         )
 
@@ -303,7 +305,13 @@ class _SuggestionRow(QFrame):
     # Widget builders
     # ------------------------------------------------------------------
 
-    def _person_block(self, name: str, face_count: int, person_id: int) -> QWidget:
+    def _person_block(
+        self,
+        name: str,
+        face_count: int,
+        person_id: int,
+        allow_merge_exclusion: bool = False,
+    ) -> QWidget:
         widget = QWidget()
         widget.setFixedWidth(155)
         layout = QVBoxLayout(widget)
@@ -325,16 +333,29 @@ class _SuggestionRow(QFrame):
         _name = name
         _pid = person_id
         all_btn.clicked.connect(
-            lambda: (
-                self.focused.emit(),
-                FaceGalleryDialog(_pid, _name, parent=self.window()).exec(),
-            )
+            lambda: self._open_gallery(_pid, _name, allow_merge_exclusion)
         )
 
         layout.addWidget(name_label)
         layout.addWidget(count_label)
         layout.addWidget(all_btn)
         return widget
+
+    def _open_gallery(
+        self, person_id: int, name: str, allow_merge_exclusion: bool
+    ) -> None:
+        self.focused.emit()
+        dlg = FaceGalleryDialog(
+            person_id,
+            name,
+            parent=self.window(),
+            allow_merge_exclusion=allow_merge_exclusion,
+        )
+        dlg.exec()
+        if allow_merge_exclusion and getattr(dlg, "changed", False):
+            # Exclusions changed the candidate's faces — ask the dialog to
+            # reload so counts/representatives reflect the new state.
+            self.exclusions_changed.emit()
 
     # ------------------------------------------------------------------
     # Focus
@@ -586,6 +607,7 @@ class SuggestionDialog(QDialog):
             row.approved.connect(self._on_approve)
             row.rejected.connect(self._on_reject)
             row.deferred.connect(self._on_defer)
+            row.exclusions_changed.connect(self._reload)
             row.focused.connect(lambda idx=i: self._set_focus(idx))
             # If a decision for this suggestion is currently running, disable the row
             if self._suggestion_ids[i] in self._worker_in_progress:

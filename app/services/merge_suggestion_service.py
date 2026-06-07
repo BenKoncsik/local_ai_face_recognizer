@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import MatchingConfig
 from app.db.models import (
     MERGE_OPEN_STATUSES,
+    MERGE_STATUS_ACCEPTED,
     MERGE_STATUS_DEFERRED,
     MERGE_STATUS_DISMISSED,
     MERGE_STATUS_PENDING,
@@ -198,6 +199,11 @@ class MergeSuggestionService:
             embeddings: List[np.ndarray] = []
             for f in person.faces:
                 if f.is_excluded:
+                    continue
+                # Faces the user marked "exclude from merge" must not influence
+                # the matching decision and must never act as a positive example
+                # for this person — keep them out of the centroid and counts.
+                if f.is_merge_excluded:
                     continue
                 if self._exclude_low_quality and f.is_low_quality:
                     continue
@@ -594,9 +600,20 @@ class MergeSuggestionService:
         cand_id, tgt_id = self._orient(row)
         log.info("Accepting merge suggestion %d: %d → %d", suggestion_id, cand_id, tgt_id)
         self._session.expunge(row)
-        return IdentityService(self._session).merge_persons(
-            source_id=cand_id, target_id=tgt_id
+        survivor = IdentityService(self._session).merge_persons(
+            source_id=cand_id, target_id=tgt_id, respect_merge_exclusions=True
         )
+        # When the candidate had merge-excluded faces it survives the merge, so
+        # the CASCADE that normally deletes this suggestion did not fire.  Mark
+        # it accepted explicitly so it leaves the pending list and is not
+        # re-surfaced.
+        if self._session.get(Person, cand_id) is not None:
+            surviving_row = self._session.get(MergeSuggestion, suggestion_id)
+            if surviving_row is not None:
+                surviving_row.status = MERGE_STATUS_ACCEPTED
+                surviving_row.decided_at = _utcnow_naive()
+                self._session.commit()
+        return survivor
 
     def reject(self, suggestion_id: int) -> None:
         """Reject this specific suggestion (records a 'different' correction)."""
@@ -676,11 +693,26 @@ class MergeSuggestionService:
                     target_id,
                     row.confidence,
                 )
-                # The row will be cascade-deleted when the candidate person is deleted
+                suggestion_id = row.id
+                # The row will be cascade-deleted when the candidate person is
+                # deleted; expunge first so the cascade can't trigger a stale
+                # UPDATE on flush.
                 self._session.expunge(row)
                 IdentityService(self._session).merge_persons(
-                    source_id=candidate_id, target_id=target_id
+                    source_id=candidate_id,
+                    target_id=target_id,
+                    respect_merge_exclusions=True,
                 )
+                # If the candidate survived (had merge-excluded faces), the
+                # suggestion row was not cascade-deleted — mark it accepted.
+                if self._session.get(Person, candidate_id) is not None:
+                    surviving_row = self._session.get(
+                        MergeSuggestion, suggestion_id
+                    )
+                    if surviving_row is not None:
+                        surviving_row.status = MERGE_STATUS_ACCEPTED
+                        surviving_row.decided_at = _utcnow_naive()
+                        self._session.commit()
                 merged_count += 1
             except Exception as exc:  # noqa: BLE001
                 log.error(
@@ -712,6 +744,7 @@ class MergeSuggestionService:
             self._session.query(Face.id)
             .filter(Face.person_id == person_id)
             .filter(Face.is_excluded == False)  # noqa: E712
+            .filter(Face.is_merge_excluded == False)  # noqa: E712
             .limit(limit)
             .all()
         )

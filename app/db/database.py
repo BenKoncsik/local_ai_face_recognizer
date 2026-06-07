@@ -130,6 +130,7 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("quality_reasons", "VARCHAR(256)"),
             ("is_low_quality", "BOOLEAN"),
             ("landmarks", "BLOB"),
+            ("is_merge_excluded", "BOOLEAN NOT NULL DEFAULT 0"),
         ],
     }
     with engine.connect() as conn:

@@ -14,11 +14,22 @@ from typing import List, Optional, Tuple
 
 import cv2
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QImageReader, QPixmap, QPixmapCache
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QImage,
+    QImageReader,
+    QPainter,
+    QPixmap,
+    QPixmapCache,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
     QLabel,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -28,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from app.db.database import session_scope
 from app.db.models import Face
+from app.services.identity_service import IdentityService
 from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
@@ -48,6 +60,7 @@ class FaceGalleryEntry:
     image_path: Optional[str]
     bbox: Tuple[int, int, int, int]  # (x, y, w, h)
     confidence: float = 0.0
+    is_merge_excluded: bool = False
 
 
 def _load_thumb_pixmap(path: Optional[str], size: int) -> Optional[QPixmap]:
@@ -80,6 +93,7 @@ def _load_faces_for_person(person_id: int) -> List[FaceGalleryEntry]:
                 image_path=f.image.file_path if f.image else None,
                 bbox=(f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h),
                 confidence=f.confidence,
+                is_merge_excluded=bool(f.is_merge_excluded),
             )
             for f in faces
         ]
@@ -232,43 +246,108 @@ class FullImageDialog(QDialog):
 # Gallery thumbnail
 # ---------------------------------------------------------------------------
 
+def _mark_excluded_pixmap(pixmap: QPixmap) -> QPixmap:
+    """Return a dimmed copy of *pixmap* with a "?" badge in the corner."""
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.Antialiasing)
+    # Dim the underlying crop so excluded faces visibly recede.
+    painter.setOpacity(0.45)
+    painter.drawPixmap(0, 0, pixmap)
+    painter.setOpacity(1.0)
+    # "?" badge, top-right.
+    w = pixmap.width()
+    r = max(16, w // 4)
+    margin = 3
+    cx, cy = w - r - margin, margin
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#e0883a"))
+    painter.drawEllipse(cx, cy, r, r)
+    painter.setPen(QColor("#1a1a1a"))
+    font = QFont()
+    font.setBold(True)
+    font.setPixelSize(int(r * 0.75))
+    painter.setFont(font)
+    painter.drawText(cx, cy, r, r, Qt.AlignCenter, "?")
+    painter.end()
+    return result
+
+
 class _GalleryThumb(QLabel):
-    """Clickable thumbnail that emits the associated FaceGalleryEntry on click."""
+    """Clickable thumbnail that emits the associated FaceGalleryEntry on click.
+
+    When *allow_merge_exclusion* is set, a right-click context menu lets the
+    user exclude the face from (or restore it to) the merge, and excluded faces
+    render dimmed with a "?" badge and a distinct border.
+    """
 
     clicked = Signal(object)  # FaceGalleryEntry
+    exclusion_toggled = Signal(int, bool)  # (face_id, new_is_merge_excluded)
 
     def __init__(
         self,
         entry: FaceGalleryEntry,
         thumb_size: int = _GALLERY_THUMB_SIZE,
+        allow_merge_exclusion: bool = False,
     ) -> None:
         super().__init__()
         self._entry = entry
+        self._allow_merge_exclusion = allow_merge_exclusion
         self.setFixedSize(thumb_size, thumb_size)
         self.setAlignment(Qt.AlignCenter)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(
-            "QLabel { border: 1px solid #555; border-radius: 4px; }"
-            "QLabel:hover { border: 2px solid #88aaff; }"
-        )
+        if allow_merge_exclusion:
+            self.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.customContextMenuRequested.connect(self._show_menu)
+
+        excluded = entry.is_merge_excluded
         pixmap = _load_thumb_pixmap(entry.crop_path, thumb_size)
         if pixmap is not None:
-            self.setPixmap(pixmap)
+            self.setPixmap(_mark_excluded_pixmap(pixmap) if excluded else pixmap)
+            if excluded:
+                self.setStyleSheet(
+                    "QLabel { border: 2px dashed #e0883a; border-radius: 4px; }"
+                    "QLabel:hover { border: 2px solid #e0883a; }"
+                )
+            else:
+                self.setStyleSheet(
+                    "QLabel { border: 1px solid #555; border-radius: 4px; }"
+                    "QLabel:hover { border: 2px solid #88aaff; }"
+                )
         else:
             self.setText("?")
+            border = "#e0883a" if excluded else "#555"
             self.setStyleSheet(
-                "QLabel { background: #333; color: #888; border: 1px solid #555; "
+                f"QLabel {{ background: #333; color: #888; border: 2px "
+                f"{'dashed' if excluded else 'solid'} {border}; "
                 "font-size: 20px; border-radius: 4px; }"
             )
         fname = Path(entry.image_path).name if entry.image_path else "?"
-        self.setToolTip(
-            f"Face {entry.face_id}\n{fname}\n{entry.confidence:.0%}"
-        )
+        tip = f"Face {entry.face_id}\n{fname}\n{entry.confidence:.0%}"
+        if excluded:
+            tip += f"\n{t('gallery_excluded_tooltip')}"
+        self.setToolTip(tip)
 
     def mousePressEvent(self, event) -> None:
         super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self._entry)
+
+    def _show_menu(self, pos) -> None:
+        menu = QMenu(self)
+        if self._entry.is_merge_excluded:
+            act = QAction(t("gallery_include_in_merge"), menu)
+            act.triggered.connect(
+                lambda: self.exclusion_toggled.emit(self._entry.face_id, False)
+            )
+        else:
+            act = QAction(t("gallery_exclude_from_merge"), menu)
+            act.triggered.connect(
+                lambda: self.exclusion_toggled.emit(self._entry.face_id, True)
+            )
+        menu.addAction(act)
+        menu.exec(self.mapToGlobal(pos))
 
 
 def _open_full_image(entry: FaceGalleryEntry, parent: QWidget) -> None:
@@ -281,9 +360,18 @@ def _open_full_image(entry: FaceGalleryEntry, parent: QWidget) -> None:
 
 
 def _make_gallery_scroll(
-    person_id: int, cols: int, parent: QWidget
+    person_id: int,
+    cols: int,
+    parent: QWidget,
+    allow_merge_exclusion: bool = False,
+    on_exclusion_toggled=None,
 ) -> QScrollArea:
-    """Return a QScrollArea containing a grid of face thumbnails for *person_id*."""
+    """Return a QScrollArea containing a grid of face thumbnails for *person_id*.
+
+    When *allow_merge_exclusion* is set, each thumbnail offers a right-click
+    "exclude from merge" action; toggles are forwarded to
+    *on_exclusion_toggled(face_id, new_value)*.
+    """
     scroll = QScrollArea(parent)
     scroll.setWidgetResizable(True)
 
@@ -295,8 +383,10 @@ def _make_gallery_scroll(
     entries = _load_faces_for_person(person_id)
     for i, entry in enumerate(entries):
         row_i, col_i = divmod(i, cols)
-        thumb = _GalleryThumb(entry)
+        thumb = _GalleryThumb(entry, allow_merge_exclusion=allow_merge_exclusion)
         thumb.clicked.connect(lambda e, p=parent: _open_full_image(e, p))
+        if allow_merge_exclusion and on_exclusion_toggled is not None:
+            thumb.exclusion_toggled.connect(on_exclusion_toggled)
         grid.addWidget(thumb, row_i, col_i)
 
     if not entries:
@@ -315,15 +405,28 @@ class FaceGalleryDialog(QDialog):
     """Scrollable grid of all face crops for one person.
 
     Clicking any thumbnail opens FullImageDialog for the source photo.
+
+    When *allow_merge_exclusion* is set (used for the Unknown candidate in the
+    name-suggestion workflow), each face can be excluded from / restored to the
+    merge via a right-click context menu.  Excluded faces stay visible but
+    render dimmed with a "?" badge; the change is persisted immediately.
     """
+
+    #: True if the user toggled any exclusion while the dialog was open — lets
+    #: the caller know it should refresh derived state (counts, centroids).
+    changed: bool
 
     def __init__(
         self,
         person_id: int,
         person_name: str,
         parent: Optional[QWidget] = None,
+        allow_merge_exclusion: bool = False,
     ) -> None:
         super().__init__(parent)
+        self._person_id = person_id
+        self._allow_merge_exclusion = allow_merge_exclusion
+        self.changed = False
         self.setWindowTitle(t("suggestions_gallery_title", name=person_name))
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
         self.resize(660, 540)
@@ -336,11 +439,57 @@ class FaceGalleryDialog(QDialog):
         title.setStyleSheet("font-size: 14px; font-weight: bold; color: #eee;")
         layout.addWidget(title)
 
-        layout.addWidget(_make_gallery_scroll(person_id, _GALLERY_COLS, self), stretch=1)
+        if allow_merge_exclusion:
+            hint = QLabel(t("gallery_merge_exclusion_hint"))
+            hint.setStyleSheet("color: #e0a060; font-size: 11px;")
+            layout.addWidget(hint)
+            self._status = QLabel("")
+            self._status.setStyleSheet("color: #e0883a; font-size: 11px;")
+            layout.addWidget(self._status)
+
+        # Container that holds the (rebuildable) scroll area.
+        self._scroll_holder = QVBoxLayout()
+        self._scroll_holder.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self._scroll_holder, stretch=1)
+        self._scroll: Optional[QScrollArea] = None
+        self._populate()
 
         close_btn = QPushButton(t("close"))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+    def _populate(self) -> None:
+        if self._scroll is not None:
+            self._scroll_holder.removeWidget(self._scroll)
+            self._scroll.deleteLater()
+        self._scroll = _make_gallery_scroll(
+            self._person_id,
+            _GALLERY_COLS,
+            self,
+            allow_merge_exclusion=self._allow_merge_exclusion,
+            on_exclusion_toggled=self._on_exclusion_toggled,
+        )
+        self._scroll_holder.addWidget(self._scroll)
+        if self._allow_merge_exclusion:
+            self._update_status()
+
+    def _update_status(self) -> None:
+        entries = _load_faces_for_person(self._person_id)
+        n_excluded = sum(1 for e in entries if e.is_merge_excluded)
+        self._status.setText(
+            t("gallery_excluded_count", n=n_excluded) if n_excluded else ""
+        )
+
+    def _on_exclusion_toggled(self, face_id: int, excluded: bool) -> None:
+        try:
+            with session_scope() as session:
+                IdentityService(session).set_face_merge_excluded(face_id, excluded)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Failed to toggle merge exclusion for face %d", face_id)
+            QMessageBox.warning(self, t("error"), str(exc))
+            return
+        self.changed = True
+        self._populate()
 
 
 # ---------------------------------------------------------------------------
