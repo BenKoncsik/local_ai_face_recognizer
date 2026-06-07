@@ -443,10 +443,17 @@ class _InlineFaceEditor(QFrame):
         match_scores: Optional[dict[int, float]] = None,
     ) -> None:
         self._name_lbl.setText(person_name or "?")
+        # Forget the previously edited face's selection so a new face never
+        # inherits it (e.g. "Apa" staying highlighted while editing "Jerne").
+        self._person_search.clear_selection()
         self._person_search.set_persons(persons, priority_ids=priority_ids)
         self._person_search.set_match_scores(match_scores)
         if person_id is not None:
             self._person_search.set_current_by_id(person_id)
+        else:
+            # Unassigned face: start at the top so the strongest matches are
+            # visible, and preselect the best match when match-sorting is on.
+            self._person_search.preselect_best_match()
         self._new_edit.clear()
 
     def reset_search(self) -> None:
@@ -472,6 +479,13 @@ class _InlineFaceEditor(QFrame):
             self.closed.emit()
         else:
             super().keyPressEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        # The inner list scrolls itself; when it reaches its top/bottom Qt
+        # propagates the leftover wheel event up to this frame.  Swallow it here
+        # so it can never reach the image label behind us and zoom the picture
+        # (which would close the popup mid-selection).
+        event.accept()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1001,9 +1015,16 @@ class _DrawableImageLabel(QLabel):
         self.right_clicked.emit(event.pos().x(), event.pos().y())
 
     def wheelEvent(self, event) -> None:
+        pos = event.position().toPoint()
+        # Defensive guard: if an overlay child (the inline person editor) sits
+        # under the cursor, never zoom — the overlay owns the wheel there.  The
+        # overlay normally swallows the event itself; this is the belt to that
+        # suspenders so a stray propagation can never zoom/close the popup.
+        if self.childAt(pos) is not None:
+            event.ignore()
+            return
         delta = event.angleDelta().y()
         if delta != 0:
-            pos = event.position().toPoint()
             self.wheel_zoomed.emit(delta, pos.x(), pos.y())
         event.accept()
 

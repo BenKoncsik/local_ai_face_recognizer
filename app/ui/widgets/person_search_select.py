@@ -209,6 +209,29 @@ class PersonSearchSelect(QWidget):
         """Clear the search text and show the full (unfiltered) person list."""
         self._search.clear()  # triggers textChanged → _on_text_changed → _refresh_list
 
+    def scroll_to_top(self) -> None:
+        """Scroll the result list back to its first row."""
+        self._list.scrollToTop()
+
+    def preselect_best_match(self) -> bool:
+        """Reset the scroll position and, when ordered by face-match similarity,
+        select and reveal the top (best-match) row.
+
+        Always scrolls the list to the top so a freshly populated selector never
+        inherits a previous target's scroll position.  Returns ``True`` if a row
+        was selected (only happens while match-sorting is active, so an
+        alphabetical list is never auto-selected and the Assign button stays
+        safe).
+        """
+        self._list.scrollToTop()
+        if self._match_active() and self._list.count() > 0:
+            item = self._list.item(0)
+            self._list.setCurrentItem(item)
+            data = item.data(_ROLE_ID)
+            self._selected_id = int(data) if data is not None else None
+            return True
+        return False
+
     def focus_search(self) -> None:
         """Set keyboard focus to the search input."""
         self._search.setFocus()

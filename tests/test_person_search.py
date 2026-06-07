@@ -189,3 +189,62 @@ class TestFilterEntries:
     def test_max_results(self):
         many = [PersonEntry(i, f"Person {i}") for i in range(100)]
         assert len(filter_entries("person", many, max_results=10)) == 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PersonSearchSelect widget — selection reset / best-match preselection
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _FakePerson:
+    """Minimal stand-in for app.db.models.Person (id + name)."""
+
+    def __init__(self, pid: int, name: str) -> None:
+        self.id = pid
+        self.name = name
+
+
+class TestPersonSearchSelectReset:
+    @staticmethod
+    def _make(qtbot):
+        from app.ui.widgets.person_search_select import PersonSearchSelect
+
+        widget = PersonSearchSelect()
+        qtbot.addWidget(widget)
+        persons = [
+            _FakePerson(1, "Apa"),
+            _FakePerson(2, "Jerne"),
+            _FakePerson(3, "Mama"),
+        ]
+        return widget, persons
+
+    def test_preselect_best_match_selects_top_when_match_sorted(self, qtbot):
+        widget, persons = self._make(qtbot)
+        widget._match_checkbox.setChecked(True)
+        widget.set_persons(persons)
+        # Jerne is the strongest match, Apa the weakest.
+        widget.set_match_scores({1: 0.18, 2: 0.49, 3: 0.05})
+
+        assert widget.preselect_best_match() is True
+        # Best match (Jerne) is preselected, not the previously edited person.
+        assert widget.current_person_id() == 2
+
+    def test_preselect_returns_false_without_match_sort(self, qtbot):
+        widget, persons = self._make(qtbot)
+        widget._match_checkbox.setChecked(False)
+        widget.set_persons(persons)
+
+        # No match-sorting → nothing is auto-selected (Assign stays safe).
+        assert widget.preselect_best_match() is False
+        assert widget.current_person_id() is None
+
+    def test_clear_selection_drops_previous_target(self, qtbot):
+        widget, persons = self._make(qtbot)
+        widget.set_persons(persons)
+        widget.set_current_by_id(1)  # "Apa" selected on the previous face
+        assert widget.current_person_id() == 1
+
+        widget.clear_selection()
+        assert widget.current_person_id() is None
+        # A subsequent rebuild must not resurrect the stale selection.
+        widget.set_persons(persons)
+        assert widget.current_person_id() is None
