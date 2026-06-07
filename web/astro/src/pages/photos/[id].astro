@@ -1,0 +1,178 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import FaceOverlay from '../../components/FaceOverlay.astro';
+import { loadPhotos, type Photo } from '../../lib/data';
+import { link } from '../../lib/links';
+
+export function getStaticPaths() {
+  const photos = loadPhotos();
+  return photos.map((photo, i) => ({
+    params: { id: photo.id },
+    props: {
+      photo,
+      prevId: i > 0 ? photos[i - 1].id : null,
+      nextId: i < photos.length - 1 ? photos[i + 1].id : null,
+      index: i + 1,
+      total: photos.length,
+    },
+  }));
+}
+
+interface Props { photo: Photo; prevId: string | null; nextId: string | null; index: number; total: number; }
+const { photo, prevId, nextId, index, total } = Astro.props;
+
+// Unique named persons in this photo, with links to their detail pages.
+const people = Array.from(
+  new Map(
+    photo.faces
+      .filter((f) => f.person_id != null && f.name)
+      .map((f) => [f.person_id, { id: f.person_id as number, name: f.name }])
+  ).values()
+);
+const hasPair = !!photo.pair;
+---
+<Layout title={photo.fileName} active="photos">
+  <div class="topbar">
+    <a class="back" href={link('/photos/page/1/')}>‹ Galéria</a>
+    <span class="muted">{index} / {total}</span>
+    <span class="nav">
+      {prevId ? <a href={link(`/photos/${prevId}/`)} rel="prev">‹ Előző</a> : <span class="disabled">‹ Előző</span>}
+      {nextId ? <a href={link(`/photos/${nextId}/`)} rel="next">Következő ›</a> : <span class="disabled">Következő ›</span>}
+    </span>
+  </div>
+
+  <div
+    id="stage"
+    class="stage"
+    style={`aspect-ratio:${photo.mediumW || photo.width} / ${photo.mediumH || photo.height}`}
+  >
+    <img id="base-img" src={photo.medium} alt={photo.fileName} width={photo.mediumW || undefined} height={photo.mediumH || undefined} decoding="async" />
+    {hasPair && <img id="top-img" alt="" aria-hidden="true" />}
+    <FaceOverlay faces={photo.faces} />
+    {/* Hidden sources for the colour/B&W pair. Their src attributes are
+        rewritten to page-relative paths by astro-relative-links, so JS can read
+        the resolved .src and the compare works from file:// too. */}
+    {hasPair && <img id="pair-color" src={photo.pair!.color} hidden aria-hidden="true" alt="" />}
+    {hasPair && <img id="pair-bw" src={photo.pair!.bw} hidden aria-hidden="true" alt="" />}
+    {hasPair && (
+      <div id="cmp-slider" aria-hidden="true">
+        <div class="line"></div><div class="handle">⇔</div>
+      </div>
+    )}
+  </div>
+
+  {hasPair && (
+    <div class="pair-controls">
+      <button data-mode="color" class="pc active" type="button">Színes</button>
+      <button data-mode="bw" class="pc" type="button">Fekete-fehér</button>
+      <button data-mode="compare" class="pc" type="button">Összehasonlítás</button>
+    </div>
+  )}
+
+  <div class="info">
+    <div class="facts">
+      {photo.folder && <span><b>Mappa:</b> {photo.folder}</span>}
+      {photo.date && <span><b>Dátum:</b> {photo.date}</span>}
+      <span><b>Méret:</b> {photo.width}×{photo.height}</span>
+    </div>
+    <a class="orig-link" href={photo.original} target="_blank" rel="noopener">Eredeti kép megnyitása ↗</a>
+  </div>
+
+  {people.length > 0 && (
+    <section class="people">
+      <h2>Személyek a képen</h2>
+      <ul>
+        {people.map((p) => <li><a href={link(`/persons/${p.id}/`)}>{p.name}</a></li>)}
+      </ul>
+    </section>
+  )}
+
+  <style>
+    .topbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .back { color: #88aaff; text-decoration: none; }
+    .topbar .nav { margin-left: auto; display: flex; gap: 8px; }
+    .topbar .nav a { color: #dbe6ff; text-decoration: none; border: 1px solid #3e5f9c; border-radius: 6px; padding: 5px 10px; background: #1d2b45; }
+    .topbar .nav a:hover { border-color: #88aaff; }
+    .topbar .nav .disabled, .muted { color: #777; }
+    .topbar .nav .disabled { border: 1px solid #2a2a2a; border-radius: 6px; padding: 5px 10px; }
+
+    .stage {
+      position: relative; max-width: min(100%, 1100px); margin: 0 auto; background: #050505;
+      border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px #2a2a2a; user-select: none;
+    }
+    .stage > img { display: block; width: 100%; height: auto; }
+    #top-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; }
+    .stage.compare #top-img { display: block; }
+    #cmp-slider { position: absolute; top: 0; bottom: 0; left: 50%; width: 40px; transform: translateX(-50%); cursor: ew-resize; z-index: 6; display: none; align-items: center; justify-content: center; touch-action: none; }
+    .stage.compare #cmp-slider { display: flex; }
+    #pair-color, #pair-bw { display: none; }
+    #cmp-slider .line { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; transform: translateX(-50%); background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .85); }
+    #cmp-slider .handle { position: relative; z-index: 1; width: 36px; height: 36px; border-radius: 50%; background: #fff; color: #111; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; box-shadow: 0 0 7px rgba(0, 0, 0, .75); }
+
+    .pair-controls { display: flex; gap: 8px; justify-content: center; margin: 12px 0; }
+    .pc { padding: 7px 12px; border: 1px solid #3e5f9c; border-radius: 6px; color: #eaf0ff; background: #1d2b45; cursor: pointer; }
+    .pc:hover { border-color: #88aaff; }
+    .pc.active { background: #2f6df0; border-color: #88aaff; color: #fff; }
+
+    .info { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 16px 0; }
+    .facts { display: flex; gap: 18px; flex-wrap: wrap; color: #bbb; font-size: .9rem; }
+    .facts b { color: #6b86c0; font-weight: 600; }
+    .orig-link { color: #88aaff; text-decoration: none; border: 1px solid #3e5f9c; border-radius: 6px; padding: 6px 12px; background: #1d2b45; }
+    .orig-link:hover { border-color: #88aaff; }
+
+    .people { max-width: 1100px; margin: 24px auto 0; }
+    .people h2 { font-size: 1.05rem; color: #cde; margin-bottom: 8px; }
+    .people ul { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+    .people a { color: #dbe6ff; text-decoration: none; border: 1px solid #3e5f9c; border-radius: 999px; padding: 4px 12px; background: #1d2b45; }
+    .people a:hover { border-color: #88aaff; }
+  </style>
+
+  {hasPair && (
+    <script>
+      const stage = document.getElementById('stage') as HTMLElement;
+      const base = document.getElementById('base-img') as HTMLImageElement;
+      const top = document.getElementById('top-img') as HTMLImageElement | null;
+      const slider = document.getElementById('cmp-slider') as HTMLElement | null;
+      // Read the *resolved* URLs from the hidden <img> sources (already made
+      // page-relative by astro-relative-links), so they work over file:// too.
+      const color = (document.getElementById('pair-color') as HTMLImageElement).src;
+      const bw = (document.getElementById('pair-bw') as HTMLImageElement).src;
+      let split = 50;
+
+      function setSplit(pct: number) {
+        split = Math.max(0, Math.min(100, pct));
+        if (top) top.style.clipPath = `inset(0 ${(100 - split).toFixed(2)}% 0 0)`;
+        if (slider) slider.style.left = `${split.toFixed(2)}%`;
+      }
+      function setMode(mode: string) {
+        document.querySelectorAll('.pc').forEach((b) =>
+          b.classList.toggle('active', (b as HTMLElement).dataset.mode === mode)
+        );
+        if (mode === 'compare') {
+          stage.classList.add('compare');
+          base.src = color;
+          if (top) top.src = bw;
+          setSplit(50);
+        } else {
+          stage.classList.remove('compare');
+          base.src = mode === 'bw' ? bw : color;
+        }
+      }
+      document.querySelectorAll('.pc').forEach((b) =>
+        b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode!))
+      );
+
+      let dragging = false;
+      function pct(e: PointerEvent) {
+        const r = stage.getBoundingClientRect();
+        return r.width ? ((e.clientX - r.left) / r.width) * 100 : split;
+      }
+      stage.addEventListener('pointerdown', (e) => {
+        if (!stage.classList.contains('compare')) return;
+        dragging = true; setSplit(pct(e)); e.preventDefault();
+      });
+      window.addEventListener('pointermove', (e) => { if (dragging) setSplit(pct(e)); });
+      window.addEventListener('pointerup', () => { dragging = false; });
+    </script>
+  )}
+</Layout>

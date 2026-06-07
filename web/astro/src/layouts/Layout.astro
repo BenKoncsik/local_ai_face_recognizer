@@ -1,0 +1,101 @@
+---
+import { loadManifest } from '../lib/data';
+import { link } from '../lib/links';
+import SearchBox from '../components/SearchBox.astro';
+
+interface Props {
+  title?: string;
+  active?: string;
+  /** Show the search box in the header (default true). */
+  search?: boolean;
+}
+
+const { title, active = '', search = true } = Astro.props;
+const manifest = loadManifest();
+const pageTitle = title ? `${title} – ${manifest.title}` : manifest.title;
+
+// Absolute hrefs; astro-relative-links rewrites them to page-relative paths so
+// the bundle works from file://.
+const nav = [
+  { key: 'gallery', href: link('/'), label: 'Galéria' },
+  { key: 'persons', href: link('/persons/page/1/'), label: 'Személyek' },
+  { key: 'photos', href: link('/photos/page/1/'), label: 'Fotók' },
+  manifest.hasMap ? { key: 'map', href: '/map.html', label: 'Térkép' } : null,
+  manifest.hasSlideshow ? { key: 'slideshow', href: '/slideshow.html', label: 'Diavetítés' } : null,
+  manifest.hasCollages ? { key: 'collages', href: '/collage_index.html', label: 'Kollázsok' } : null,
+].filter(Boolean) as { key: string; href: string; label: string }[];
+---
+
+<!DOCTYPE html>
+<html lang="hu">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href={link('/')}>{manifest.title}</a>
+      <nav>
+        {nav.map((n) => (
+          <a class:list={['nav-link', { active: n.key === active }]} href={n.href}>{n.label}</a>
+        ))}
+      </nav>
+      {search && <SearchBox />}
+    </header>
+    <main>
+      <slot />
+    </main>
+
+    <style is:global>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { background: #111; color: #ddd; font-family: system-ui, sans-serif; min-height: 100vh; }
+      a { color: inherit; }
+      button, input { font: inherit; }
+      header {
+        background: #1a1a1a; padding: 14px 20px; border-bottom: 1px solid #333;
+        display: flex; align-items: center; gap: 14px; flex-wrap: wrap; position: relative; z-index: 20;
+      }
+      .brand { font-size: 1.15rem; color: #88aaff; font-weight: 700; text-decoration: none; white-space: nowrap; }
+      header nav { display: flex; gap: 8px; flex-wrap: wrap; }
+      .nav-link {
+        color: #dbe6ff; text-decoration: none; border: 1px solid #3e5f9c; border-radius: 6px;
+        padding: 6px 10px; background: #1d2b45; white-space: nowrap; font-size: .9rem;
+      }
+      .nav-link:hover, .nav-link:focus { border-color: #88aaff; background: #26385a; outline: none; }
+      .nav-link.active { background: #2f6df0; border-color: #88aaff; color: #fff; }
+
+      main { padding: 20px; }
+
+      /* Shared card grid */
+      .card-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+      .card {
+        background: #1c1c1c; border: 1px solid #333; border-radius: 8px; overflow: hidden;
+        text-decoration: none; color: inherit; display: flex; flex-direction: column;
+        transition: border-color .15s;
+      }
+      .card:hover, .card:focus { border-color: #88aaff; outline: none; }
+      .card .thumb-wrap { background: #050505; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .card .body { padding: 10px 12px; }
+      .card .title { font-weight: 600; font-size: .95rem; color: #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .card .sub { font-size: .78rem; color: #888; margin-top: 3px; }
+      .placeholder { color: #555; font-size: 2rem; }
+
+      .page-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+      .page-head h1 { font-size: 1.3rem; color: #cde; }
+      .page-head .muted { color: #888; font-size: .85rem; }
+
+      /* Pagination */
+      .pagination { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; margin: 22px 0 6px; }
+      .pagination a, .pagination span {
+        min-width: 38px; text-align: center; padding: 7px 10px; border-radius: 6px;
+        border: 1px solid #3e5f9c; background: #1d2b45; color: #dbe6ff; text-decoration: none; font-size: .9rem;
+      }
+      .pagination a:hover { border-color: #88aaff; background: #26385a; }
+      .pagination .current { background: #2f6df0; border-color: #88aaff; color: #fff; }
+      .pagination .disabled { opacity: .35; pointer-events: none; }
+      .pagination .gap { border: none; background: none; }
+    </style>
+  </body>
+</html>

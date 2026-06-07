@@ -1,0 +1,30 @@
+---
+import type { Photo } from '../lib/data';
+import { link } from '../lib/links';
+interface Props { photo: Photo; }
+const { photo } = Astro.props;
+const href = link(`/photos/${photo.id}/`);
+const faceCount = photo.faces.length;
+const named = photo.persons.filter(Boolean);
+const sub = named.length
+  ? named.slice(0, 2).join(', ') + (named.length > 2 ? ` +${named.length - 2}` : '')
+  : faceCount
+    ? `${faceCount} arc`
+    : (photo.folder || '');
+---
+<a class="card" href={href}>
+  <div class="thumb-wrap">
+    <img
+      src={photo.thumb}
+      alt={photo.fileName}
+      width={photo.thumbW || undefined}
+      height={photo.thumbH || undefined}
+      loading="lazy"
+      decoding="async"
+    />
+  </div>
+  <div class="body">
+    <div class="title">{photo.fileName}</div>
+    <div class="sub">{sub}</div>
+  </div>
+</a>

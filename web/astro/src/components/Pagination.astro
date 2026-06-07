@@ -1,0 +1,46 @@
+---
+interface Props {
+  page: number;
+  pageCount: number;
+  /** Builds the href for a given page number, e.g. (p) => `/persons/page/${p}/` */
+  hrefFor: (page: number) => string;
+}
+const { page, pageCount, hrefFor } = Astro.props;
+
+// Compact window of page numbers around the current page.
+function windowPages(cur: number, count: number): (number | '…')[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+  const out: (number | '…')[] = [1];
+  const lo = Math.max(2, cur - 1);
+  const hi = Math.min(count - 1, cur + 1);
+  if (lo > 2) out.push('…');
+  for (let p = lo; p <= hi; p++) out.push(p);
+  if (hi < count - 1) out.push('…');
+  out.push(count);
+  return out;
+}
+const pages = windowPages(page, pageCount);
+---
+{pageCount > 1 && (
+  <nav class="pagination" aria-label="Lapozás">
+    {page > 1 ? (
+      <a href={hrefFor(page - 1)} rel="prev" aria-label="Előző oldal">‹</a>
+    ) : (
+      <span class="disabled" aria-hidden="true">‹</span>
+    )}
+    {pages.map((p) =>
+      p === '…' ? (
+        <span class="gap">…</span>
+      ) : p === page ? (
+        <span class="current" aria-current="page">{p}</span>
+      ) : (
+        <a href={hrefFor(p)}>{p}</a>
+      )
+    )}
+    {page < pageCount ? (
+      <a href={hrefFor(page + 1)} rel="next" aria-label="Következő oldal">›</a>
+    ) : (
+      <span class="disabled" aria-hidden="true">›</span>
+    )}
+  </nav>
+)}

@@ -16,13 +16,24 @@ import logging
 import math
 import re
 import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
+import cv2
 from sqlalchemy.orm import Session
 
-from app.db.models import Face, Image, Person
+from app.db.models import Face, Image, Person, Relationship
 from app.utils.image_utils import load_image_bgr, save_image_bgr
+
+# Image variant long-edge sizes (px) and JPEG quality for the Astro export.
+ASTRO_THUMB_EDGE = 320
+ASTRO_MEDIUM_EDGE = 1280
+ASTRO_THUMB_QUALITY = 70
+ASTRO_MEDIUM_QUALITY = 82
+ASTRO_PAGE_SIZE = 60
 
 log = logging.getLogger(__name__)
 
@@ -347,6 +358,353 @@ class ExportService:
 
         log.info("HTML export: %d person(s) → %s", len(persons), out)
         return out
+
+    # ------------------------------------------------------------------
+    # Astro static-site export
+    # ------------------------------------------------------------------
+
+    def export_astro(
+        self,
+        target_dir: str,
+        person_id: Optional[int] = None,
+        *,
+        run_build: bool = True,
+        astro_project_dir: Optional[str] = None,
+        progress_callback: Optional["Callable[[int, str], None]"] = None,
+    ) -> Path:
+        """Export a paginated, lazy-loading static site via the Astro project.
+
+        Unlike :meth:`export_html` (which inlines the whole dataset into one
+        ``index.html``), this writes a chunked JSON + multi-size image *bundle*
+        into the Astro project, then optionally runs ``npm run build`` and
+        copies the generated ``dist/`` into *target_dir*.
+
+        The browser only ever loads one paginated page of pre-baked HTML plus a
+        minimal ``search-index.json`` — so the site stays fast with thousands of
+        persons/photos. No backend is required after the build.
+
+        Args:
+            target_dir: Destination directory for the finished static site.
+            person_id:  Restrict to a single person, or ``None`` for everyone.
+            run_build:  When ``True``, invoke ``npm run build`` and copy ``dist``
+                        to *target_dir*. When ``False``, only the data+image
+                        bundle is written (useful for tests / manual builds).
+            astro_project_dir: Override the Astro project location (defaults to
+                        the repo's ``web/astro``).
+
+        Returns:
+            Path to *target_dir* (the finished site) when ``run_build`` is true,
+            otherwise the Astro project's ``src/data`` bundle directory.
+        """
+        project = Path(astro_project_dir) if astro_project_dir else _default_astro_project_dir()
+        data_dir = project / "src" / "data"
+        images_root = project / "public" / "assets" / "images"
+        _reset_dir(data_dir)
+        _reset_dir(images_root)
+        (data_dir.parent.parent / "data").mkdir(parents=True, exist_ok=True)  # ensure src/data
+
+        def _report(percent: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(percent, message)
+
+        _report(2, "Adatok előkészítése…")
+        persons = self._get_persons(person_id)
+
+        # image_path -> [(person, face)]; plus the DB Image for metadata.
+        image_faces: Dict[str, List[Tuple[Person, Face]]] = {}
+        image_by_path: Dict[str, Image] = {}
+        faceless_image_paths: set[str] = set()
+        person_face_thumbs: Dict[int, List[str]] = {}
+
+        for person in persons:
+            faces = self._get_faces(person.id)
+            person_face_thumbs.setdefault(person.id, [])
+            for face in faces:
+                if face.image:
+                    ip = face.image.file_path
+                    image_faces.setdefault(ip, []).append((person, face))
+                    image_by_path[ip] = face.image
+                if face.crop_path and Path(face.crop_path).exists():
+                    name = _copy_asset(face.crop_path, images_root / "faces", f"face_{face.id}.jpg")
+                    if name:
+                        person_face_thumbs[person.id].append(f"/assets/images/faces/{name}")
+
+        if person_id is None:
+            faceless_images = (
+                self._session.query(Image)
+                .filter(~Image.faces.any())
+                .order_by(Image.file_path)
+                .all()
+            )
+            for image in faceless_images:
+                image_faces.setdefault(image.file_path, [])
+                image_by_path[image.file_path] = image
+                faceless_image_paths.add(image.file_path)
+
+        # --- per-image variants + photo records ---
+        photos: List[dict] = []
+        person_image_ids: Dict[int, List[str]] = {pid: [] for pid in person_face_thumbs}
+        map_records: List[dict] = []
+        tour_records: List[dict] = []
+
+        # Resizing every image is the bulk of the work → map it to 5–72%.
+        total_images = len(image_faces) or 1
+        for idx, (img_path, face_list) in enumerate(image_faces.items()):
+            _report(5 + int(67 * idx / total_images),
+                    f"Képek feldolgozása ({idx + 1}/{total_images})…")
+            img = load_image_bgr(img_path)
+            if img is None:
+                continue
+            img_h, img_w = img.shape[:2]
+            photo_id = _astro_image_id(img_path)
+            variants = _export_image_variants(img, photo_id, images_root)
+            if variants is None:
+                continue
+
+            face_records: List[dict] = []
+            person_ids: List[int] = []
+            persons_in_image: List[str] = []
+            has_identified = False
+            for person, face in face_list:
+                bbox = _face_bbox_for_export(face, img_w, img_h)
+                if bbox is None:
+                    continue
+                face_records.append(
+                    {
+                        "face_id": face.id,
+                        "person_id": person.id,
+                        "name": person.name,
+                        "bbox": bbox,
+                    }
+                )
+                if person.id not in person_ids:
+                    person_ids.append(person.id)
+                    person_image_ids.setdefault(person.id, []).append(photo_id)
+                _append_unique(persons_in_image, person.name)
+                if not person.is_auto_named:
+                    has_identified = True
+
+            source = Path(img_path)
+            db_image = image_by_path.get(img_path)
+            pair = self._build_astro_pair(db_image, img_path, images_root)
+            photos.append(
+                {
+                    "id": photo_id,
+                    "thumb": variants["thumb"],
+                    "thumbW": variants["thumbW"],
+                    "thumbH": variants["thumbH"],
+                    "medium": variants["medium"],
+                    "mediumW": variants["mediumW"],
+                    "mediumH": variants["mediumH"],
+                    "original": variants["original"],
+                    "width": img_w,
+                    "height": img_h,
+                    "fileName": source.name,
+                    "folder": source.parent.name,
+                    "date": (db_image.photo_date if db_image else "") or "",
+                    "faces": face_records,
+                    "personIds": person_ids,
+                    "persons": persons_in_image,
+                    "pair": pair,
+                    "hasGps": db_image is not None and _effective_image_gps(db_image) is not None,
+                }
+            )
+
+            # Reuse the existing map/slideshow record builders for parity views.
+            # The legacy map.html/slideshow.html live at the dist root, so their
+            # image paths must be root-relative *without* a leading slash (the
+            # Astro relative-link integration does not touch public/ passthrough
+            # files). _no_slash() converts the Astro "/assets/..." paths.
+            map_record = _build_map_export_record(db_image, photo_id, source, face_records)
+            if map_record is not None:
+                map_record["thumbnailPath"] = _no_slash(variants["thumb"])
+                map_record["relativePath"] = _no_slash(variants["medium"])
+                map_record["detailPage"] = f"photos/{photo_id}/index.html"
+                map_records.append(map_record)
+            tour = _build_tour_export_record(
+                db_image, photo_id, source, face_records,
+                persons_in_image, has_identified, img_w, img_h, pair,
+            )
+            tour["imagePath"] = _no_slash(variants["medium"])
+            tour["thumbnailPath"] = _no_slash(variants["thumb"])
+            if pair:
+                tour["pair"] = {"bw": _no_slash(pair["bw"]), "color": _no_slash(pair["color"])}
+            tour_records.append(tour)
+
+        _report(74, "Személyek feldolgozása…")
+        # --- person records ---
+        relationships = _build_person_relationship_map(self._session, persons)
+        person_records: List[dict] = []
+        for person in persons:
+            thumb_path, tw, th = _export_person_thumb(person, images_root)
+            birth_year = _extract_year(person.birth_date)
+            death_year = _extract_year(person.death_date)
+            from app.services.person_group_service import PersonGroupService
+            groups = [g.name for g in PersonGroupService(self._session).get_person_groups(person.id)]
+            person_records.append(
+                {
+                    "id": person.id,
+                    "name": person.name,
+                    "isAutoNamed": bool(person.is_auto_named),
+                    "thumb": thumb_path,
+                    "thumbW": tw,
+                    "thumbH": th,
+                    "imageCount": len(person_image_ids.get(person.id, [])),
+                    "imageIds": person_image_ids.get(person.id, []),
+                    "faceThumbs": person_face_thumbs.get(person.id, [])[:12],
+                    "gender": person.gender or "",
+                    "nickname": person.nickname or "",
+                    "marriedName": person.married_name or "",
+                    "familyCode": person.family_code or "",
+                    "externalFamilyCode": person.external_family_code or "",
+                    "birthDate": person.birth_date or "",
+                    "birthPlace": person.birth_place or "",
+                    "deathDate": person.death_date or "",
+                    "deathPlace": person.death_place or "",
+                    "birthYear": birth_year,
+                    "deathYear": death_year,
+                    "notes": person.notes or "",
+                    "groups": groups,
+                    "relationships": relationships.get(person.id, []),
+                }
+            )
+
+        # --- search index (minimal) ---
+        search_index: List[dict] = []
+        for p in person_records:
+            search_index.append({
+                "id": p["id"], "name": p["name"], "type": "person",
+                "birthYear": p["birthYear"], "deathYear": p["deathYear"],
+                "thumb": p["thumb"], "url": f"persons/{p['id']}/",
+            })
+        for ph in photos:
+            label = ph["fileName"]
+            search_index.append({
+                "id": ph["id"], "name": label, "type": "photo",
+                "thumb": ph["thumb"], "url": f"photos/{ph['id']}/",
+            })
+
+        # --- write bundle ---
+        # Slideshow person panel data, keyed by stringified id (built from the
+        # records we already produced — avoids a second thumbnail copy).
+        person_details = {
+            str(p["id"]): {
+                "id": p["id"], "name": p["name"], "isAutoNamed": p["isAutoNamed"],
+                "gender": p["gender"], "familyCode": p["familyCode"],
+                "externalFamilyCode": p["externalFamilyCode"], "nickname": p["nickname"],
+                "marriedName": p["marriedName"], "birthDate": p["birthDate"],
+                "birthPlace": p["birthPlace"], "deathDate": p["deathDate"],
+                "deathPlace": p["deathPlace"], "notes": p["notes"],
+                "groups": p["groups"], "thumb": _no_slash(p["thumb"]),
+            }
+            for p in person_records
+        }
+
+        _report(80, "Galéria adatok kiírása…")
+        # Parity views (map / slideshow) reuse the existing, tested standalone
+        # generators, written into public/ so Astro copies them to the dist root.
+        public_dir = project / "public"
+        has_collages = False
+        if map_records:
+            _write_map_export_files(public_dir, map_records)
+        if tour_records:
+            _write_tour_export_files(public_dir, tour_records, person_details)
+        try:
+            if self._has_collages():
+                self.export_collage_html(str(public_dir))
+                has_collages = True
+        except Exception as exc:  # noqa: BLE001 — collages are optional parity
+            log.warning("Collage export skipped: %s", exc)
+
+        manifest = {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "pageSize": ASTRO_PAGE_SIZE,
+            "personCount": len(person_records),
+            "photoCount": len(photos),
+            "hasMap": bool(map_records),
+            "hasSlideshow": bool(tour_records),
+            "hasCollages": has_collages,
+            "title": "Face Gallery",
+        }
+        _write_json(data_dir / "manifest.json", manifest)
+        _write_json(data_dir / "persons.json", person_records)
+        _write_json(data_dir / "photos.json", photos)
+        _write_json(data_dir / "map-data.json", map_records)
+        # The search index is consumed by the browser at runtime (not at build
+        # time), so it ships under public/ → dist/assets/data/.
+        _write_json(public_dir / "assets" / "data" / "search-index.json", search_index)
+        _write_json(data_dir / "slideshow-data.json",
+                    {"records": tour_records, "persons": person_details})
+
+        log.info("Astro bundle: %d person(s), %d photo(s) → %s",
+                 len(person_records), len(photos), data_dir)
+
+        if not run_build:
+            _report(100, "Kész.")
+            return data_dir
+
+        out = Path(target_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        # npm build is one opaque step → report it as indeterminate (-1).
+        _report(-1, "Weboldal építése (npm)…")
+        _run_astro_build(project)
+        dist = project / "dist"
+        if not dist.is_dir():
+            raise RuntimeError(f"Astro build produced no dist/ at {dist}")
+        _report(95, "Fájlok másolása a célmappába…")
+        _copy_tree_into(dist, out)
+        log.info("Astro export → %s", out)
+        _report(100, "Kész.")
+        return out
+
+    def _has_collages(self) -> bool:
+        """True when at least one collage exists (parity collage export)."""
+        from app.services.collage_service import CollageService
+        return bool(CollageService(self._session).list_collages())
+
+    def _build_astro_pair(
+        self,
+        db_image: Optional[Image],
+        img_path: str,
+        images_root: Path,
+    ) -> Optional[dict]:
+        """Export medium variants of a deoldified B&W/colour pair, if present.
+
+        Reuses :class:`DeoldifiedPairingService` (filename-based, folder
+        independent) to find the partner, then emits a medium-size variant of
+        each side under the Astro image tree.
+        """
+        from app.services.deoldified_pairing_service import (
+            DeoldifiedPairingService,
+            is_deoldified_path,
+        )
+        from app.services.image_library_service import resolve_image_path
+
+        if db_image is None:
+            return None
+        svc = DeoldifiedPairingService(self._session)
+        current_is_color = is_deoldified_path(img_path)
+        partner = (
+            svc.find_original_for_deoldified(db_image)
+            if current_is_color
+            else svc.find_deoldified_for_original(db_image)
+        )
+        if partner is None:
+            return None
+        resolved = resolve_image_path(partner)
+        partner_disk = str(resolved) if resolved else partner.file_path
+
+        this_med = _export_one_variant(
+            load_image_bgr(img_path), _astro_image_id(img_path), images_root,
+            "medium", ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
+        partner_med = _export_one_variant(
+            load_image_bgr(partner_disk), _astro_image_id(partner.file_path), images_root,
+            "medium", ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
+        if this_med is None or partner_med is None:
+            return None
+        if current_is_color:
+            return {"color": this_med[0], "bw": partner_med[0]}
+        return {"color": partner_med[0], "bw": this_med[0]}
 
     # ------------------------------------------------------------------
     # Collage HTML export
@@ -864,6 +1222,204 @@ def _json_for_script(value, *, indent: Optional[int] = None) -> str:
         .replace("\u2028", "\\u2028")
         .replace("\u2029", "\\u2029")
     )
+
+
+# ---------------------------------------------------------------------------
+# Astro export helpers
+# ---------------------------------------------------------------------------
+
+
+def _default_astro_project_dir() -> Path:
+    """Return the repo's bundled Astro project (``web/astro``)."""
+    return Path(__file__).resolve().parents[2] / "web" / "astro"
+
+
+def _reset_dir(path: Path) -> None:
+    """Remove *path* if present and recreate it empty."""
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _astro_image_id(image_path: str) -> str:
+    """Stable, browser-safe id for an exported image (no extension)."""
+    return _image_export_filename(image_path).rsplit(".", 1)[0]
+
+
+def _no_slash(path: Optional[str]) -> Optional[str]:
+    """Strip a leading '/' so a root-relative path works from a dist-root file.
+
+    The Astro pages use "/assets/..." (rewritten to page-relative by the
+    relative-links integration), but the standalone map/slideshow pages dropped
+    into public/ are not processed by that integration — they need plain
+    root-relative paths like "assets/...".
+    """
+    if isinstance(path, str) and path.startswith("/"):
+        return path[1:]
+    return path
+
+
+def _resize_long_edge(img, max_edge: int):
+    """Return *img* scaled so its longest edge is at most *max_edge* px."""
+    h, w = img.shape[:2]
+    longest = max(h, w)
+    if longest <= max_edge or longest == 0:
+        return img
+    scale = max_edge / float(longest)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def _export_one_variant(
+    img,
+    image_id: str,
+    images_root: Path,
+    subdir: str,
+    max_edge: Optional[int],
+    quality: int,
+) -> Optional[Tuple[str, int, int]]:
+    """Resize+save one image variant; return (web_path, width, height) or None.
+
+    ``max_edge`` of ``None`` saves the image at full resolution (the original).
+    The returned web path is root-absolute (``/assets/images/...``) so the Astro
+    relative-link integration can rewrite it for file:// use.
+    """
+    if img is None:
+        return None
+    variant = img if max_edge is None else _resize_long_edge(img, max_edge)
+    h, w = variant.shape[:2]
+    out_dir = images_root / subdir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    params = [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
+    if not save_image_bgr(out_dir / f"{image_id}.jpg", variant, params):
+        return None
+    return f"/assets/images/{subdir}/{image_id}.jpg", w, h
+
+
+def _export_image_variants(img, image_id: str, images_root: Path) -> Optional[dict]:
+    """Export thumb + medium + original variants of a loaded BGR image."""
+    thumb = _export_one_variant(img, image_id, images_root, "thumbs",
+                                ASTRO_THUMB_EDGE, ASTRO_THUMB_QUALITY)
+    medium = _export_one_variant(img, image_id, images_root, "medium",
+                                 ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
+    original = _export_one_variant(img, image_id, images_root, "original", None, 92)
+    if thumb is None or medium is None or original is None:
+        return None
+    return {
+        "thumb": thumb[0], "thumbW": thumb[1], "thumbH": thumb[2],
+        "medium": medium[0], "mediumW": medium[1], "mediumH": medium[2],
+        "original": original[0],
+    }
+
+
+def _export_person_thumb(person: Person, images_root: Path) -> Tuple[Optional[str], int, int]:
+    """Export a person's representative thumbnail; (web_path, w, h) or (None,0,0)."""
+    path = person.thumbnail_path
+    if not path or not Path(path).exists():
+        return None, 0, 0
+    img = load_image_bgr(path)
+    if img is None:
+        return None, 0, 0
+    result = _export_one_variant(
+        img, f"person_{person.id}", images_root, "persons",
+        ASTRO_THUMB_EDGE, ASTRO_THUMB_QUALITY)
+    if result is None:
+        return None, 0, 0
+    return result
+
+
+def _copy_asset(src: str, dst_dir: Path, name: str) -> Optional[str]:
+    """Copy a small asset (e.g. a face crop) verbatim; return its filename."""
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst_dir / name)
+        return name
+    except OSError:
+        return None
+
+
+def _build_person_relationship_map(
+    session: Session,
+    persons: List[Person],
+) -> Dict[int, List[dict]]:
+    """Map each person id \u2192 [{relatedPersonId, relatedName, label}].
+
+    Uses the stored ``Relationship`` rows (ParentChild / Spouse). Sibling links
+    are intentionally not stored in the schema and are omitted here.
+    """
+    ids = [p.id for p in persons]
+    if not ids:
+        return {}
+    rows = (
+        session.query(Relationship)
+        .filter(
+            (Relationship.person_a_id.in_(ids)) | (Relationship.person_b_id.in_(ids))
+        )
+        .all()
+    )
+    name_cache: Dict[int, str] = {p.id: p.name for p in persons}
+
+    def name_of(pid: int) -> str:
+        if pid not in name_cache:
+            other = session.get(Person, pid)
+            name_cache[pid] = other.name if other else f"#{pid}"
+        return name_cache[pid]
+
+    result: Dict[int, List[dict]] = {pid: [] for pid in ids}
+    id_set = set(ids)
+    for r in rows:
+        rtype = (r.relationship_type or "").lower()
+        if rtype == "parentchild":
+            if r.person_a_id in id_set:  # a is the parent
+                result[r.person_a_id].append(
+                    {"relatedPersonId": r.person_b_id, "relatedName": name_of(r.person_b_id), "label": "Gyermek"})
+            if r.person_b_id in id_set:  # b is the child
+                result[r.person_b_id].append(
+                    {"relatedPersonId": r.person_a_id, "relatedName": name_of(r.person_a_id), "label": "Sz\u00fcl\u0151"})
+        elif rtype == "spouse":
+            if r.person_a_id in id_set:
+                result[r.person_a_id].append(
+                    {"relatedPersonId": r.person_b_id, "relatedName": name_of(r.person_b_id), "label": "H\u00e1zast\u00e1rs"})
+            if r.person_b_id in id_set:
+                result[r.person_b_id].append(
+                    {"relatedPersonId": r.person_a_id, "relatedName": name_of(r.person_a_id), "label": "H\u00e1zast\u00e1rs"})
+    return result
+
+
+def _write_json(path: Path, data) -> None:
+    """Write compact UTF-8 JSON (no ASCII escaping, minimal separators)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _npm_command() -> str:
+    """Return the npm executable name for the current platform."""
+    return "npm.cmd" if sys.platform.startswith("win") else "npm"
+
+
+def _run_astro_build(project: Path) -> None:
+    """Install deps if needed and run ``npm run build`` inside *project*."""
+    npm = _npm_command()
+    if shutil.which(npm) is None:
+        raise RuntimeError(
+            "Node.js/npm not found on PATH \u2014 the Astro export requires Node "
+            "to build. Install Node.js (https://nodejs.org) or use the classic "
+            "'Statikus weboldal' (export_html) export instead."
+        )
+    if not (project / "node_modules").is_dir():
+        log.info("Installing Astro dependencies (npm install) \u2026")
+        subprocess.run([npm, "install"], cwd=str(project), check=True)
+    log.info("Building Astro site (npm run build) \u2026")
+    subprocess.run([npm, "run", "build"], cwd=str(project), check=True)
+
+
+def _copy_tree_into(src: Path, dst: Path) -> None:
+    """Copy the contents of *src* into *dst* (merging into an existing dir)."""
+    shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
 # ---------------------------------------------------------------------------

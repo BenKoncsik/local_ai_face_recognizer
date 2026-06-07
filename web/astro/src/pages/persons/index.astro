@@ -1,0 +1,13 @@
+---
+// Static redirect to the first page. Relative target resolves correctly from
+// /persons/ regardless of where the bundle is mounted.
+---
+<!DOCTYPE html>
+<html lang="hu">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content="0;url=page/1/index.html" />
+    <link rel="canonical" href="page/1/index.html" />
+  </head>
+  <body><a href="page/1/index.html">Személyek →</a></body>
+</html>

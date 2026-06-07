@@ -1,0 +1,45 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadManifest } from '../lib/data';
+import { link } from '../lib/links';
+const m = loadManifest();
+
+const tiles = [
+  { href: link('/persons/page/1/'), label: 'Személyek', count: m.personCount, icon: '👤' },
+  { href: link('/photos/page/1/'), label: 'Fotók', count: m.photoCount, icon: '🖼️' },
+  m.hasMap ? { href: '/map.html', label: 'Térkép', icon: '🗺️' } : null,
+  m.hasSlideshow ? { href: '/slideshow.html', label: 'Diavetítés', icon: '▶️' } : null,
+  m.hasCollages ? { href: '/collage_index.html', label: 'Kollázsok', icon: '🧩' } : null,
+].filter(Boolean) as { href: string; label: string; count?: number; icon: string }[];
+---
+<Layout title={null} active="gallery">
+  <section class="hero">
+    <h1>{m.title}</h1>
+    <p class="muted">{m.personCount} személy · {m.photoCount} fotó</p>
+  </section>
+  <div class="tiles">
+    {tiles.map((t) => (
+      <a class="tile" href={t.href}>
+        <span class="ic">{t.icon}</span>
+        <span class="tl">{t.label}</span>
+        {typeof t.count === 'number' && <span class="cnt">{t.count}</span>}
+      </a>
+    ))}
+  </div>
+
+  <style>
+    .hero { margin: 8px 0 24px; }
+    .hero h1 { font-size: 1.8rem; color: #cde; }
+    .hero .muted { color: #888; margin-top: 6px; }
+    .tiles { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); max-width: 900px; }
+    .tile {
+      display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+      background: #1c1c1c; border: 1px solid #333; border-radius: 10px; padding: 20px;
+      text-decoration: none; color: inherit; transition: border-color .15s;
+    }
+    .tile:hover { border-color: #88aaff; }
+    .tile .ic { font-size: 2rem; }
+    .tile .tl { font-size: 1.1rem; font-weight: 600; color: #eee; }
+    .tile .cnt { color: #6b86c0; font-size: .85rem; }
+  </style>
+</Layout>

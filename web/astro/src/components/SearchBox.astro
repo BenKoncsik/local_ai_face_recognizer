@@ -1,0 +1,188 @@
+---
+// Client-side, debounced search island. The full dataset is never loaded:
+// it fetches the minimal search-index.json once (on first interaction) and
+// filters in memory. Results link to the static detail pages.
+//
+// The hidden <a id="si-url"> carries the index path; astro-relative-links
+// rewrites its href to be page-relative, and JS reads the *resolved* .href so
+// the fetch works from any page depth. (Over file:// fetch is blocked by the
+// browser — search then shows a hint; every other view still works.)
+---
+
+<div class="searchbox">
+  <input
+    id="site-search"
+    type="search"
+    autocomplete="off"
+    placeholder="Keresés / Search…"
+    aria-label="Keresés"
+  />
+  <a id="si-url" href="/assets/data/search-index.json" hidden aria-hidden="true"></a>
+  <div id="search-results" class="results" hidden role="listbox"></div>
+</div>
+
+<style>
+  .searchbox { position: relative; flex: 1; min-width: 200px; }
+  #site-search {
+    width: 100%; padding: 8px 12px; background: #222; border: 1px solid #444;
+    border-radius: 6px; color: #fff; font-size: 1rem;
+  }
+  #site-search:focus { outline: none; border-color: #88aaff; }
+  .results {
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: 60vh; overflow-y: auto;
+    background: #181818; border: 1px solid #3e5f9c; border-radius: 8px; z-index: 50;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
+  }
+  .results a {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px; text-decoration: none;
+    color: #ddd; border-bottom: 1px solid #262626;
+  }
+  .results a:last-child { border-bottom: none; }
+  .results a:hover, .results a.active { background: #26385a; }
+  .results img { width: 38px; height: 38px; object-fit: cover; border-radius: 4px; background: #050505; flex: none; }
+  .results .ph { width: 38px; height: 38px; border-radius: 4px; background: #222; flex: none; }
+  .results .r-name { font-size: .9rem; }
+  .results .r-sub { font-size: .72rem; color: #888; }
+  .results .r-type { margin-left: auto; font-size: .68rem; color: #6b86c0; text-transform: uppercase; }
+  .results .empty { padding: 10px; color: #888; font-size: .85rem; }
+</style>
+
+<script>
+  type Entry = {
+    id: string | number;
+    name: string;
+    type: 'person' | 'photo';
+    birthYear?: string;
+    deathYear?: string;
+    thumb?: string | null;
+    url: string;
+  };
+
+  const input = document.getElementById('site-search') as HTMLInputElement | null;
+  const box = document.getElementById('search-results') as HTMLElement | null;
+  const urlEl = document.getElementById('si-url') as HTMLAnchorElement | null;
+  if (input && box && urlEl) {
+    let index: Entry[] | null = null;
+    let loading = false;
+    let activeIdx = -1;
+
+    // The search box renders on pages at varying depths, so build absolute URLs
+    // from the resolved index location (its directory's grandparent is the site
+    // root). This keeps result links correct from any page, on http and file://.
+    function rootUrl(): string {
+      return urlEl!.href.replace(/assets\/data\/search-index\.json.*$/, '');
+    }
+    function resultHref(url: string): string {
+      const abs = rootUrl() + url;
+      return abs.endsWith('/') ? abs + 'index.html' : abs;
+    }
+
+    async function ensureIndex(): Promise<void> {
+      if (index || loading) return;
+      loading = true;
+      try {
+        const res = await fetch(urlEl!.href);
+        index = (await res.json()) as Entry[];
+      } catch {
+        index = [];
+        box!.hidden = false;
+        box!.innerHTML =
+          '<div class="empty">A keresés helyi fájlból (file://) nem érhető el. Indíts egy egyszerű szervert: <code>python -m http.server</code></div>';
+      } finally {
+        loading = false;
+      }
+    }
+
+    function esc(s: string): string {
+      return s.replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)
+      );
+    }
+
+    function lifespan(e: Entry): string {
+      if (e.type !== 'person') return e.name ? 'Fotó' : '';
+      const b = e.birthYear || '';
+      const d = e.deathYear || '';
+      return b || d ? `${b}–${d}` : '';
+    }
+
+    function render(items: Entry[]): void {
+      activeIdx = -1;
+      if (!items.length) {
+        box!.innerHTML = '<div class="empty">Nincs találat.</div>';
+        box!.hidden = false;
+        return;
+      }
+      box!.innerHTML = items
+        .map((e) => {
+          const sub = lifespan(e);
+          const img = e.thumb
+            ? `<img src="${esc(rootUrl() + e.thumb.replace(/^\//, ''))}" alt="" loading="lazy" decoding="async">`
+            : '<span class="ph"></span>';
+          return `<a href="${esc(resultHref(e.url))}" role="option">${img}<span><span class="r-name">${esc(
+            e.name || '(névtelen)'
+          )}</span>${sub ? `<br><span class="r-sub">${esc(sub)}</span>` : ''}</span><span class="r-type">${
+            e.type === 'person' ? 'személy' : 'fotó'
+          }</span></a>`;
+        })
+        .join('');
+      box!.hidden = false;
+    }
+
+    function search(q: string): void {
+      if (!index) return;
+      const needle = q.trim().toLocaleLowerCase('hu-HU');
+      if (!needle) {
+        box!.hidden = true;
+        return;
+      }
+      const hits: Entry[] = [];
+      for (const e of index) {
+        if ((e.name || '').toLocaleLowerCase('hu-HU').includes(needle)) {
+          hits.push(e);
+          if (hits.length >= 40) break;
+        }
+      }
+      render(hits);
+    }
+
+    let timer: number | undefined;
+    input.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await ensureIndex();
+        search(input.value);
+      }, 200);
+    });
+    input.addEventListener('focus', () => {
+      ensureIndex();
+    });
+
+    input.addEventListener('keydown', (e) => {
+      const links = Array.from(box!.querySelectorAll('a'));
+      if (!links.length) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = Math.min(activeIdx + 1, links.length - 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, 0);
+      } else if (e.key === 'Enter' && activeIdx >= 0) {
+        e.preventDefault();
+        (links[activeIdx] as HTMLAnchorElement).click();
+        return;
+      } else if (e.key === 'Escape') {
+        box!.hidden = true;
+        return;
+      } else {
+        return;
+      }
+      links.forEach((l, i) => l.classList.toggle('active', i === activeIdx));
+      links[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).closest('.searchbox')) box!.hidden = true;
+    });
+  }
+</script>

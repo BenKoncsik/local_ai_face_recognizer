@@ -1,0 +1,26 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import PhotoCard from '../../../components/PhotoCard.astro';
+import Pagination from '../../../components/Pagination.astro';
+import { loadPhotos, pagePaths, type PageInfo, type Photo } from '../../../lib/data';
+import { link } from '../../../lib/links';
+
+export function getStaticPaths() {
+  const photos = loadPhotos();
+  return pagePaths(photos);
+}
+
+interface Props { page: PageInfo<Photo>; }
+const { page } = Astro.props;
+const hrefFor = (p: number) => link(`/photos/page/${p}/`);
+---
+<Layout title="Fotók" active="photos">
+  <div class="page-head">
+    <h1>Fotók</h1>
+    <span class="muted">{page.total} fotó · {page.page}/{page.pageCount}. oldal</span>
+  </div>
+  <div class="card-grid">
+    {page.items.map((photo) => <PhotoCard photo={photo} />)}
+  </div>
+  <Pagination page={page.page} pageCount={page.pageCount} hrefFor={hrefFor} />
+</Layout>

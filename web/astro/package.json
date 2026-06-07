@@ -1,0 +1,16 @@
+{
+  "name": "face-gallery-astro",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Astro static export for the local AI face recognizer gallery",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^5.18.2",
+    "astro-relative-links": "^0.4.2"
+  }
+}

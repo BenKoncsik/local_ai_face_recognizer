@@ -1,0 +1,50 @@
+---
+import type { FaceRecord } from '../lib/data';
+import { link } from '../lib/links';
+interface Props { faces: FaceRecord[]; }
+const { faces } = Astro.props;
+const pct = (v: number) => `${Number(v || 0).toFixed(4)}%`;
+---
+<div class="bbox-overlay">
+  {faces.map((f) => {
+    const inside = Number(f.bbox?.top) < 6;
+    const href = f.person_id != null ? link(`/persons/${f.person_id}/`) : null;
+    const box = (
+      <>
+        {f.name && (
+          <span class:list={['bbox-label', { inside }]}>{f.name}</span>
+        )}
+      </>
+    );
+    const style = `left:${pct(f.bbox.left)};top:${pct(f.bbox.top)};width:${pct(f.bbox.width)};height:${pct(f.bbox.height)}`;
+    return href ? (
+      <a class="bbox" style={style} href={href} title={f.name || 'Ismeretlen arc'} aria-label={`Arc: ${f.name || 'Ismeretlen'}`}>{box}</a>
+    ) : (
+      <span class="bbox" style={style} title={f.name || 'Ismeretlen arc'}>{box}</span>
+    );
+  })}
+</div>
+
+<style>
+  .bbox-overlay { position: absolute; inset: 0; pointer-events: none; }
+  .bbox {
+    position: absolute; outline: 2px solid rgba(72, 220, 122, .42);
+    background: rgba(72, 220, 122, .06); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+    pointer-events: auto; cursor: pointer; text-decoration: none;
+    transition: outline-color .15s, outline-width .15s, background .15s, box-shadow .15s;
+  }
+  .bbox:hover, .bbox:focus {
+    outline-color: rgba(125, 255, 166, .98); outline-width: 3px;
+    background: rgba(72, 220, 122, .13);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 18px rgba(72, 220, 122, .35); z-index: 3;
+  }
+  .bbox-label {
+    position: absolute; left: 0; top: 0; transform: translateY(calc(-100% - 4px));
+    max-width: min(280px, 70vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: rgba(12, 18, 12, .9); color: #75ff75; border: 1px solid rgba(50, 220, 50, .85);
+    border-radius: 4px; padding: 2px 6px; font-size: 12px; font-weight: 700; line-height: 1.25;
+    opacity: 0; pointer-events: none; transition: opacity .12s;
+  }
+  .bbox:hover .bbox-label, .bbox:focus .bbox-label { opacity: 1; }
+  .bbox-label.inside { transform: none; top: 2px; left: 2px; }
+</style>

@@ -176,6 +176,18 @@ class ExportDialog(QDialog):
         html_layout.addWidget(self._html_btn)
         layout.addWidget(html_box)
 
+        # --- Astro static site (scalable) ---
+        astro_box = QGroupBox(t("export_astro_group"))
+        astro_layout = QVBoxLayout(astro_box)
+        astro_desc = QLabel(t("export_astro_desc"))
+        astro_desc.setWordWrap(True)
+        astro_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        astro_layout.addWidget(astro_desc)
+        self._astro_btn = QPushButton(f"⚡  {t('export_generate_astro')}")
+        self._astro_btn.clicked.connect(self._on_export_astro)
+        astro_layout.addWidget(self._astro_btn)
+        layout.addWidget(astro_box)
+
         # --- Collage Import ---
         col_import_box = QGroupBox(t("export_collage_import_group"))
         col_import_layout = QVBoxLayout(col_import_box)
@@ -372,6 +384,81 @@ class ExportDialog(QDialog):
             self,
             t("html_gallery_done"),
             t("html_gallery_open", path=index),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(index)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["start", str(index)], shell=True)
+            else:
+                subprocess.Popen(["xdg-open", str(index)])
+
+    def _on_export_astro(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, t("astro_folder"), str(Path.home())
+        )
+        if not folder:
+            return
+
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QProgressDialog
+
+        from app.workers.astro_export_worker import AstroExportWorker
+
+        # The export runs in the background (image resizing + npm build are slow).
+        # A modal progress dialog shows the percentage; the build phase reports
+        # as indeterminate (busy) since npm gives no granular progress.
+        dlg = QProgressDialog(t("astro_building"), None, 0, 100, self)
+        dlg.setWindowTitle(t("export_astro_group"))
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setCancelButton(None)  # build/copy can't be safely interrupted midway
+
+        worker = AstroExportWorker(folder, self._scope_person_id())
+        self._astro_worker = worker  # keep a reference so it isn't garbage-collected
+
+        def on_progress(pct: int, msg: str) -> None:
+            if pct < 0:
+                dlg.setRange(0, 0)  # indeterminate / busy
+            else:
+                dlg.setRange(0, 100)
+                dlg.setValue(pct)
+            dlg.setLabelText(msg)
+
+        def cleanup() -> None:
+            dlg.reset()
+            dlg.close()
+            self._astro_worker = None
+
+        def on_done(out: str) -> None:
+            cleanup()
+            self._astro_open_prompt(out)
+
+        def on_fail(kind: str, msg: str) -> None:
+            cleanup()
+            if kind == "node":
+                QMessageBox.warning(self, t("astro_failed"), t("astro_need_node", err=msg))
+            else:
+                QMessageBox.critical(self, t("astro_failed"), msg)
+
+        worker.progress.connect(on_progress)
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        dlg.show()
+
+    def _astro_open_prompt(self, out: str) -> None:
+        import subprocess
+        import sys
+
+        index = Path(out) / "index.html"
+        reply = QMessageBox.information(
+            self,
+            t("astro_done"),
+            t("astro_open", path=index),
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:

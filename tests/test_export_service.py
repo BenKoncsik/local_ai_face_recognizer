@@ -707,3 +707,93 @@ def test_export_html_slideshow_person_panel_data_and_wiring(db, tmp_path):
     assert "openPersonPanel(face.person_id" in tour_js
     assert "closest('.tb')) return" in tour_js
     assert 'id="person-panel"' in (out / "slideshow.html").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Astro export bundle
+# ---------------------------------------------------------------------------
+
+
+def _read_bundle(data_dir: Path, name: str):
+    return json.loads((data_dir / name).read_text(encoding="utf-8"))
+
+
+def test_export_astro_bundle_structure(db, tmp_path):
+    from app.db.models import Relationship
+    from app.services.export_service import ASTRO_THUMB_EDGE
+
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    image_path = photos / "family.jpg"
+    crop_path = photos / "alice_crop.jpg"
+    # A wide image so the medium variant (1280px long edge) actually downscales.
+    image = np.zeros((1000, 2000, 3), dtype=np.uint8)
+    image[:, :] = (40, 80, 120)
+    crop = np.zeros((80, 80, 3), dtype=np.uint8)
+    crop[:, :] = (30, 120, 30)
+    assert save_image_bgr(image_path, image)
+    assert save_image_bgr(crop_path, crop)
+
+    with session_scope() as session:
+        alice = Person(name="Alice Kovács", is_auto_named=False, birth_date="1950-01-01")
+        bob = Person(name="Bob Kovács", is_auto_named=False)
+        session.add_all([alice, bob])
+        session.flush()
+        # Bob is Alice's child.
+        session.add(Relationship(relationship_type="ParentChild",
+                                 person_a_id=alice.id, person_b_id=bob.id))
+        img = Image(file_path=str(image_path), file_hash="h", file_mtime=0.0,
+                    width=2000, height=1000, detection_done=True)
+        session.add(img)
+        session.flush()
+        session.add(Face(image_id=img.id, person_id=alice.id, bbox_x=100, bbox_y=80,
+                         bbox_w=200, bbox_h=160, confidence=0.98,
+                         detector_backend="cpu", crop_path=str(crop_path)))
+
+    project = tmp_path / "astro"
+    (project / "src" / "data").mkdir(parents=True)
+    with session_scope() as session:
+        data_dir = ExportService(session).export_astro(
+            str(tmp_path / "out"), run_build=False, astro_project_dir=str(project))
+
+    # Bundle files exist.
+    manifest = _read_bundle(data_dir, "manifest.json")
+    assert manifest["personCount"] == 2
+    assert manifest["photoCount"] == 1
+    assert manifest["pageSize"] >= 1
+
+    persons = _read_bundle(data_dir, "persons.json")
+    alice_rec = next(p for p in persons if p["name"] == "Alice Kovács")
+    assert alice_rec["birthYear"] == "1950"
+    assert alice_rec["imageCount"] == 1
+    assert any(r["label"] == "Gyermek" and r["relatedName"] == "Bob Kovács"
+               for r in alice_rec["relationships"])
+    bob_rec = next(p for p in persons if p["name"] == "Bob Kovács")
+    assert any(r["label"] == "Szülő" for r in bob_rec["relationships"])
+
+    photos_json = _read_bundle(data_dir, "photos.json")
+    assert len(photos_json) == 1
+    photo = photos_json[0]
+    assert photo["thumb"].startswith("/assets/images/thumbs/")
+    assert photo["medium"].startswith("/assets/images/medium/")
+    assert photo["original"].startswith("/assets/images/original/")
+    assert photo["faces"][0]["name"] == "Alice Kovács"
+    assert alice_rec["id"] in photo["personIds"]
+
+    # Search index ships under public/ (served at runtime), minimal and typed.
+    index = json.loads(
+        (project / "public" / "assets" / "data" / "search-index.json").read_text(encoding="utf-8"))
+    types = {e["type"] for e in index}
+    assert types == {"person", "photo"}
+    person_entry = next(e for e in index if e["type"] == "person")
+    assert set(person_entry) >= {"id", "name", "type", "url"}
+
+    # Three image variants physically written; medium downscaled, thumb small.
+    images_root = project / "public" / "assets" / "images"
+    image_id = Path(photo["thumb"]).stem
+    assert (images_root / "thumbs" / f"{image_id}.jpg").exists()
+    assert (images_root / "medium" / f"{image_id}.jpg").exists()
+    assert (images_root / "original" / f"{image_id}.jpg").exists()
+    assert photo["thumbW"] <= ASTRO_THUMB_EDGE
+    assert photo["mediumW"] <= 1280
+    assert photo["width"] == 2000  # original dimensions preserved in metadata

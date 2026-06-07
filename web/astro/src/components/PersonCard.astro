@@ -1,0 +1,32 @@
+---
+import type { Person } from '../lib/data';
+import { link } from '../lib/links';
+interface Props { person: Person; }
+const { person } = Astro.props;
+const href = link(`/persons/${person.id}/`);
+const life = [person.birthYear, person.deathYear].some(Boolean)
+  ? `${person.birthYear || ''}–${person.deathYear || ''}`
+  : '';
+---
+<a class="card" href={href}>
+  <div class="thumb-wrap">
+    {person.thumb ? (
+      <img
+        src={person.thumb}
+        alt={person.name}
+        width={person.thumbW || undefined}
+        height={person.thumbH || undefined}
+        loading="lazy"
+        decoding="async"
+      />
+    ) : (
+      <span class="placeholder">👤</span>
+    )}
+  </div>
+  <div class="body">
+    <div class="title">{person.name || '(névtelen)'}</div>
+    <div class="sub">
+      {person.imageCount} kép{life ? ` · ${life}` : ''}
+    </div>
+  </div>
+</a>

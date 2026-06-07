@@ -1,0 +1,122 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { loadPersons, loadPhotos, type Person, type Photo } from '../../lib/data';
+import { link } from '../../lib/links';
+
+export function getStaticPaths() {
+  const persons = loadPersons();
+  const photos = loadPhotos();
+  // index person id -> their photos (build-time join; browser never does this)
+  const byPerson = new Map<number, Photo[]>();
+  for (const ph of photos) {
+    for (const pid of ph.personIds) {
+      if (!byPerson.has(pid)) byPerson.set(pid, []);
+      byPerson.get(pid)!.push(ph);
+    }
+  }
+  return persons.map((person) => ({
+    params: { id: String(person.id) },
+    props: { person, photos: byPerson.get(person.id) ?? [] },
+  }));
+}
+
+interface Props { person: Person; photos: Photo[]; }
+const { person, photos } = Astro.props;
+
+const bio: { label: string; value: string }[] = [
+  { label: 'Becenév', value: person.nickname },
+  { label: 'Leánykori/házassági név', value: person.marriedName },
+  { label: 'Nem', value: person.gender },
+  { label: 'Születés', value: [person.birthDate, person.birthPlace].filter(Boolean).join(', ') },
+  { label: 'Elhalálozás', value: [person.deathDate, person.deathPlace].filter(Boolean).join(', ') },
+  { label: 'Családi kód', value: person.familyCode },
+  { label: 'Külső családi kód', value: person.externalFamilyCode },
+].filter((r) => r.value);
+---
+<Layout title={person.name} active="persons">
+  <a class="back" href={link('/persons/page/1/')}>‹ Személyek</a>
+
+  <div class="detail">
+    <div class="portrait">
+      {person.thumb ? (
+        <img src={person.thumb} alt={person.name} width={person.thumbW || undefined} height={person.thumbH || undefined} decoding="async" />
+      ) : (
+        <div class="ph">👤</div>
+      )}
+    </div>
+    <div class="meta">
+      <h1>{person.name || '(névtelen)'}{person.isAutoNamed && <span class="badge">auto</span>}</h1>
+      <p class="muted">{person.imageCount} fotó</p>
+
+      {bio.length > 0 && (
+        <dl>
+          {bio.map((r) => (
+            <div class="row"><dt>{r.label}</dt><dd>{r.value}</dd></div>
+          ))}
+        </dl>
+      )}
+
+      {person.groups.length > 0 && (
+        <div class="chips">
+          {person.groups.map((g) => <span class="chip">{g}</span>)}
+        </div>
+      )}
+
+      {person.notes && <p class="notes">{person.notes}</p>}
+
+      {person.relationships.length > 0 && (
+        <section class="rels">
+          <h2>Családi kapcsolatok</h2>
+          <ul>
+            {person.relationships.map((r) => (
+              <li><a href={link(`/persons/${r.relatedPersonId}/`)}>{r.relatedName}</a> <span class="muted">— {r.label}</span></li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  </div>
+
+  {photos.length > 0 && (
+    <section class="photos">
+      <h2>Fotók ({photos.length})</h2>
+      <div class="card-grid">
+        {photos.map((ph) => (
+          <a class="card" href={link(`/photos/${ph.id}/`)}>
+            <div class="thumb-wrap">
+              <img src={ph.thumb} alt={ph.fileName} width={ph.thumbW || undefined} height={ph.thumbH || undefined} loading="lazy" decoding="async" />
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  <style>
+    .back { display: inline-block; margin-bottom: 14px; color: #88aaff; text-decoration: none; }
+    .back:hover { text-decoration: underline; }
+    .detail { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+    .portrait { flex: none; width: 220px; }
+    .portrait img, .portrait .ph {
+      width: 220px; height: 220px; object-fit: cover; border-radius: 10px; background: #050505; border: 1px solid #333;
+    }
+    .portrait .ph { display: flex; align-items: center; justify-content: center; font-size: 4rem; color: #444; }
+    .meta { flex: 1; min-width: 280px; }
+    .meta h1 { font-size: 1.5rem; color: #eee; display: flex; align-items: center; gap: 10px; }
+    .badge { font-size: .65rem; background: #333; color: #aaa; border-radius: 4px; padding: 2px 6px; text-transform: uppercase; }
+    .muted { color: #888; }
+    dl { margin: 14px 0; display: grid; gap: 6px; }
+    .row { display: flex; gap: 10px; }
+    .row dt { color: #6b86c0; min-width: 160px; font-size: .85rem; }
+    .row dd { color: #ddd; font-size: .9rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+    .chip { background: #1d2b45; border: 1px solid #3e5f9c; border-radius: 999px; padding: 3px 10px; font-size: .8rem; color: #dbe6ff; }
+    .notes { margin: 12px 0; color: #ccc; white-space: pre-wrap; }
+    .rels { margin-top: 16px; }
+    .rels h2, .photos h2 { font-size: 1.05rem; color: #cde; margin-bottom: 8px; }
+    .rels ul { list-style: none; display: grid; gap: 4px; }
+    .rels a { color: #88aaff; text-decoration: none; }
+    .rels a:hover { text-decoration: underline; }
+    .photos { margin-top: 28px; }
+  </style>
+</Layout>

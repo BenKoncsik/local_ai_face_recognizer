@@ -1,0 +1,28 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import PersonCard from '../../../components/PersonCard.astro';
+import Pagination from '../../../components/Pagination.astro';
+import { loadPersons, pagePaths, type PageInfo, type Person } from '../../../lib/data';
+import { link } from '../../../lib/links';
+
+export function getStaticPaths() {
+  const persons = loadPersons();
+  // Stable order: by name (Hungarian collation) then id.
+  persons.sort((a, b) => a.name.localeCompare(b.name, 'hu') || a.id - b.id);
+  return pagePaths(persons);
+}
+
+interface Props { page: PageInfo<Person>; }
+const { page } = Astro.props;
+const hrefFor = (p: number) => link(`/persons/page/${p}/`);
+---
+<Layout title="Személyek" active="persons">
+  <div class="page-head">
+    <h1>Személyek</h1>
+    <span class="muted">{page.total} személy · {page.page}/{page.pageCount}. oldal</span>
+  </div>
+  <div class="card-grid">
+    {page.items.map((person) => <PersonCard person={person} />)}
+  </div>
+  <Pagination page={page.page} pageCount={page.pageCount} hrefFor={hrefFor} />
+</Layout>
