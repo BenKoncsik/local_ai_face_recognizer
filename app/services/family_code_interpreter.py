@@ -304,23 +304,63 @@ def validate_extended_code(code: str) -> str:
             "tartozik."
         )
 
-    # Range notation?
-    if _RANGE_RE.fullmatch(code.upper()):
-        expanded = expand_range_code(code)
-        if not expanded:
-            raise ValueError(f"Érvénytelen tartományjelölés: '{code}'")
-        return code.upper()
-
-    # Multi-code or single code
-    parts = _split_multi(code)
-    for part in parts:
-        info = parse_extended_code(part)   # raises on invalid
-        if info.is_external:
+    # A comma must always separate two non-empty codes — 'C8B,,C80B' or a
+    # trailing/leading comma is a mistake, not an empty token to drop silently.
+    for chunk in code.split(","):
+        if not chunk.strip():
             raise ValueError(
-                "A külső családi azonosító (#...#) nem a fő családi azonosító "
-                "mezőbe tartozik."
+                "Üres kód a vesszők között — minden vesszővel elválasztott "
+                "azonosítónak ki kell töltve lennie."
             )
-    return (" ".join(p.upper() for p in parts) if len(parts) > 1 else parts[0].upper())
+
+    # Split into comma/space separated tokens first, then validate each token
+    # on its own with the same logic that already accepts a standalone range
+    # (e.g. 'C[81-86]B').  This lets a list mix plain and range codes:
+    #   'C8B,C80B,C[81-86]B'
+    parts = _split_multi(code)
+    if not parts:
+        raise ValueError("Üres kód nem fogadható el.")
+
+    canonical: list[str] = []
+    for part in parts:
+        canonical.append(_validate_single_code(part))
+
+    return " ".join(canonical) if len(canonical) > 1 else canonical[0]
+
+
+def _validate_single_code(part: str) -> str:
+    """Validate a single family code token and return its canonical form.
+
+    Accepts either range notation ('C[81-86]B') or a plain extended code
+    ('C8B').  Raises ValueError if invalid.  External (#root#) codes are
+    rejected here — they belong in the external family code field.
+    """
+    part = part.strip()
+    if not part:
+        raise ValueError("Üres kód nem fogadható el.")
+
+    if part.startswith("#"):
+        raise ValueError(
+            "A külső családi azonosító (#...#) nem a fő családi azonosító "
+            "mezőbe tartozik."
+        )
+
+    # Range notation?
+    if "[" in part or "]" in part:
+        if not _RANGE_RE.fullmatch(part.upper()):
+            raise ValueError(f"Érvénytelen tartományjelölés: '{part}'")
+        expanded = expand_range_code(part)
+        if not expanded:
+            raise ValueError(f"Érvénytelen tartományjelölés: '{part}'")
+        return part.upper()
+
+    info = parse_extended_code(part)   # raises on invalid
+    if info.is_external:
+        raise ValueError(
+            "A külső családi azonosító (#...#) nem a fő családi azonosító "
+            "mezőbe tartozik."
+        )
+    return part.upper()
 
 
 def validate_external_family_code(code: Optional[str]) -> Optional[str]:
