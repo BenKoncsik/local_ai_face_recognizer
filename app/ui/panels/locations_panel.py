@@ -719,6 +719,7 @@ class LocationsPanel(QWidget):
                         coordinate_source=res.coordinate_source,
                         is_exact_coordinate=res.is_exact_coordinate,
                         accuracy_radius_meters=res.accuracy_radius_meters,
+                        name=res.name,
                     )
                     self._record_address(session, res)
                 else:

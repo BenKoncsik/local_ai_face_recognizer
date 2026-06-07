@@ -221,12 +221,17 @@ class PlaceEditDialog(QDialog):
                 self._street.set_text(place.street_name)
             if place.house_number:
                 self._house.setText(place.house_number)
-            display = place.display_name or place.name
+            # The Name field shows the place's real name, not the address-derived
+            # display name — otherwise a custom name ("Koppány villa") would be
+            # replaced by the settlement ("Balatonszemes") on reopen.
+            name_value = place.name or place.display_name or ""
             if place.is_anonymous and place.source == "exif":
-                display = ""
-            self._name.setText(display)
-            if place.display_name and place.display_name != place.name:
-                self._name_overridden = place.name != place.display_name
+                name_value = ""
+            self._name.setText(name_value)
+            # Treat the name as user-overridden when it diverges from the
+            # auto-derived display name, so editing the address won't clobber it.
+            if place.name and place.display_name and place.name != place.display_name:
+                self._name_overridden = True
             idx = self._type.findData(normalize_place_type(place.place_type))
             if idx >= 0:
                 self._type.setCurrentIndex(idx)

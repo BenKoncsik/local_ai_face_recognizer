@@ -107,6 +107,50 @@ def test_update_place_address_rebuilds_display(db):
         assert p.place_type == PLACE_TYPE_EXACT
 
 
+def test_custom_name_survives_address_save(db):
+    """A hand-entered name must not be overwritten by the settlement.
+
+    Regression: editing a place with Name="Koppány villa" and
+    Settlement="Balatonszemes" used to leave name == "Balatonszemes".
+    """
+    with session_scope() as s:
+        svc = PlaceService(s)
+        # Create with a custom name distinct from the settlement.
+        p = svc.create_place_from_address(
+            "Balatonszemes", latitude=46.8, longitude=17.8, name="Koppány villa"
+        )
+        assert p.name == "Koppány villa"
+        assert p.settlement_name == "Balatonszemes"
+        assert p.display_name == "Balatonszemes"
+        pid = p.id
+
+    # Re-edit the place keeping the same custom name.
+    with session_scope() as s:
+        svc = PlaceService(s)
+        svc.update_place_address(pid, "Balatonszemes", name="Koppány villa")
+        p = svc._require_place(pid)
+        assert p.name == "Koppány villa"
+        assert p.settlement_name == "Balatonszemes"
+        assert p.display_name == "Balatonszemes"
+
+    # And it shows up correctly in the list the table is built from.
+    with session_scope() as s:
+        summaries = PlaceService(s).list_places(PlaceFilters(name="Koppány"))
+        assert len(summaries) == 1
+        assert summaries[0].name == "Koppány villa"
+        assert summaries[0].settlement_name == "Balatonszemes"
+
+
+def test_update_place_address_without_name_falls_back_to_display(db):
+    """Without an explicit name, the legacy sync (name == display) holds."""
+    with session_scope() as s:
+        svc = PlaceService(s)
+        p = svc.create_place_from_address("Pécs", latitude=46.07, longitude=18.23)
+        svc.update_place_address(p.id, "Pécs", "Király utca", "5")
+        assert p.name == "Pécs, Király utca 5."
+        assert p.name == p.display_name
+
+
 # --- search -----------------------------------------------------------------
 
 def test_search_matches_structured_fields(db):

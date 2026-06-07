@@ -431,9 +431,16 @@ class PlaceService:
         coordinate_source: Optional[str] = None,
         is_exact_coordinate: Optional[bool] = None,
         accuracy_radius_meters: Optional[float] = None,
+        name: Optional[str] = None,
     ) -> Place:
-        """Update the structured address of an existing place and re-derive the
-        display name (kept in sync with ``name`` for compatibility)."""
+        """Update the structured address of an existing place.
+
+        ``display_name`` is always re-derived from the address parts. The
+        human-facing ``name`` comes from the explicit ``name`` argument (e.g.
+        what the user typed in the "Name" field); only when no name is given
+        does it fall back to the derived display name. This keeps a manually
+        entered name (e.g. "Koppány villa") from being overwritten by the
+        settlement ("Balatonszemes")."""
         place = self._require_place(place_id)
         settlement = (settlement or "").strip()
         if not settlement:
@@ -446,7 +453,7 @@ class PlaceService:
         place.house_number = house_number
         display = build_display_name(settlement, street, house_number)
         place.display_name = display
-        place.name = display
+        place.name = (name or "").strip() or display
         place.is_anonymous = False
         place.place_type = normalize_place_type(place_type or auto.place_type)
         if accuracy_radius_meters is not None:
