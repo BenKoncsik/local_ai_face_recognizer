@@ -37,6 +37,12 @@ $RECYCLE.BIN/
 # Temporary files from deleted open files
 .fuse_hidden*
 
+# Runtime databases and accidental SQLite URI artifacts
+*.db
+*.sqlite
+*.sqlite3
+sqlite:/
+
 # KDE directory preferences
 .directory
 
