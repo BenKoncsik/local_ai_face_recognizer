@@ -296,6 +296,13 @@ class Person(Base):
     family_code: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )
+    # External family identifier (#root#path), describing the person's own
+    # family when they belong to a separate, external family tree (e.g. a
+    # friend who is the root of their own family). Kept distinct from
+    # family_code, which only records how the person links to the main family.
+    external_family_code: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     second_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

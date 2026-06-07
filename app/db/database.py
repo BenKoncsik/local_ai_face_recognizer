@@ -86,6 +86,7 @@ def _migrate_add_columns(engine: Engine) -> None:
         "persons": [
             ("gender",               "VARCHAR(16)"),
             ("family_code",          "VARCHAR(64)"),
+            ("external_family_code", "VARCHAR(128)"),
             ("last_name",            "VARCHAR(255)"),
             ("first_name",           "VARCHAR(255)"),
             ("second_name",          "VARCHAR(255)"),
@@ -304,6 +305,14 @@ def _migrate_add_indexes(engine: Engine) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_family_code "
             "ON persons(family_code) "
             "WHERE family_code IS NOT NULL AND family_code NOT LIKE '%B%'"
+        ),
+        # External family identifiers are unique identities (each #root#path is
+        # one external person), so enforce uniqueness where present.
+        "CREATE INDEX IF NOT EXISTS ix_persons_external_family_code ON persons(external_family_code)",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_external_family_code "
+            "ON persons(external_family_code) "
+            "WHERE external_family_code IS NOT NULL"
         ),
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",

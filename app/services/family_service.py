@@ -12,7 +12,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image, Person, Place, Relationship
-from app.services.family_code_interpreter import validate_extended_code
+from app.services.family_code_interpreter import (
+    parse_extended_code,
+    validate_extended_code,
+    validate_external_family_code,
+)
 
 REL_PARENT_CHILD = "ParentChild"
 REL_SPOUSE = "Spouse"
@@ -35,6 +39,9 @@ class FamilyCodeInfo:
     generation: int
     parent_code: Optional[str]
     spouse_of_code: Optional[str]
+    # The other parent, derived from the {n} brace notation (X{n}m → XHn).
+    # None for codes without a parent-disambiguation brace.
+    second_parent_code: Optional[str] = None
 
     @property
     def is_spouse(self) -> bool:
@@ -106,11 +113,14 @@ def parse_family_code(value: Optional[str]) -> Optional[FamilyCodeInfo]:
     code = validate_family_code(value)
     if code is None:
         return None
-    # Extended codes (F/T/B suffixes, multi-codes, ranges) describe ancestors,
-    # collateral relatives or friends — they have no simple descendant-tree
-    # derivation, so the parent/spouse/sibling helpers do not apply.
+    # Simple descendant/spouse codes (C, C0, C8, C85, C80) keep the original
+    # derivation. Numbered-spouse (H) and parent-disambiguated ({n}) codes are
+    # also descendant-tree codes and get their own derivation below; the
+    # remaining extended codes (F/T/B suffixes, multi-codes, ranges, external
+    # #...#) describe ancestors, collateral relatives or friends and have no
+    # simple parent/spouse derivation.
     if not _FAMILY_CODE_RE.fullmatch(code):
-        return None
+        return _parse_extended_tree_code(code)
 
     root = code[0]
     raw_path = code[1:]
@@ -134,6 +144,61 @@ def parse_family_code(value: Optional[str]) -> Optional[FamilyCodeInfo]:
         parent_code=parent_code,
         spouse_of_code=spouse_of_code,
     )
+
+
+def _parse_extended_tree_code(code: str) -> Optional[FamilyCodeInfo]:
+    """Derive relationship hints for numbered-spouse (H) and braced ({n}) codes.
+
+    ``G1H2``  → spouse of the base person ``G1``.
+    ``G1{2}3`` → child of ``G1`` (first parent) and ``G1H2`` (second parent,
+    derived from the brace). Returns None for any other extended code.
+    """
+    try:
+        info = parse_extended_code(code)
+    except ValueError:
+        return None
+    if info.is_external:
+        return None
+    root = info.root
+    digits = info.path_digits
+    path = code[len(root):]
+
+    # Numbered spouse, e.g. G1H2 = the 2nd spouse of G1.  Brought-children of a
+    # numbered spouse (G1H21) are not simple tree nodes, so only the bare XHn
+    # form is derived here.
+    if info.suffix_type == "spouse":
+        if len(info.spouse_path) != 1:
+            return None
+        base_code = root + "".join(str(d) for d in digits)
+        return FamilyCodeInfo(
+            code=code,
+            root=root,
+            path=path,
+            generation=len(digits),
+            parent_code=None,
+            spouse_of_code=base_code,
+        )
+
+    # Parent-disambiguated child, e.g. G1{2}3.  The terminal child carries the
+    # spouse-number annotation; the first parent is the code without that child,
+    # the second parent is firstParent + Hn.
+    if info.suffix_type is None and any(info.path_spouse_nums):
+        if not digits or digits[-1] == 0:
+            return None
+        first_parent = root + "".join(str(d) for d in digits[:-1])
+        spouse_num = info.path_spouse_nums[-1]
+        second_parent = f"{first_parent}H{spouse_num}" if spouse_num else None
+        return FamilyCodeInfo(
+            code=code,
+            root=root,
+            path=path,
+            generation=len(digits),
+            parent_code=first_parent or None,
+            spouse_of_code=None,
+            second_parent_code=second_parent,
+        )
+
+    return None
 
 
 def family_codes_are_siblings(code_a: Optional[str], code_b: Optional[str]) -> bool:
@@ -192,6 +257,31 @@ class FamilyService:
         if existing is not None:
             raise ValueError(
                 f"Family code {code} is already assigned to {existing.name}."
+            )
+        return code
+
+    def ensure_unique_external_family_code(
+        self,
+        external_code: Optional[str],
+        *,
+        current_person_id: Optional[int] = None,
+    ) -> Optional[str]:
+        """Validate an external family identifier and enforce uniqueness.
+
+        Each ``#root#path`` is a unique external identity, so (unlike friend
+        codes) every external code must be unique across persons. Returns the
+        canonical form, or None for an empty value; raises ValueError otherwise.
+        """
+        code = validate_external_family_code(external_code)
+        if code is None:
+            return None
+        q = self._session.query(Person).filter(Person.external_family_code == code)
+        if current_person_id is not None:
+            q = q.filter(Person.id != current_person_id)
+        existing = q.first()
+        if existing is not None:
+            raise ValueError(
+                f"External family code {code} is already assigned to {existing.name}."
             )
         return code
 
@@ -277,6 +367,52 @@ class FamilyService:
             raise ValueError("This parent/child relationship would create a cycle.")
         return self._get_or_create_relationship(REL_PARENT_CHILD, parent_id, child_id)
 
+    def link_derived_parents(self, person_id: int) -> list[Relationship]:
+        """Materialise the relationships a person's family code implies.
+
+        For a parent-disambiguated child code (``G1{2}3``) this links both the
+        first parent (``G1``) and the brace-derived second parent (``G1H2``) as
+        ParentChild, and links the two parents to each other as spouses.  For a
+        numbered-spouse code (``G1H2``) it links the spouse relationship with the
+        base person (``G1``).
+
+        Linking is best-effort: only relationships whose other person already
+        exists (matched by family code) are created.  Returns the list of
+        relationships created or already present.  Self-references and missing
+        persons are skipped silently; genuine errors (e.g. a relationship cycle)
+        propagate so the caller can surface them.
+        """
+        person = self._require_person(person_id)
+        info = parse_family_code(person.family_code)
+        if info is None:
+            return []
+
+        created: list[Relationship] = []
+
+        # Numbered-spouse code (G1H2): link as spouse of the base person.
+        if info.spouse_of_code and info.parent_code is None:
+            base = self.find_by_family_code(info.spouse_of_code)
+            if base is not None and base.id != person.id:
+                created.append(self.add_spouse(base.id, person.id))
+            return created
+
+        # Braced child (G1{2}3): link both parents, and the parents as spouses.
+        parent_codes = [c for c in (info.parent_code, info.second_parent_code) if c]
+        parent_persons: list[Person] = []
+        for parent_code in parent_codes:
+            parent = self.find_by_family_code(parent_code)
+            if parent is None or parent.id == person.id:
+                continue
+            parent_persons.append(parent)
+            created.append(self.add_parent_child(parent.id, person.id))
+
+        if len(parent_persons) == 2:
+            created.append(
+                self.add_spouse(parent_persons[0].id, parent_persons[1].id)
+            )
+
+        return created
+
     def are_spouses(self, person_id_a: int, person_id_b: int) -> bool:
         if person_id_a == person_id_b:
             return False
@@ -322,7 +458,10 @@ class FamilyService:
         child_info = self._safe_parse_person_code(child)
         if parent_info is None or child_info is None or child_info.is_spouse:
             return False
-        return child_info.parent_code == parent_info.code
+        return parent_info.code in (
+            child_info.parent_code,
+            child_info.second_parent_code,
+        )
 
     def are_siblings(self, person_id_a: int, person_id_b: int) -> bool:
         if person_id_a == person_id_b:

@@ -249,6 +249,23 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Invalid family code",
         "hu": "Hibás családi azonosító",
     },
+    "external_family_code": {
+        "en": "External family code:",
+        "hu": "Külső családi azonosító:",
+    },
+    "example_external_family_code": {"en": "e.g. #Zoli#", "hu": "pl. #Zoli#"},
+    "external_family_code_help": {
+        "en": "The external person's own family root, e.g. #Zoli# = Zoli, "
+              "#Zoli#0 = Zoli's spouse, #Zoli#31 = Zoli's 3rd child's 1st child. "
+              "Kept separate from the main family code.",
+        "hu": "A külső személy saját családi gyökere, pl. #Zoli# = Zoli, "
+              "#Zoli#0 = Zoli házastársa, #Zoli#31 = Zoli 3. gyerekének 1. gyereke. "
+              "A fő családi azonosítótól elkülönítve.",
+    },
+    "external_family_code_invalid_title": {
+        "en": "Invalid external family code",
+        "hu": "Hibás külső családi azonosító",
+    },
 
     # ── Family search ───────────────────────────────────────────────────────
     "family_person_a":    {"en": "First person", "hu": "Első személy"},

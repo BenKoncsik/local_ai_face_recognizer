@@ -90,6 +90,16 @@ class PersonInfoDialog(QDialog):
         family_help.setStyleSheet("color: #888; font-size: 11px;")
         form.addRow("", family_help)
 
+        self._external_family_code = QLineEdit(person.external_family_code or "")
+        self._external_family_code.setPlaceholderText(t("example_external_family_code"))
+        self._external_family_code.setToolTip(t("external_family_code_help"))
+        form.addRow(t("external_family_code"), self._external_family_code)
+
+        external_help = QLabel(t("external_family_code_help"))
+        external_help.setWordWrap(True)
+        external_help.setStyleSheet("color: #888; font-size: 11px;")
+        form.addRow("", external_help)
+
         self._last_name = QLineEdit(person.last_name or "")
         self._last_name.setPlaceholderText(t("example_last_name"))
         form.addRow(t("last_name"), self._last_name)
@@ -182,6 +192,17 @@ class PersonInfoDialog(QDialog):
             return
         self._family_code.setText(canonical or "")
 
+        try:
+            with session_scope() as session:
+                external_canonical = FamilyService(session).ensure_unique_external_family_code(
+                    self.external_family_code(),
+                    current_person_id=self._person_id,
+                )
+        except ValueError as exc:
+            QMessageBox.warning(self, t("external_family_code_invalid_title"), str(exc))
+            return
+        self._external_family_code.setText(external_canonical or "")
+
         # Save group memberships (skipped for protected persons)
         if not self._is_protected:
             try:
@@ -265,6 +286,9 @@ class PersonInfoDialog(QDialog):
 
     def family_code(self) -> str:
         return self._family_code.text().strip()
+
+    def external_family_code(self) -> str:
+        return self._external_family_code.text().strip()
 
     def first_name(self) -> str:
         return self._first_name.text().strip()

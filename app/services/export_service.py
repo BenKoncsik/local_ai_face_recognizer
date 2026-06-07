@@ -622,6 +622,7 @@ class ExportService:
                 "isAutoNamed": bool(person.is_auto_named),
                 "gender": person.gender or "",
                 "familyCode": person.family_code or "",
+                "externalFamilyCode": person.external_family_code or "",
                 "nickname": person.nickname or "",
                 "marriedName": person.married_name or "",
                 "birthDate": person.birth_date or "",
@@ -2109,6 +2110,7 @@ function openPersonPanel(personId, fallbackName){
     const death = [info.deathDate, info.deathPlace].filter(Boolean).join(', ');
     if(death) rows.push(['Halálozás', death]);
     if(info.familyCode) rows.push(['Családi kód', info.familyCode]);
+    if(info.externalFamilyCode) rows.push(['Külső családi kód', info.externalFamilyCode]);
     if(info.groups && info.groups.length){
       rows.push(['Csoportok',
         '<span class=\"pp-groups\">' +

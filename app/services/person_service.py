@@ -37,6 +37,7 @@ class PersonSummary:
     name: str
     thumbnail_path: Optional[str]
     family_code: Optional[str]
+    external_family_code: Optional[str]
     last_name: Optional[str]
     first_name: Optional[str]
     second_name: Optional[str]
@@ -71,6 +72,7 @@ class PersonService:
     EDITABLE_FIELDS = (
         "gender",
         "family_code",
+        "external_family_code",
         "last_name",
         "first_name",
         "second_name",
@@ -146,6 +148,7 @@ class PersonService:
                 name=person.name,
                 thumbnail_path=person.thumbnail_path or fallback_crop.get(person.id),
                 family_code=person.family_code,
+                external_family_code=person.external_family_code,
                 last_name=person.last_name,
                 first_name=person.first_name,
                 second_name=person.second_name,
@@ -233,9 +236,25 @@ class PersonService:
             if isinstance(value, str):
                 value = value.strip() or None
             setattr(person, key, value)
+        self._session.flush()
+        if "family_code" in fields:
+            self._link_derived_parents(person_id)
         self._session.commit()
         log.info("Updated structured data for person %d", person_id)
         return person
+
+    def _link_derived_parents(self, person_id: int) -> None:
+        """Materialise relationships implied by a {n}/H family code (best-effort).
+
+        Delegates to :meth:`FamilyService.link_derived_parents`; never raises, so
+        a structural issue (e.g. a relationship cycle) cannot block the save.
+        """
+        from app.services.family_service import FamilyService
+
+        try:
+            FamilyService(self._session).link_derived_parents(person_id)
+        except Exception:
+            log.exception("Could not link derived parents for person %d", person_id)
 
     # ------------------------------------------------------------------
     # Thumbnail

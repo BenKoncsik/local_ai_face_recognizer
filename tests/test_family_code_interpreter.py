@@ -14,6 +14,7 @@ from app.services.family_code_interpreter import (
     expand_range_code,
     parse_extended_code,
     validate_extended_code,
+    validate_external_family_code,
 )
 
 
@@ -391,3 +392,164 @@ class TestCustomRootNames:
         names = {"I": "Irén", "J": "János"}
         assert describe_family_code("I0", root_names=names) == "Irén"
         assert describe_family_code("J0F2", root_names=names) == "János anyja"
+
+
+# ── Multiple spouses (H) suffix ───────────────────────────────────────────────
+
+class TestMultiSpouseSuffix:
+    def test_parse_first_spouse(self):
+        info = parse_extended_code("G1H1")
+        assert info.suffix_type == "spouse"
+        assert info.spouse_path == (1,)
+        assert info.path_digits == (1,)
+
+    def test_parse_second_spouse(self):
+        info = parse_extended_code("G1H2")
+        assert info.suffix_type == "spouse"
+        assert info.spouse_path == (2,)
+
+    def test_parse_spouse_brought_child(self):
+        info = parse_extended_code("G1H21")
+        assert info.suffix_type == "spouse"
+        assert info.spouse_path == (2, 1)
+
+    def test_describe_first_spouse(self):
+        names = {"G": "Gábor"}
+        assert describe_family_code("G1H1", names) == "Gábor 1. gyermekének 1. házastársa"
+
+    def test_describe_second_spouse(self):
+        names = {"G": "Gábor"}
+        assert describe_family_code("G1H2", names) == "Gábor 1. gyermekének 2. házastársa"
+
+    def test_describe_spouse_brought_child(self):
+        names = {"G": "Gábor"}
+        assert describe_family_code("G1H21", names) == (
+            "Gábor 1. gyermekének 2. házastársának 1. gyermeke (korábbi kapcsolatból)"
+        )
+
+    def test_root_spouse_h(self):
+        names = {"G": "Gábor"}
+        assert describe_family_code("G0H2", names) == "Gábor 2. házastársa"
+
+    def test_zero_spouse_still_valid(self):
+        # Backward compatibility: the single-spouse 0 form keeps working.
+        assert describe_family_code("G10") == "Gábor 1. gyermekének házastársa"
+
+    def test_validate_h_codes(self):
+        for code in ["G1H1", "G1H2", "G1H21", "G0H3"]:
+            assert validate_extended_code(code) == code
+
+    def test_invalid_h_zero_spouse_index(self):
+        with pytest.raises(ValueError):
+            parse_extended_code("G1H0")
+
+
+# ── Parent-disambiguation braces {n} ──────────────────────────────────────────
+
+class TestParentBraces:
+    def test_parse_brace(self):
+        info = parse_extended_code("G1{2}3")
+        assert info.path_digits == (1, 3)
+        assert info.path_spouse_nums == (None, 2)
+
+    def test_parse_brace_first_spouse(self):
+        info = parse_extended_code("G1{1}1")
+        assert info.path_digits == (1, 1)
+        assert info.path_spouse_nums == (None, 1)
+
+    def test_describe_brace_second_spouse(self):
+        names = {"G": "Gábor"}
+        assert describe_family_code("G1{2}3", names) == (
+            "Gábor 1. gyermekének 3. gyermeke a 2. házastárstól"
+        )
+
+    def test_describe_brace_first_spouse(self):
+        names = {"G": "Gábor"}
+        # "első" starts with a vowel → "az 1." per the spec.
+        assert describe_family_code("G1{1}1", names) == (
+            "Gábor 1. gyermekének 1. gyermeke az 1. házastárstól"
+        )
+
+    def test_brace_canonical_form(self):
+        assert validate_extended_code("G1{2}3") == "G1{2}3"
+
+    def test_brace_must_precede_child(self):
+        # A brace cannot dangle at the end.
+        with pytest.raises(ValueError):
+            parse_extended_code("G1{2}")
+
+    def test_brace_not_before_spouse_zero(self):
+        with pytest.raises(ValueError):
+            parse_extended_code("G1{2}0")
+
+
+# ── External family identifiers (#root#path) ──────────────────────────────────
+
+class TestExternalCodes:
+    def test_parse_root(self):
+        info = parse_extended_code("#Zoli#")
+        assert info.is_external
+        assert info.external_root == "Zoli"
+        assert info.path_digits == ()
+
+    def test_parse_spouse(self):
+        info = parse_extended_code("#Zoli#0")
+        assert info.is_external
+        assert info.path_digits == (0,)
+
+    def test_parse_child(self):
+        info = parse_extended_code("#Zoli#3")
+        assert info.path_digits == (3,)
+
+    def test_parse_grandchild(self):
+        info = parse_extended_code("#Zoli#31")
+        assert info.path_digits == (3, 1)
+
+    def test_root_case_preserved(self):
+        info = parse_extended_code("#KovacsZoli#")
+        assert info.external_root == "KovacsZoli"
+        assert info.raw == "#KovacsZoli#"
+
+    def test_numeric_root(self):
+        info = parse_extended_code("#47#1")
+        assert info.external_root == "47"
+        assert info.path_digits == (1,)
+
+    def test_describe_root(self):
+        assert describe_family_code("#Zoli#") == "Zoli"
+
+    def test_describe_spouse(self):
+        assert describe_family_code("#Zoli#0") == "Zoli házastársa"
+
+    def test_describe_child(self):
+        assert describe_family_code("#Zoli#3") == "Zoli 3. gyermeke"
+
+    def test_describe_grandchild(self):
+        assert describe_family_code("#Zoli#31") == "Zoli 3. gyermekének 1. gyermeke"
+
+    def test_describe_short_root(self):
+        assert describe_family_code("#Z#31") == "Z 3. gyermekének 1. gyermeke"
+
+    def test_describe_external_ancestor(self):
+        # The root person is implicit, so a suffix attaches directly.
+        assert describe_family_code("#Zoli#F1") == "Zoli apja"
+
+    def test_validate_external_field(self):
+        assert validate_external_family_code("#Zoli#") == "#Zoli#"
+        assert validate_external_family_code("#Zoli#31") == "#Zoli#31"
+
+    def test_validate_external_empty(self):
+        assert validate_external_family_code("") is None
+        assert validate_external_family_code(None) is None
+
+    def test_validate_external_rejects_internal(self):
+        with pytest.raises(ValueError):
+            validate_external_family_code("C81B")
+
+    def test_validate_external_rejects_empty_root(self):
+        with pytest.raises(ValueError):
+            validate_external_family_code("##")
+
+    def test_main_field_rejects_external(self):
+        with pytest.raises(ValueError):
+            validate_extended_code("#Zoli#")

@@ -9,6 +9,7 @@ from app.services.family_service import (
     FamilyService,
     REL_PARENT_CHILD,
     REL_SPOUSE,
+    parse_family_code,
 )
 
 
@@ -172,6 +173,126 @@ def test_search_images_by_comma_name_terms_and_allow_others(db):
         )
         assert total == 1
         assert [row.filename for row in rows] == ["benedek-matyi.jpg"]
+
+
+# ── {n} / H derivation and linking ────────────────────────────────────────────
+
+def test_parse_braced_child_derives_both_parents():
+    info = parse_family_code("G1{2}3")
+    assert info is not None
+    assert info.parent_code == "G1"
+    assert info.second_parent_code == "G1H2"
+    assert not info.is_spouse
+
+
+def test_parse_numbered_spouse_is_spouse_of_base():
+    info = parse_family_code("G1H2")
+    assert info is not None
+    assert info.is_spouse
+    assert info.spouse_of_code == "G1"
+    assert info.parent_code is None
+
+
+def test_short_child_form_has_no_second_parent():
+    info = parse_family_code("G13")
+    assert info is not None
+    assert info.parent_code == "G1"
+    assert info.second_parent_code is None
+
+
+def test_link_derived_parents_braced_child(db):
+    with session_scope() as session:
+        gabor = _person(session, "Gábor", gender="male")
+        gabor.family_code = "G1"
+        wife2 = _person(session, "Második feleség", gender="female")
+        wife2.family_code = "G1H2"
+        child = _person(session, "Gyerek")
+        child.family_code = "G1{2}3"
+        session.flush()
+
+        svc = FamilyService(session)
+        svc.link_derived_parents(child.id)
+
+        # Both parents linked to the child …
+        assert svc.is_parent_child(gabor.id, child.id)
+        assert svc.is_parent_child(wife2.id, child.id)
+        # … and the two parents linked as spouses.
+        assert svc.are_spouses(gabor.id, wife2.id)
+
+        assert session.query(Relationship).filter(
+            Relationship.relationship_type == REL_PARENT_CHILD
+        ).count() == 2
+        assert session.query(Relationship).filter(
+            Relationship.relationship_type == REL_SPOUSE
+        ).count() == 1
+
+
+def test_link_derived_parents_numbered_spouse(db):
+    with session_scope() as session:
+        gabor = _person(session, "Gábor")
+        gabor.family_code = "G1"
+        spouse = _person(session, "Feleség")
+        spouse.family_code = "G1H2"
+        session.flush()
+
+        svc = FamilyService(session)
+        svc.link_derived_parents(spouse.id)
+
+        assert svc.are_spouses(gabor.id, spouse.id)
+        assert session.query(Relationship).filter(
+            Relationship.relationship_type == REL_SPOUSE
+        ).count() == 1
+
+
+def test_link_skips_missing_second_parent(db):
+    with session_scope() as session:
+        gabor = _person(session, "Gábor")
+        gabor.family_code = "G1"
+        child = _person(session, "Gyerek")
+        child.family_code = "G1{2}3"  # G1H2 person does not exist
+        session.flush()
+
+        svc = FamilyService(session)
+        created = svc.link_derived_parents(child.id)
+
+        assert svc.is_parent_child(gabor.id, child.id)
+        # Only the existing first parent got a stored row.
+        assert session.query(Relationship).filter(
+            Relationship.relationship_type == REL_PARENT_CHILD
+        ).count() == 1
+        assert len(created) == 1
+
+
+def test_is_parent_child_derives_second_parent_without_rows(db):
+    with session_scope() as session:
+        wife2 = _person(session, "Második feleség")
+        wife2.family_code = "G1H2"
+        child = _person(session, "Gyerek")
+        child.family_code = "G1{2}3"
+        session.flush()
+
+        svc = FamilyService(session)
+        # No explicit relationship rows created — derivation alone must work.
+        assert svc.is_parent_child(wife2.id, child.id)
+
+
+def test_update_person_auto_links_parents(db):
+    from app.services.person_service import PersonService
+
+    with session_scope() as session:
+        gabor = _person(session, "Gábor")
+        gabor.family_code = "G1"
+        wife2 = _person(session, "Feleség")
+        wife2.family_code = "G1H2"
+        child = _person(session, "Gyerek")
+        child_id = child.id
+        session.flush()
+
+        PersonService(session).update_person(child_id, family_code="G1{2}3")
+
+        svc = FamilyService(session)
+        assert svc.is_parent_child(gabor.id, child_id)
+        assert svc.is_parent_child(wife2.id, child_id)
 
 
 def test_search_images_by_criteria_detail_filters(db):

@@ -590,6 +590,7 @@ class PersonsPanel(QWidget):
                     person_id,
                     gender=dlg.gender(),
                     family_code=dlg.family_code(),
+                    external_family_code=dlg.external_family_code(),
                     last_name=dlg.last_name(),
                     first_name=dlg.first_name(),
                     second_name=dlg.second_name(),
