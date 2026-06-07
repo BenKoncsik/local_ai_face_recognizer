@@ -12,9 +12,10 @@ Handles user-driven operations on Person clusters:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,65 @@ log = logging.getLogger(__name__)
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+# Person columns captured when snapshotting a source person for undo.  Excludes
+# relationships and the timestamps that the ORM manages on its own.
+_PERSON_SNAPSHOT_COLUMNS = (
+    "id",
+    "name",
+    "is_auto_named",
+    "gender",
+    "thumbnail_path",
+    "thumbnail_is_manual",
+    "family_code",
+    "external_family_code",
+    "last_name",
+    "first_name",
+    "second_name",
+    "nickname",
+    "married_name",
+    "birth_place",
+    "birth_date",
+    "death_place",
+    "death_date",
+    "notes",
+    "is_protected",
+)
+
+
+@dataclass(frozen=True)
+class FaceAssignmentSnapshot:
+    """Pre-move assignment state of a single face — enough to undo the move."""
+
+    face_id: int
+    person_id: Optional[int]
+    assignment_source: Optional[str]
+    assignment_confidence: Optional[float]
+    assigned_at: Optional[datetime]
+
+
+@dataclass
+class BulkReassignResult:
+    """Outcome of a :meth:`IdentityService.reassign_faces_bulk` call.
+
+    Carries everything :meth:`IdentityService.restore_face_assignments` needs to
+    undo the operation, plus a list of face ids that were skipped because they no
+    longer exist (or already belonged to the target).
+    """
+
+    target_person_id: int
+    snapshots: List[FaceAssignmentSnapshot] = field(default_factory=list)
+    skipped_face_ids: List[int] = field(default_factory=list)
+    removed_persons: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def moved_count(self) -> int:
+        return len(self.snapshots)
+
+    @property
+    def moved_face_ids(self) -> List[int]:
+        return [s.face_id for s in self.snapshots]
 
 
 class IdentityService:
@@ -228,6 +288,147 @@ class IdentityService:
         # Moving the last face away may leave the source Unknown cluster empty.
         self.cleanup_empty_unknown_persons()
         return face
+
+    def reassign_faces_bulk(
+        self, face_ids: List[int], target_person_id: int
+    ) -> BulkReassignResult:
+        """Move several faces to *target_person_id* in a single transaction.
+
+        Builds on the single-face :meth:`reassign_face` semantics but applies
+        them atomically: either every still-existing face moves, or — on any
+        error — nothing does (the caller's ``session_scope`` rolls back).
+
+        Faces that no longer exist, or that already belong to the target, are
+        skipped (recorded in :attr:`BulkReassignResult.skipped_face_ids`) rather
+        than aborting the whole operation.  Source "Unknown" clusters left empty
+        are cleaned up just like in the single-face path, but a snapshot of each
+        deleted person is kept so :meth:`restore_face_assignments` can undo the
+        move even when it emptied a cluster.
+
+        Args:
+            face_ids:          Faces to move (order is irrelevant; duplicates ok).
+            target_person_id:  Person to move them to.
+
+        Returns:
+            A :class:`BulkReassignResult` describing what moved, what was
+            skipped, and the data needed to undo the operation.
+        """
+        self._require_person(target_person_id)
+
+        result = BulkReassignResult(target_person_id=target_person_id)
+        now = _utcnow_naive()
+        seen: set[int] = set()
+        source_ids: set[int] = set()
+
+        for face_id in face_ids:
+            if face_id in seen:
+                continue
+            seen.add(face_id)
+
+            face = self._session.get(Face, face_id)
+            if face is None:
+                result.skipped_face_ids.append(face_id)
+                continue
+            if face.person_id == target_person_id:
+                # Already where the user wants it — nothing to move or undo.
+                result.skipped_face_ids.append(face_id)
+                continue
+
+            result.snapshots.append(
+                FaceAssignmentSnapshot(
+                    face_id=face.id,
+                    person_id=face.person_id,
+                    assignment_source=face.assignment_source,
+                    assignment_confidence=face.assignment_confidence,
+                    assigned_at=face.assigned_at,
+                )
+            )
+            if face.person_id is not None:
+                source_ids.add(face.person_id)
+
+            self._invalidate_manual_thumbnail_if_needed(face)
+            face.person_id = target_person_id
+            face.assignment_source = "manual"
+            face.assignment_confidence = None
+            face.assigned_at = now
+
+        if not result.snapshots:
+            # No-op move (every face skipped); avoid an empty cleanup pass.
+            return result
+
+        self._session.flush()
+
+        # Snapshot the source clusters that the cleanup pass is about to delete,
+        # so an undo can recreate them before restoring the faces.
+        for pid in source_ids:
+            person = self._session.get(Person, pid)
+            if (
+                person is not None
+                and person.is_auto_named
+                and not person.is_protected
+                and not person.faces
+            ):
+                result.removed_persons.append(self._snapshot_person(person))
+
+        self._session.commit()
+        log.info(
+            "Bulk reassigned %d face(s) → person %d (%d skipped, %d source cluster(s) removed)",
+            result.moved_count,
+            target_person_id,
+            len(result.skipped_face_ids),
+            len(result.removed_persons),
+        )
+        self.cleanup_empty_unknown_persons()
+        return result
+
+    def restore_face_assignments(
+        self,
+        snapshots: List[FaceAssignmentSnapshot],
+        removed_persons: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        """Undo a bulk move by restoring each face to its snapshotted state.
+
+        Source clusters that the move emptied (and the cleanup pass deleted) are
+        recreated from *removed_persons* before the faces are reattached, so the
+        undo is complete even in that edge case.  Faces that have since been
+        deleted are silently skipped.
+
+        Args:
+            snapshots:        The per-face state captured by the bulk move.
+            removed_persons:  Snapshots of source persons deleted by cleanup.
+
+        Returns:
+            The number of faces actually restored.
+        """
+        for snap in removed_persons or []:
+            pid = snap.get("id")
+            if pid is None or self._session.get(Person, pid) is not None:
+                continue
+            self._session.add(Person(**snap))
+        self._session.flush()
+
+        restored = 0
+        for snap in snapshots:
+            face = self._session.get(Face, snap.face_id)
+            if face is None:
+                continue
+            # Only restore to a person that still exists; fall back to unassigned.
+            target = snap.person_id
+            if target is not None and self._session.get(Person, target) is None:
+                target = None
+            face.person_id = target
+            face.assignment_source = snap.assignment_source
+            face.assignment_confidence = snap.assignment_confidence
+            face.assigned_at = snap.assigned_at
+            restored += 1
+
+        self._session.commit()
+        log.info("Restored %d face assignment(s) (undo)", restored)
+        return restored
+
+    def _snapshot_person(self, person: Person) -> Dict[str, Any]:
+        """Capture a person's column values for later recreation (undo)."""
+        return {col: getattr(person, col) for col in _PERSON_SNAPSHOT_COLUMNS}
 
     def remove_face_from_cluster(self, face_id: int) -> Face:
         """Un-assign a face from its current person (makes it unclustered)."""

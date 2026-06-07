@@ -125,6 +125,7 @@ class FaceThumbnail(QLabel):
         self.face_id = face.id
         self._crop_path = face.crop_path
         self._is_low_quality: bool = bool(face.is_low_quality)
+        self._selected: bool = False
         self._person_name: Optional[str] = face.person.name if face.person else None
         self.setObjectName(f"face-thumb-{face.id}")
         self.setProperty("face_id", face.id)
@@ -146,12 +147,29 @@ class FaceThumbnail(QLabel):
                 file=Path(face.image.file_path).name if face.image else "?",
             ) + quality_suffix
         )
-        border_color = "#f57c00" if self._is_low_quality else "#555"
-        self.setStyleSheet(
-            f"QLabel {{ border: 1px solid {border_color}; border-radius: 4px; }}"
-            "QLabel:hover { border: 2px solid #88aaff; }"
-        )
+        self._base_border = "#f57c00" if self._is_low_quality else "#555"
+        self._apply_border()
         self.setMouseTracking(True)
+
+    def _apply_border(self) -> None:
+        """Style the border according to the selection state."""
+        if self._selected:
+            self.setStyleSheet(
+                "QLabel { border: 3px solid #89B4FA; border-radius: 4px; "
+                "background: #1E2030; }"
+            )
+        else:
+            self.setStyleSheet(
+                f"QLabel {{ border: 1px solid {self._base_border}; border-radius: 4px; }}"
+                "QLabel:hover { border: 2px solid #88aaff; }"
+            )
+
+    def set_selected(self, selected: bool) -> None:
+        """Toggle the multi-selection highlight on this thumbnail."""
+        if self._selected == selected:
+            return
+        self._selected = selected
+        self._apply_border()
 
     def _load_pixmap(self, crop_path: Optional[str]) -> None:
         pixmap = _load_crop_pixmap(crop_path, _THUMB_SIZE, self.face_id)
@@ -219,10 +237,13 @@ class ClusterPanel(QWidget):
 
     face_selected = Signal(int)
     face_right_clicked = Signal(int, int, int)
+    selection_changed = Signal(int)  # number of multi-selected faces
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._face_names: dict[int, Optional[str]] = {}
+        self._thumbs: dict[int, FaceThumbnail] = {}
+        self._selected_ids: set[int] = set()
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -232,6 +253,11 @@ class ClusterPanel(QWidget):
         self._header = QLabel(t("select_person_sidebar"))
         self._header.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._header)
+
+        self._hint = QLabel(t("cluster_multiselect_hint"))
+        self._hint.setAlignment(Qt.AlignCenter)
+        self._hint.setStyleSheet("color: #888; font-size: 11px;")
+        outer.addWidget(self._hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -249,6 +275,9 @@ class ClusterPanel(QWidget):
         """Populate the grid with *faces* belonging to *person_name*."""
         self._clear_grid()
         self._face_names.clear()
+        self._thumbs.clear()
+        self._selected_ids.clear()
+        self.selection_changed.emit(0)
         self._header.setText(t("face_count_header", name=person_name, n=len(faces)))
 
         for i, face in enumerate(faces):
@@ -269,9 +298,10 @@ class ClusterPanel(QWidget):
                 col,
             )
             thumb = FaceThumbnail(face)
-            thumb.clicked.connect(self.face_selected.emit)
+            thumb.clicked.connect(self._on_thumb_clicked)
             thumb.right_clicked.connect(self.face_right_clicked.emit)
             self._face_names[face.id] = thumb._person_name
+            self._thumbs[face.id] = thumb
             self._grid.addWidget(thumb, row, col)
 
         # Fill remaining cells in last row
@@ -287,10 +317,47 @@ class ClusterPanel(QWidget):
         """Return the person name for *face_id* as loaded in the current grid."""
         return self._face_names.get(face_id)
 
+    def selected_face_ids(self) -> list[int]:
+        """Return the face ids currently multi-selected (in grid order)."""
+        return [fid for fid in self._face_names if fid in self._selected_ids]
+
+    def clear_selection(self) -> None:
+        """Deselect every thumbnail without rebuilding the grid."""
+        for fid in list(self._selected_ids):
+            thumb = self._thumbs.get(fid)
+            if thumb is not None:
+                thumb.set_selected(False)
+        self._selected_ids.clear()
+        self.selection_changed.emit(0)
+
     def clear(self) -> None:
         self._clear_grid()
         self._face_names.clear()
+        self._thumbs.clear()
+        self._selected_ids.clear()
+        self.selection_changed.emit(0)
         self._header.setText(t("select_person_sidebar"))
+
+    # ------------------------------------------------------------------
+
+    def _on_thumb_clicked(self, face_id: int) -> None:
+        """Toggle multi-selection for *face_id* and forward the preview select.
+
+        A plain click both toggles whether the face is part of the batch
+        selection and previews it (preserving the single-face workflow, which
+        keys off the most recently clicked face).
+        """
+        if face_id in self._selected_ids:
+            self._selected_ids.discard(face_id)
+            sel = False
+        else:
+            self._selected_ids.add(face_id)
+            sel = True
+        thumb = self._thumbs.get(face_id)
+        if thumb is not None:
+            thumb.set_selected(sel)
+        self.face_selected.emit(face_id)
+        self.selection_changed.emit(len(self._selected_ids))
 
     # ------------------------------------------------------------------
 

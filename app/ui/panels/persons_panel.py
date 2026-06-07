@@ -18,6 +18,7 @@ from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -36,15 +37,18 @@ from PySide6.QtWidgets import (
 
 from app.db.database import session_scope
 from app.db.models import Person
+from app.services.identity_service import BulkReassignResult, IdentityService
 from app.services.person_service import (
     PersonFaceCrop,
     PersonFilters,
     PersonService,
     PersonSummary,
 )
+from app.ui.dialogs.move_faces_dialog import MoveFacesDialog
 from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 from app.ui.i18n import t
 from app.ui.widgets.place_gallery_widget import PlaceGalleryWidget
+from app.ui.widgets.selectable_face_grid import SelectableFaceGrid
 from app.workers.thumbnail_worker import ThumbnailRunnable
 
 log = logging.getLogger(__name__)
@@ -184,7 +188,10 @@ class PersonsPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._current_person_id: Optional[int] = None
+        self._current_person_name: str = ""
         self._thumb_keys: Dict[str, int] = {}  # thumb cache key → row
+        # Last batch move, kept so it can be undone from the notification bar.
+        self._last_move_result: Optional[BulkReassignResult] = None
         self._build_ui()
         self.refresh()
 
@@ -273,11 +280,45 @@ class PersonsPanel(QWidget):
         actions.addWidget(self._thumb_btn)
         detail_layout.addLayout(actions)
 
-        # Faces gallery (crop paths, lazy-loaded)
+        # Faces grid (selectable crops, lazy-loaded) — supports batch move.
         self._faces_hdr = QLabel()
         detail_layout.addWidget(self._faces_hdr)
-        self._faces_gallery = PlaceGalleryWidget()
-        detail_layout.addWidget(self._faces_gallery)
+        self._faces_hint = QLabel()
+        self._faces_hint.setWordWrap(True)
+        self._faces_hint.setStyleSheet("color: #888; font-size: 11px;")
+        detail_layout.addWidget(self._faces_hint)
+
+        self._faces_grid = SelectableFaceGrid()
+        self._faces_grid.selection_changed.connect(self._on_face_selection_changed)
+        detail_layout.addWidget(self._faces_grid)
+
+        # Selection count + batch-move action row (move button hidden until ≥1).
+        move_row = QHBoxLayout()
+        self._sel_count_lbl = QLabel()
+        self._sel_count_lbl.setStyleSheet("color: #888;")
+        move_row.addWidget(self._sel_count_lbl)
+        move_row.addStretch()
+        self._move_faces_btn = QPushButton()
+        self._move_faces_btn.clicked.connect(self._on_move_faces)
+        self._move_faces_btn.setVisible(False)
+        move_row.addWidget(self._move_faces_btn)
+        detail_layout.addLayout(move_row)
+
+        # Undo notification bar — shown after a successful batch move.
+        self._undo_bar = QFrame()
+        self._undo_bar.setStyleSheet(
+            "QFrame { background:#1E2030; border:1px solid #45475A; border-radius:4px; }"
+        )
+        undo_layout = QHBoxLayout(self._undo_bar)
+        undo_layout.setContentsMargins(8, 4, 8, 4)
+        self._undo_lbl = QLabel()
+        self._undo_lbl.setWordWrap(True)
+        undo_layout.addWidget(self._undo_lbl, 1)
+        self._undo_btn = QPushButton()
+        self._undo_btn.clicked.connect(self._on_undo_move)
+        undo_layout.addWidget(self._undo_btn)
+        self._undo_bar.setVisible(False)
+        detail_layout.addWidget(self._undo_bar)
 
         # Related images gallery (lazy-loaded)
         self._images_hdr = QLabel()
@@ -332,6 +373,10 @@ class PersonsPanel(QWidget):
         self._thumb_btn.setText(t("persons_thumbnail_btn"))
         self._refresh_btn.setText(t("persons_refresh_btn"))
         self._faces_hdr.setText(t("persons_detail_faces"))
+        self._faces_hint.setText(t("persons_faces_hint"))
+        self._move_faces_btn.setText(t("persons_move_faces_btn"))
+        self._undo_btn.setText(t("move_faces_undo"))
+        self._update_selection_label(len(self._faces_grid.selected_face_ids()))
         self._images_hdr.setText(t("persons_detail_images"))
         self._face_count_caption.setText(t("persons_face_count"))
         self._image_count_caption.setText(t("persons_image_count"))
@@ -467,6 +512,9 @@ class PersonsPanel(QWidget):
             self._load_detail(int(person_id))
 
     def _load_detail(self, person_id: int) -> None:
+        # Switching to a different person invalidates any pending undo.
+        if person_id != self._current_person_id:
+            self._hide_undo_bar()
         self._current_person_id = person_id
         with session_scope() as session:
             svc = PersonService(session)
@@ -480,6 +528,7 @@ class PersonsPanel(QWidget):
             crops = svc.list_face_crops(person_id)
             image_paths = svc.list_images_for_person(person_id)
 
+        self._current_person_name = name
         crop_paths = [c.crop_path for c in crops if c.crop_path and Path(c.crop_path).exists()]
 
         # Fall back to the best available crop when no explicit thumbnail is set.
@@ -490,7 +539,7 @@ class PersonsPanel(QWidget):
         self._face_count_lbl.setText(str(len(crops)))
         self._image_count_lbl.setText(str(len(image_paths)))
         self._set_thumbnail(thumb)
-        self._faces_gallery.set_images(crop_paths)
+        self._faces_grid.set_faces(crops)
         self._images_gallery.set_images(image_paths)
 
         self._edit_btn.setEnabled(True)
@@ -498,16 +547,18 @@ class PersonsPanel(QWidget):
         self._thumb_btn.setEnabled(bool(crop_paths))
 
     def _clear_detail(self) -> None:
+        self._current_person_name = ""
         self._name_lbl.setText(t("persons_no_selection"))
         self._face_count_lbl.clear()
         self._image_count_lbl.clear()
         self._thumb.setPixmap(QPixmap())
         self._thumb.setText(t("persons_no_thumbnail"))
-        self._faces_gallery.clear()
+        self._faces_grid.set_faces([])
         self._images_gallery.clear()
         self._edit_btn.setEnabled(False)
         self._rename_btn.setEnabled(False)
         self._thumb_btn.setEnabled(False)
+        self._hide_undo_bar()
 
     def _set_thumbnail(self, path: Optional[str]) -> None:
         self._thumb.setPixmap(QPixmap())
@@ -679,3 +730,123 @@ class PersonsPanel(QWidget):
             return
         self.person_data_changed.emit()
         self.refresh()
+
+    # ------------------------------------------------------------------
+    # Batch face move
+    # ------------------------------------------------------------------
+
+    def _on_face_selection_changed(self, count: int) -> None:
+        self._update_selection_label(count)
+        self._move_faces_btn.setVisible(count > 0)
+
+    def _update_selection_label(self, count: int) -> None:
+        if count <= 0:
+            self._sel_count_lbl.setText(t("faces_selected_none"))
+        else:
+            self._sel_count_lbl.setText(t("faces_selected_n", n=count))
+
+    def _on_move_faces(self) -> None:
+        if self._current_person_id is None:
+            return
+        face_ids = self._faces_grid.selected_face_ids()
+        if not face_ids:
+            return
+
+        with session_scope() as session:
+            persons = session.query(Person).order_by(Person.name).all()
+            dlg = MoveFacesDialog(
+                face_count=len(face_ids),
+                persons=persons,
+                exclude_person_id=self._current_person_id,
+                parent=self,
+            )
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        target_id = dlg.selected_person_id()
+        new_name = dlg.new_person_name()
+
+        # Resolve the destination name for the confirmation prompt.
+        if new_name:
+            dst_name = new_name
+        elif target_id is not None:
+            if target_id == self._current_person_id:
+                QMessageBox.information(
+                    self, t("move_faces_title"), t("move_faces_same_person")
+                )
+                return
+            with session_scope() as session:
+                target = session.get(Person, target_id)
+                dst_name = target.name if target is not None else ""
+        else:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("move_faces_confirm_title"),
+            t(
+                "move_faces_confirm_msg",
+                n=len(face_ids),
+                src=self._current_person_name,
+                dst=dst_name,
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                svc = IdentityService(session)
+                if new_name:
+                    person = Person(name=new_name, is_auto_named=False)
+                    session.add(person)
+                    session.flush()
+                    target_id = person.id
+                result = svc.reassign_faces_bulk(face_ids, target_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Bulk face move failed")
+            QMessageBox.critical(
+                self, t("move_faces_error_title"), t("persons_save_error", error=str(exc))
+            )
+            return
+
+        self._faces_grid.clear_selection()
+        self.person_data_changed.emit()
+        self.refresh()
+        # Set after refresh: a refresh that cleared the detail pane (e.g. the
+        # source cluster was emptied and removed) would otherwise wipe the
+        # pending undo before the bar is shown.
+        self._last_move_result = result
+        self._show_undo_bar(
+            t("move_faces_done", n=result.moved_count, dst=dst_name)
+        )
+
+    def _on_undo_move(self) -> None:
+        result = self._last_move_result
+        if result is None:
+            return
+        try:
+            with session_scope() as session:
+                IdentityService(session).restore_face_assignments(
+                    result.snapshots, result.removed_persons
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Undo of bulk face move failed")
+            QMessageBox.critical(
+                self,
+                t("move_faces_error_title"),
+                t("move_faces_undo_error", error=str(exc)),
+            )
+            return
+        self._hide_undo_bar()
+        self.person_data_changed.emit()
+        self.refresh()
+
+    def _show_undo_bar(self, message: str) -> None:
+        self._undo_lbl.setText(message)
+        self._undo_bar.setVisible(True)
+
+    def _hide_undo_bar(self) -> None:
+        self._last_move_result = None
+        self._undo_bar.setVisible(False)

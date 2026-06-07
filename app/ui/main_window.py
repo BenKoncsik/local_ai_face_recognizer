@@ -37,11 +37,12 @@ from app.jobs.job_types import JobState
 from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
-from app.services.identity_service import IdentityService
+from app.services.identity_service import BulkReassignResult, IdentityService
 from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
+from app.ui.dialogs.move_faces_dialog import MoveFacesDialog
 from app.ui.dialogs.overlapping_unknown_faces_dialog import (
     OverlappingUnknownFacesDialog,
 )
@@ -272,6 +273,7 @@ class MainWindow(QMainWindow):
         self._cluster_panel = ClusterPanel()
         self._cluster_panel.face_selected.connect(self._on_face_selected)
         self._cluster_panel.face_right_clicked.connect(self._on_cluster_face_right_clicked)
+        self._cluster_panel.selection_changed.connect(self._on_face_selection_changed)
         centre_layout.addWidget(self._cluster_panel)
 
         actions = self._build_action_row()
@@ -367,6 +369,15 @@ class MainWindow(QMainWindow):
         self._reassign_btn.setEnabled(False)
         self._reassign_btn.clicked.connect(self._on_reassign_face)
         layout.addWidget(self._reassign_btn)
+
+        self._move_faces_btn = QPushButton()
+        self._move_faces_btn.setVisible(False)
+        self._move_faces_btn.clicked.connect(self._on_move_faces_batch)
+        layout.addWidget(self._move_faces_btn)
+
+        self._sel_count_lbl = QLabel()
+        self._sel_count_lbl.setStyleSheet("color: #888;")
+        layout.addWidget(self._sel_count_lbl)
 
         self._person_info_btn = QPushButton()
         self._person_info_btn.setEnabled(False)
@@ -590,6 +601,7 @@ class MainWindow(QMainWindow):
         self._delete_person_btn.setText(t("delete_person"))
         self._remove_face_btn.setText(t("remove_face"))
         self._reassign_btn.setText(t("reassign_face"))
+        self._move_faces_btn.setText(t("persons_move_faces_btn"))
         self._person_info_btn.setText(t("person_info"))
         self._person_info_btn.setToolTip(t("person_info_tip"))
         self._tabs.setTabText(0, t("tab_face_recognition"))
@@ -2569,6 +2581,115 @@ class MainWindow(QMainWindow):
         if self._current_person_id:
             self._on_person_selected(self._current_person_id)
         self._show_face_in_preview(self._current_face_id)
+        self._image_browser._reload_current_face_data()
+
+    # ------------------------------------------------------------------
+    # Batch face move (multi-select in the cluster grid)
+    # ------------------------------------------------------------------
+
+    @Slot(int)
+    def _on_face_selection_changed(self, count: int) -> None:
+        if count <= 0:
+            self._sel_count_lbl.setText("")
+        else:
+            self._sel_count_lbl.setText(t("faces_selected_n", n=count))
+        self._move_faces_btn.setVisible(count > 0)
+
+    @Slot()
+    def _on_move_faces_batch(self) -> None:
+        face_ids = self._cluster_panel.selected_face_ids()
+        if not face_ids:
+            return
+
+        src_name = ""
+        with session_scope() as session:
+            if self._current_person_id is not None:
+                src = session.get(Person, self._current_person_id)
+                src_name = src.name if src is not None else ""
+            persons = session.query(Person).order_by(Person.name).all()
+            dlg = MoveFacesDialog(
+                face_count=len(face_ids),
+                persons=persons,
+                exclude_person_id=self._current_person_id,
+                parent=self,
+            )
+        if dlg.exec() != MoveFacesDialog.Accepted:
+            return
+
+        target_id = dlg.selected_person_id()
+        new_name = dlg.new_person_name()
+
+        if new_name:
+            dst_name = new_name
+        elif target_id is not None:
+            if target_id == self._current_person_id:
+                QMessageBox.information(
+                    self, t("move_faces_title"), t("move_faces_same_person")
+                )
+                return
+            with session_scope() as session:
+                target = session.get(Person, target_id)
+                dst_name = target.name if target is not None else ""
+        else:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("move_faces_confirm_title"),
+            t("move_faces_confirm_msg", n=len(face_ids), src=src_name, dst=dst_name),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                svc = IdentityService(session)
+                if new_name:
+                    person = Person(name=new_name, is_auto_named=False)
+                    session.add(person)
+                    session.flush()
+                    target_id = person.id
+                result = svc.reassign_faces_bulk(face_ids, target_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Bulk face move failed")
+            QMessageBox.critical(
+                self, t("move_faces_error_title"), t("persons_save_error", error=str(exc))
+            )
+            return
+
+        self._cluster_panel.clear_selection()
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+        self._image_browser._reload_current_face_data()
+
+        # Offer an undo via a dialog button.
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(t("move_faces_title"))
+        box.setText(t("move_faces_done", n=result.moved_count, dst=dst_name))
+        undo_btn = box.addButton(t("move_faces_undo"), QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Ok)
+        box.exec()
+        if box.clickedButton() is undo_btn:
+            self._undo_face_move(result)
+
+    def _undo_face_move(self, result: BulkReassignResult) -> None:
+        try:
+            with session_scope() as session:
+                IdentityService(session).restore_face_assignments(
+                    result.snapshots, result.removed_persons
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Undo of bulk face move failed")
+            QMessageBox.critical(
+                self,
+                t("move_faces_error_title"),
+                t("move_faces_undo_error", error=str(exc)),
+            )
+            return
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
         self._image_browser._reload_current_face_data()
 
     @Slot()

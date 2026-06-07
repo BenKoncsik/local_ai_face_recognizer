@@ -15,8 +15,8 @@ Az alap működés lokális: az SQLite adatbázis, a cropok, a modellek és a be
 | Nyelv | Python 3.11+ |
 | UI | PySide6 / Qt |
 | Adatbázis | SQLite + SQLAlchemy ORM, WAL móddal |
-| Detektálás | Coral Edge TPU TFLite, OpenCV DNN SSD, Haar fallback |
-| Embedding | TFLite MobileFaceNet jellegű modell, OpenCV SFace alternatíva |
+| Detektálás | Coral Edge TPU TFLite, OpenCV YuNet, OpenCV DNN SSD, Haar fallback |
+| Embedding | CPU TFLite MobileFaceNet/ArcFace jellegű modell, OpenCV SFace és HOG teszt fallback |
 | Felismerés | Koszinusz hasonlóság, személyprofilok, centroid + legjobb példa |
 | Klaszterezés | scikit-learn DBSCAN, korrekciókkal támogatott re-cluster |
 | Képfeldolgozás | OpenCV, NumPy, Pillow, EXIF orientáció/GPS |
@@ -85,7 +85,7 @@ flowchart TB
     end
 
     subgraph ML["ML / CV adapterek"]
-        DETECTOR["FaceDetector\nCoral / CPU"]
+        DETECTOR["FaceDetector\nCoral / YuNet / Caffe-Haar"]
         EMBEDDER["FaceEmbedder\nTFLite / SFace"]
         DBSCAN["DBSCAN clusterer"]
     end
@@ -147,24 +147,29 @@ flowchart TB
 
 ### Aktuális pipeline
 
-A fő pipeline jelenleg öt szakaszos:
+A fő pipeline jelenleg hét fő szakaszos, egy embedding utáni deduplikáló köztes passzal:
 
 ```mermaid
 flowchart LR
-    A["Lokális mappa vagy Drive projekt"] --> B["ScanService / DriveScanService\nhash, metadata, relative_path, remote_images"]
-    B --> C["DetectionService\nfast vagy high-accuracy"]
+    A["Lokális mappa vagy Drive projekt"] --> B["1. ScanService / DriveScanService\nhash, metadata, relative_path, RemoteImage"]
+    B --> C["2. DetectionService\nfast vagy high-accuracy"]
     C --> Q["FaceQualityEvaluator\nscore + reason codes"]
-    Q --> D["EmbeddingService\nTFLite embedding"]
-    D --> E["RecognitionService\nadaptív + same-image assist"]
-    E --> F["SuggestionService\nismeretlen -> ismert jelöltek"]
+    Q --> D["3. EmbeddingService\nTFLite/SFace/HOG embedding"]
+    D --> X["3b. IntraImageDuplicateService\nazonos fizikai arc duplikátumainak törlése"]
+    X --> E["4. RecognitionService\nadaptív + same-image assist"]
+    E --> U["5. ClusteringService\nunassigned -> Unknown személyek"]
+    U --> I["6. IntraImageConsistencyService\nsame-image fragmentáció javítása"]
+    I --> F["7. SuggestionService\nismeretlen -> ismert jelöltek"]
     F --> G["UI frissítés\nszemélylista, badge, log"]
 
     C --> CROP["Arc crop fájlok"]
+    C --> LM["5 pontos landmarkok, ha YuNet adja"]
     D --> EMBED["Embedding blobok"]
     E --> ASSIGN["assignment_source/confidence/assigned_at"]
+    U --> UNKNOWN["Unknown N személyek"]
 ```
 
-Fontos: a normál futás felismerés-központú. A DBSCAN klaszterezés továbbra is létezik re-cluster és legacy munkafolyamatként, kézi same/different korrekciókkal.
+Fontos: a normál futás előbb felismerés-központú, majd a még megoldatlan arcokat klaszterezi `Unknown N` személyekbe. A DBSCAN re-cluster és legacy munkafolyamat továbbra is létezik kézi same/different korrekciókkal.
 
 ---
 
@@ -182,15 +187,17 @@ python -m app.main --db /tmp/faces.db
 Indításkor az alkalmazás:
 
 1. feldolgozza a CLI argumentumokat,
-2. beállítja a naplózást és a Qt log handlert,
-3. betölti a YAML konfigurációt,
-4. létrehozza a Qt alkalmazást és a témát,
-5. inicializálja a SQLite adatbázist,
-6. lefuttatja az idempotens schema migrációkat,
-7. inicializálja az `ImageLibraryService` singletonját,
-8. biztosítja a védett `Ismeretlen` személyt,
-9. felépíti a `MainWindow` UI-t,
-10. elindítja az eseményciklust és háttérben frissítést ellenőriz.
+2. beállítja a fájlos naplózást,
+3. betölti a `.env` fájlt Google OAuth és egyéb titkok miatt,
+4. betölti a YAML konfigurációt, majd `--db` esetén felülírja az adatbázis útját,
+5. létrehozza a szükséges DB és crop könyvtárakat,
+6. elindítja a Google Drive cache startup cleanupot,
+7. betölti a nyelvi preferenciákat,
+8. létrehozza a Qt alkalmazást, ikont és témát,
+9. migrálja a régi QSettings tárolót, ha szükséges,
+10. felépíti a `MainWindow`-t.
+
+A `MainWindow` konstruktorában történik a tényleges `init_db(config.db_path_resolved)`, az idempotens schema migrációk futtatása, az `ImageLibraryService` inicializálása, a védett `Ismeretlen` személy biztosítása, a tabok és toolbarok létrehozása, majd a Drive/update/recording háttérintegrációk bekötése.
 
 ---
 
@@ -211,25 +218,32 @@ Relatív utak a config fájl könyvtárához képest oldódnak fel. Frozen build
 
 | Mező | Leírás |
 |---|---|
-| `detection` | detektor küszöbök, CPU/Coral modellek, high-accuracy és duplikált-ismeretlen IoU |
-| `embedding` | embedding modell, bemeneti méret, dimenzió |
-| `clustering` | DBSCAN paraméterek |
+| `detection` | detektor küszöbök, CPU/Coral/YuNet modellek, high-accuracy, duplikált-ismeretlen IoU és containment küszöb |
+| `embedding` | embedding modell, bemeneti méret, dimenzió, crop mód (`legacy`/`square`/`aligned`) |
+| `clustering` | DBSCAN és incremental Unknown-klaszterezési paraméterek |
+| `intra_image` | ugyanazon képen belüli személyazonosító-fragmentáció javítása |
+| `intra_image_duplicate` | ugyanazon képen belüli, ugyanazt a fizikai arcot duplikáló bboxok eltávolítása |
+| `identity_repair` | globális Unknown-fragmentáció és merge-jelölt keresés küszöbei |
 | `recognition` | automatikus felismerés, adaptív küszöb és same-image assist |
 | `suggestions` | névjavaslatok küszöbe és darabszáma |
+| `matching` | háttérben futó face+név alapú merge suggestion motor |
 | `storage` | SQLite DB és crop könyvtár |
 | `scan` | támogatott képformátumok, worker szám, thumbnail méret |
+| `recording` | ffmpeg-alapú képernyőrögzítés, hang, kijelző és szegmentálási beállítások |
 | `base_dir` | relatív utak alapja |
 
 ### QSettings alapú felhasználói beállítások
 
-A YAML konfiguráció mellett több UI- és gépspecifikus beállítás `QSettings("FaceLocal", "FaceLocal")` alatt él:
+A YAML konfiguráció mellett több UI- és gépspecifikus beállítás az `app.app_settings.app_qsettings()` által kezelt INI fájlban él: `Documents/localAIFaceRecognizer/settings/settings.ini`. Indításkor egyszeri migráció fut a régi natív `QSettings("FaceLocal", "FaceLocal")` tárolóból.
 
 | Namespace | Tartalom |
 |---|---|
 | `shortcuts/*` | globális billentyűparancs engedélyezése és egyedi kiosztások |
 | `face_quality/exclude_low_quality` | alacsony minőségű arcok automatikus kihagyása embedding/felismerés/suggestion közben |
 | `deoldified/auto_pair` | deoldified/colorized képek automatikus eredeti párhoz kötése a képböngészőben |
+| `geocoding/enabled` | online geokódolás engedélyezése; alapból kikapcsolt, cache/offline javaslatok ettől függetlenül működhetnek |
 | `updates/notify` | release értesítések engedélyezése |
+| `recording/*` | kimeneti mappa, minőség, fps, audio eszközök, hangerők, kijelzőválasztás |
 | `paths/*` | utoljára használt mappák és fájlválasztó kezdőpontok |
 | Drive preferenciák | aktív Google fiók, projektmappa, Drive mód, DB sync és cache beállítások |
 
@@ -242,10 +256,36 @@ detection:
   high_accuracy_confidence_threshold: 0.25
   iou_merge_threshold: 0.35
   duplicate_unknown_iou_threshold: 0.35
+  duplicate_unknown_containment_threshold: 0.80
+  use_yunet: true
 
 embedding:
   input_size: [112, 112]
   embedding_dim: 192
+  crop_mode: legacy
+
+clustering:
+  epsilon: 0.4
+  min_samples: 2
+  metric: cosine
+  unknown_assign_threshold: 0.45
+  create_unknown_min_cluster_size: 2
+
+intra_image:
+  enabled: true
+  merge_similarity: 0.62
+  max_faces_per_image: 40
+
+intra_image_duplicate:
+  enabled: true
+  duplicate_similarity: 0.90
+  min_overlap: 0.10
+  max_faces_per_image: 80
+
+identity_repair:
+  merge_similarity: 0.66
+  min_pair_similarity: 0.60
+  max_candidates_per_person: 5
 
 recognition:
   auto_assign_threshold: 0.72
@@ -264,6 +304,24 @@ recognition:
 suggestions:
   similarity_threshold: 0.5
   max_suggestions_per_person: 3
+
+matching:
+  face_threshold: 0.5
+  name_threshold: 0.85
+  name_supported_face_floor: 0.35
+  min_confidence: 0.45
+  max_suggestions_per_person: 3
+  chunk_size: 64
+  reserved_cpus: 1
+  max_workers: null
+  progress_throttle_ms: 250
+
+recording:
+  fps: 18
+  quality: normal
+  segment_seconds: 8
+  display_mode: all
+  concat_on_stop: true
 ```
 
 ---
@@ -277,6 +335,7 @@ erDiagram
     IMAGES ||--o{ FACES : contains
     PLACES ||--o{ IMAGES : located_at
     PLACES ||--o{ PLACE_ALIASES : has
+    PLACES ||--o{ PLACES : parent_child
     PERSONS ||--o{ FACES : assigned_to
     PERSONS ||--o{ RELATIONSHIPS : person_a
     PERSONS ||--o{ RELATIONSHIPS : person_b
@@ -287,7 +346,8 @@ erDiagram
     COLLAGES ||--o{ COLLAGE_NODES : contains
     IMAGES ||--o{ COLLAGE_NODES : referenced_by
     IMAGES ||--o| REMOTE_IMAGES : sourced_from
-    PERSONS ||--o{ MERGE_SUGGESTIONS : suggested_with
+    PERSONS ||--o{ MERGE_SUGGESTIONS : source
+    PERSONS ||--o{ MERGE_SUGGESTIONS : target
 
     IMAGES {
         int id PK
@@ -298,6 +358,7 @@ erDiagram
         int width
         int height
         string photo_date
+        text note
         int place_id FK
         float exif_latitude
         float exif_longitude
@@ -319,6 +380,7 @@ erDiagram
         string detector_backend
         text crop_path
         blob embedding
+        blob landmarks
         bool is_excluded
         string assignment_source
         float assignment_confidence
@@ -326,7 +388,6 @@ erDiagram
         float quality_score
         string quality_reasons
         bool is_low_quality
-        string crop_mode
     }
 
     PERSONS {
@@ -335,7 +396,9 @@ erDiagram
         bool is_auto_named
         string gender
         text thumbnail_path
+        bool thumbnail_is_manual
         string family_code
+        string external_family_code
         string last_name
         string first_name
         string second_name
@@ -351,15 +414,14 @@ erDiagram
 
     PERSON_GROUPS {
         int id PK
-        string name UK
+        string name
         string color
         text description
     }
 
     PERSON_GROUP_MEMBERSHIP {
-        int id PK
-        int person_id FK
-        int group_id FK
+        int person_id PK FK
+        int group_id PK FK
     }
 
     RELATIONSHIPS {
@@ -375,6 +437,16 @@ erDiagram
         float latitude
         float longitude
         text thumbnail_path
+        bool thumbnail_is_manual
+        string place_type
+        float accuracy_radius_meters
+        int parent_id FK
+        string settlement_name
+        string street_name
+        string house_number
+        string display_name
+        string coordinate_source
+        bool is_exact_coordinate
         bool is_anonymous
         string source
     }
@@ -411,12 +483,35 @@ erDiagram
 
     MERGE_SUGGESTIONS {
         int id PK
-        int person_a_id FK
-        int person_b_id FK
-        float similarity_score
-        string reason
+        int source_person_id FK
+        int target_person_id FK
+        float confidence
+        float face_similarity
+        float name_similarity
+        string status
+        string job_id
         datetime created_at
-        bool dismissed
+        datetime updated_at
+        datetime decided_at
+    }
+
+    GEOCODING_CACHE {
+        int id PK
+        string query_type
+        string query_text
+        string settlement_name
+        string street_name
+        string house_number
+        text result_json
+        datetime created_at
+    }
+
+    PLACE_ADDRESS_SUGGESTIONS {
+        int id PK
+        string settlement_name
+        string street_name
+        string source
+        datetime last_used_at
     }
 
     COLLAGES {
@@ -460,12 +555,14 @@ Nincs külön migration framework. Az `init_db()`:
 
 - létrehozza a hiányzó táblákat `Base.metadata.create_all()` hívással,
 - `PRAGMA table_info` alapján idempotensen hozzáadja az új oszlopokat,
-- létrehozza a szükséges indexeket,
-- bekapcsolja a WAL, foreign key és normal synchronous módot,
+- létrehozza a szükséges indexeket, köztük a `family_code` részleges egyediségét és az `external_family_code` egyediségét,
+- bekapcsolja a WAL, foreign key, normal synchronous és `busy_timeout=5000` SQLite beállításokat,
+- biztosítja a `person_groups`, `person_group_memberships`, `geocoding_cache` és `place_address_suggestions` táblákat,
 - migrálja a régi kollázs-helyszín mezőket a `places` táblához,
+- backfilleli a régi helyek `place_type`, `accuracy_radius_meters`, `display_name` és `coordinate_source` mezőit,
 - inicializálja a hordozható képgyűjtemény-kezelést.
 
-Kézzel migrált mezőcsoportok: strukturált személyadatok, `family_code`, `gender`, védett személyek, képek relatív útja, EXIF GPS és képszintű GPS koordinátái, arc assignment metaadatok, arcminőség mezők, helyszínek, kapcsolatok, remote image metadata.
+Kézzel migrált mezőcsoportok: strukturált személyadatok, `family_code`, `external_family_code`, `gender`, védett személyek, kézi thumbnail jelölők, képek relatív útja, képjegyzet, EXIF GPS és képszintű GPS koordinátái, arc assignment metaadatok, arcminőség mezők, landmarkok, strukturált helyszínek, kapcsolatok, geokódolási cache, person group tagság és remote image metadata.
 
 ---
 
@@ -540,20 +637,21 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 |---|---|
 | `ScanService` | lokális képek rekurzív keresése, hash, méret, EXIF GPS, DB rekord, `relative_path` |
 | `DriveScanService` | Drive képek listázása, letöltése/mirrorozása, `RemoteImage` rekordok frissítése |
-| `DetectionService` | arcok detektálása, high-accuracy többmenetes mód, crop mentés, arcminőség |
+| `DetectionService` | arcok detektálása, high-accuracy többmenetes mód, landmark mentés, crop mentés, arcminőség |
 | `EmbeddingService` | pending arcok embeddingjeinek előállítása, alacsony minőség opcionális kihagyása |
 | `RecognitionService` | felcímkézett személyekből profilépítés, adaptív felismerés, same-image assist |
 | `SuggestionService` | automatikusan nevezett személyek összevetése ismert személyekkel, accept/reject |
-| `ClusteringService` | DBSCAN alapú klaszterezés és re-cluster, same/different korrekciókkal, pipeline integrációval |
+| `ClusteringService` | unassigned arcok Unknown személyekbe klaszterezése, meglévő Unknownhoz rendelés, DBSCAN re-cluster same/different korrekciókkal |
 | `IdentityService` | átnevezés, merge, törlés, reassign, kizárás, kézi korrekciók |
 | `FamilyService` | családi kódok, kapcsolatok, rokonleírások, családi képfeltételek szerinti keresés |
-| `PlaceService` | helyszínek létrehozása, helytípusok (exact/area/region), strukturált cím (settlement/street/house, display_name, classify_address állapotgép), típus-tudatos EXIF GPS kapcsolás, közeli helyek, hierarchia (parent/children), merge, thumbnail |
+| `PlaceService` | helyszínek létrehozása, helytípusok (exact/area/region), strukturált cím (settlement/street/house, display_name, classify_address állapotgép), típus-tudatos EXIF GPS kapcsolás, közeli helyek, hierarchia (parent/children), merge, kézi/automatikus thumbnail |
 | `GeocodingService` | cache-first geokódolás: település/utca javaslat, cím→koordináta; rétegek: geocoding_cache → place_address_suggestions (offline) → opt-in online provider |
-| `PersonService` | önálló Személyek oldal: személyek listázása szűrőkkel és arc/kép számokkal, strukturált adatok és név frissítése, személyhez tartozó arc cropok és képek lekérése, bélyegkép beállítása arc cropból, védett személy védelme |
+| `PersonService` | önálló Személyek oldal: személyek listázása szűrőkkel és arc/kép számokkal, strukturált adatok, `external_family_code` és név frissítése, személyhez tartozó arc cropok és képek lekérése, kézi bélyegkép beállítása arc cropból, védett személy védelme |
 | `ImageBrowserService` | mappa- és képösszefoglalók a böngésző tabhoz |
 | `ImageLibraryService` | hordozható útvonalkezelés és migráció |
 | `FaceCropService` | stabil crop fájlnevek, crop újragenerálás, thumbnail frissítés |
 | `FaceQualityEvaluator` / `FaceQualityBatchService` | confidence, méret, blur és aspect ratio alapú minősítés, teljes DB újraminősítés |
+| `IntraImageDuplicateService` | embedding + overlap alapján eltávolítja az ugyanazon képen duplikált, még hozzárendeletlen bboxokat |
 | `DuplicateUnknownFaceFinder` | ismert arcokra rálógó ismeretlen boxok keresése és törlése |
 | `CollageService` | Picasa `.cxf/.cfx` import, render, arc-projekció, annotált export |
 | `CollageParser` | kollázs XML parse, sérült XML recover, node geometria |
@@ -563,7 +661,7 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 | `UpdateService` | GitHub release ellenőrzés, asset letöltés, platformfüggő update |
 | `IntraImageConsistencyService` | azonos képen levő arcok konzisztencia-javítása, fragmentáció feloldása |
 | `IdentityRepairService` | tömeges személyazonosító fragmentáció feloldása és konzisztencia-javítás |
-| `MergeSuggestionService` | háttér-motor név-alapú merge javaslatok generálásához, háttér-szálban |
+| `MergeSuggestionService` | háttér-motor face- és név-alapú merge javaslatok perzisztálásához, státuszkezeléssel és auto-merge segéddel |
 | `FaceDiagnosticsService` | arc-adatok diagnosztikája, fragmentáció kimutatása, javító javaslatokkal |
 | `PersonGroupService` | személycsoportok (Kórus, Munkahely, stb.) kezelése, kategorizáció |
 | `ProjectPackageService` | teljes projekt export/import `.facepack` ZIP formátumban |
@@ -579,14 +677,17 @@ A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy z
 
 - `FaceDetector`: absztrakt interfész.
 - `CoralDetector`: Edge TPU TFLite modell, ha pycoral és eszköz elérhető.
+- `YuNetDetector`: OpenCV YuNet ONNX CPU detektor, 5 pontos landmarkokkal.
 - `CpuDetector`: OpenCV DNN SSD, fallbackként Haar cascade.
 - `factory.py`: Edge TPU library/device probe, macOS USB visibility check és megfelelő backend kiválasztása.
+
+A kiválasztási sorrend: konfigurált Coral modell és sikeres izolált Edge TPU probe esetén Coral; különben `use_yunet=true` és elérhető YuNet modell esetén YuNet; végül Caffe SSD/Haar CPU fallback. Az `aligned` crop mód csak YuNet landmarkokkal ad valódi arcigazítást, más detektorral `square` jellegű fallbackre degradál.
 
 ### High-accuracy detektálás
 
 A `DetectionService` opcionális high-accuracy módban alacsonyabb küszöböt és több preprocessing variánst használ. Tipikus variánsok: eredeti kép, CLAHE, hisztogramkiegyenlítés, gamma, bilateral. Az átfedő találatok IoU alapján deduplikálódnak.
 
-A detektálás EXIF orientációt normalizál, perceptual dHash diagnosztikát ír, és Coral hiba esetén CPU detektorra tud visszaesni.
+A detektálás EXIF orientációt normalizál, perceptual dHash diagnosztikát ír, és Coral hiba esetén CPU detektorra tud visszaesni. YuNet találatoknál a 5 pontos landmark `Face.landmarks` blobként mentődik.
 
 ### Arcminőség
 
@@ -605,9 +706,11 @@ Az eredmény `quality_score`, `quality_reasons` és `is_low_quality`. A pipeline
 
 **Fájlok**: `app/embeddings/*`
 
-- `TFLiteEmbedder`: CPU-n futó TFLite embedding modell.
+- `TFLiteEmbedder`: CPU-n futó TFLite embedding modell; backend betöltési sorrendje `ai-edge-litert`, `tflite-runtime`, majd `tensorflow.lite`.
 - `SFaceEmbedder`: OpenCV SFace / ONNX alternatíva, grayscale enhancementtel.
+- ha a TFLite modell hiányzik, a kód előbb SFace fallbacket próbál, majd tesztelhető, de éles felismerésre gyenge HOG stubot használ.
 - `Face.set_embedding()` és `Face.get_embedding()` float32 blobként tárol és olvas.
+- `embedding.crop_mode`: `legacy` bbox-stretch, `square` aspect-preserving crop, `aligned` 5 pontos ArcFace igazítás landmarkkal.
 
 ### Felismerés
 
@@ -667,6 +770,7 @@ flowchart TB
 - névjavaslatok,
 - beállítások,
 - Google Drive projekt nyitás/zárás.
+- képernyőrögzítés vezérlése (start/pause/resume/stop, audio szint, elapsed idő).
 
 ### Arcfelismerés tab
 
@@ -720,7 +824,7 @@ flowchart TB
 
 A Helyszínek oldal mintájára felépített, önálló karbantartó oldal a `PERSONS` rekordokhoz (`app/ui/panels/persons_panel.py`):
 
-- minden személy táblázatos listája az összes mezővel: id, bélyegkép, név, családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett rekord-e,
+- minden személy táblázatos listája az összes mezővel: id, bélyegkép, név, családi kód, külső családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett rekord-e,
 - rendezhető oszlopok és kereső/szűrő név (+ becenév és strukturált nevek) és családi kód alapján,
 - a kijelölt személyhez jobb oldalon megjelenő bélyegkép, arc cropok galériája és a kapcsolódó képek galériája (lazy-load `ThumbnailRunnable`-lel),
 - inline átnevezés a név cellában, illetve „Átnevezés” gomb; üres név nem menthető, védett személy nem nevezhető át,
@@ -740,7 +844,7 @@ A Helyszínek oldal mintájára felépített, önálló karbantartó oldal a `PE
 
 | Dialógus | Feladat |
 |---|---|
-| `SettingsDialog` | nyelv, DB út, image library, update, TPU, párosítás, minőségszűrés, shortcutok, Drive beállítások |
+| `SettingsDialog` | nyelv, DB út, image library, update, TPU, párosítás, minőségszűrés, shortcutok, recording és Drive beállítások |
 | `ShortcutsSettingsTab` | billentyűparancsok engedélyezése, módosítása, törlése, konfliktusellenőrzés |
 | `GDriveSettingsTab` | Google login/logout, Drive folder választás, Drive mód, DB sync, cache törlés |
 | `ScanModesDialog` | gyors, high-accuracy és rescan módok |
@@ -865,10 +969,12 @@ A `CollageService`:
 
 | Worker | Feladat |
 |---|---|
-| `PipelineWorker` | scan -> detect -> embed -> recognize -> suggest pipeline QThreadben |
+| `PipelineWorker` | scan -> detect -> embed -> same-image duplicate cleanup -> recognize -> cluster Unknown -> intra-image consistency -> suggest pipeline QThreadben |
 | `ThumbnailRunnable` | lokális thumbnail generálás QRunnable-ben |
 | `DriveThumbRunnable` | Drive image thumbnail letöltés/generálás |
 | `DriveFetchRunnable` | Drive kép lokális lekérése megnyitáshoz/szerkesztéshez |
+| `MatchJobWorker` | merge suggestion scoring és perzisztálás háttérszálon |
+| `GeocodingWorker` | cím autocomplete/geocode hívások UI-blokkolás nélkül |
 | `_DownloadThread` | update asset letöltés |
 | `_InstallerThread` | TPU telepítési parancsok futtatása |
 | `_SignInThread` | Google OAuth login |
@@ -908,15 +1014,16 @@ A tesztcsomag lefedi többek között:
 - adatbázis és schema viselkedést,
 - lokális scan és image library logikát,
 - Google Drive dotenv, credential store, folder URL, storage provider, project session és drive scan réteget,
-- detektorokat és TFLite embeddert,
-- detektálás, embedding, klaszterezés, felismerés és suggestion service-eket,
-- face crop és duplikált ismeretlen arc workflow-t,
-- képböngésző szolgáltatást,
-- helyszín- és családi szolgáltatásokat,
+- YuNet/CPU detektorokat és TFLite/SFace embeddert,
+- detektálás, embedding, intra-image dedup/consistency, klaszterezés, felismerés és suggestion service-eket,
+- face crop, face quality, duplikált ismeretlen arc és identity repair workflow-kat,
+- képböngésző, deoldified compare és image metadata export szolgáltatásokat,
+- helyszín-, geokódolási-, családi-, person group- és személy szolgáltatásokat,
 - deoldified párosítást,
 - Drive projekt-session lock/heartbeat és távoli képszinkront,
 - kollázs parse-t,
-- exportot,
+- exportot, face metadata exportot és `.facepack` projektcsomagolást,
+- képernyőrögzítés argumentumait, metadata/timeline logját és audio level metert,
 - release és social posztoló scripteket.
 
 Futtatás:
@@ -929,7 +1036,7 @@ pytest
 
 ## 16. Fragmentáció és konzisztencia
 
-**Fájlok**: `app/services/intra_image_consistency_service.py`, `app/services/identity_repair_service.py`, `app/services/face_diagnostics_service.py`
+**Fájlok**: `app/services/intra_image_duplicate_service.py`, `app/services/intra_image_consistency_service.py`, `app/services/identity_repair_service.py`, `app/services/face_diagnostics_service.py`
 
 A személyazonosítók fragmentációja akkor fordul elő, amikor:
 
@@ -937,7 +1044,7 @@ A személyazonosítók fragmentációja akkor fordul elő, amikor:
 - ugyanaz az ember több személyhez van hozzárendelve,
 - alacsony minőségű arcok téves hozzárendeléseket vezetnek be.
 
-A `IntraImageConsistencyService` egy képen belüli fragmentációt javítja: ha egy képen többszörösen hozzárendelt arcok vannak, egy pass-en keresztül konzisztenssé teszi őket az összes megadott arc hozzárendeléséből. A `IdentityRepairService` ezt a tömeges szintre emeli: a teljes adatbázist elemzi, fragmentáció-klasztereket azonosít, és javaslatot tesz a merge műveleteknél.
+Az `IntraImageDuplicateService` embedding + bbox-overlap alapján törli az ugyanazon képen frissen létrejött, még hozzárendeletlen duplikált arcboxokat, mielőtt azok külön Unknown személyekké válnának. Az `IntraImageConsistencyService` egy képen belüli fragmentációt javítja: ha egy képen többszörösen hozzárendelt arcok vannak, egy pass-en keresztül konzisztenssé teszi őket az összes megadott arc hozzárendeléséből. Az `IdentityRepairService` ezt a tömeges szintre emeli: a teljes adatbázist elemzi, fragmentáció-klasztereket azonosít, és merge jelölteket ad a javító UI-nak.
 
 A `FaceDiagnosticsService` felismeri és jelzi a fragmentáció okát: alacsony minőség, ellentmondó korrekciók, stb. A `FaceDiagnosticsDialog` ezt interaktív módon jeleníti meg, és a javító műveletek közvetlenül indíthatók belőle.
 
@@ -947,14 +1054,16 @@ A `FaceDiagnosticsService` felismeri és jelzi a fragmentáció okát: alacsony 
 
 **Fájlok**: `app/services/merge_suggestion_service.py`, `app/services/name_matching.py`
 
-A `MergeSuggestionService` háttérben futó keresőmotor, amely név-alapú fuzzy keresést végez és merge javaslatokat kínál fel. A motor:
+A `MergeSuggestionService` háttérben futó keresőmotor, amely embedding-alapú arc hasonlóságot és fuzzy névjelet kombinál, majd merge javaslatokat kínál fel. A név önmagában nem elég erős jel: csak akkor támogatja a javaslatot, ha az arc-hasonlóság is eléri a konfigurált minimumot. A motor:
 
 - személyek neveit normalizálja és tokenizálja,
-- hasonlóságot számít (Levenshtein, szó sorrend, stb.),
-- `MergeSuggestion` rekordokat hoz létre a DB-ben,
+- arc centroid és legjobb-pár hasonlóságot, valamint név-hasonlóságot számít,
+- `MergeSuggestion` rekordokat hoz létre a DB-ben normalizált `source_person_id < target_person_id` párokkal,
+- státuszt kezel: `pending`, `accepted`, `rejected`, `deferred`, `dismissed`,
+- `job_id` alapján megkülönbözteti az aktuális és régi háttérfutások eredményeit,
 - `MatchJobWorker` QThread-ben futtatja a keresést.
 
-A javaslatok a UI-ban megjeleníthetők, felhasználó által módosíthatók és elvethetők. A dimissz-elt javaslatok nem jelennek meg újra.
+A javaslatok a UI-ban megjeleníthetők, elfogadhatók, elutasíthatók, későbbre halaszthatók vagy végleg elrejthetők. A dimissz-elt javaslatok nem jelennek meg újra.
 
 ---
 
@@ -967,7 +1076,7 @@ A személycsoportok (Kórus, Munkahely, Horgászklub, stb.) sokhoz-sokhoz kapcso
 A `PersonGroupService`:
 
 - csoportokat hoz létre, nevez át, töröl,
-- tagságot kezeli,
+- tagságot kezel,
 - export során csoportinformációkat tartalmazza.
 
 A `GroupChipSelect` widget a `PersonInfoDialog`-ban választható csoporttagságot biztosít chip alapú interfésszel.
@@ -985,7 +1094,7 @@ A projekt `.facepack` ZIP csomag formátumba exportálható/importálható. Ez e
 - a konfigurációt és beállításokat,
 - az opcionális képeket (ha a felhasználó ezt választotta).
 
-Az export azt a mappát pakolópzi, ahol a projekt él. Az import feloldja az összes útvonalat és képeket átmásolja az új helyre. Az `ImageLibraryService` relatív útvonala támogatja ezt a hordozhatóságot.
+Az export azt a mappát csomagolja, ahol a projekt él. Az import feloldja az összes útvonalat és képeket átmásolja az új helyre. Az `ImageLibraryService` relatív útvonala támogatja ezt a hordozhatóságot.
 
 ---
 
@@ -995,14 +1104,16 @@ Az export azt a mappát pakolópzi, ahol a projekt él. Az import feloldja az ö
 
 A `ScreenRecorderService` ffmpeg-alapú képernyőrögzítés, amely:
 
-- hanggal együtt rögzít (mikrofon),
-- szegmentált fájlokba mentés támogatás (korlátos méret),
+- hanggal együtt rögzít: mikrofon kötelező logikai forrás, system audio best-effort loopback eszközzel,
+- aktív ablak, minden kijelző vagy kiválasztott kijelzők rögzítését támogatja,
+- szegmentált fájlokba mentést támogat (crash-védett mentési granularitás),
 - forced keyframe-ek a stabilitásért,
-- pause/resume lehetőség (ffmpeg restart).
+- pause/resume lehetőség (ffmpeg restart),
+- stopkor opcionálisan összefűzi a segmenteket egy végső MP4-be.
 
-Az `RecordingTimelineLog` egy `.timeline.txt` napló mellett az imágokat időbélyeggel tárja, így könnyű visszanavigálni.
+Az `RecordingTimelineLog` egy `.timeline.txt` naplóban az aktív kontextust és képböngészőben megnyitott képeket időbélyeggel tárolja, így könnyű visszanavigálni.
 
-A `RecordingControlsWidget` az alkalmazásban pausable/resumable play gombot biztosít. Az `RecordingMetadata` a projekt rögzítési metaadatait kezeli.
+A `RecordingControls` widget az alkalmazásban start/pause/resume/stop gombokat, elapsed időt és audio level metert biztosít. A `RecordingMetadata` és `RecordingMetadataWriter` crash-safe JSON metaadatot kezel.
 
 ---
 
@@ -1022,13 +1133,13 @@ A `RecordingControlsWidget` az alkalmazásban pausable/resumable play gombot biz
 - Hosszabb futású munkát Qt workerben vagy QRunnable-ben kell végezni, nem a GUI szálon.
 - Exportnál, kollázsnál, preview-nál és képböngészőnél kezelni kell a hiányzó image library rootot és a Drive fetch hibákat.
 - Új UI szöveghez az `app/ui/i18n.py` kulcsait kell frissíteni.
-- Osoby-módosításnál (merge, reassign, kizárás) az `IntraImageConsistencyService` pass-en kell futtatni, hogy az azonos képen belüli konzisztencia javuljon.
+- Személy-módosításnál (merge, reassign, kizárás) érdemes az `IntraImageConsistencyService` pass-t futtatni, hogy az azonos képen belüli konzisztencia javuljon.
 - Új arc-korrekció vagy módosítás után az `IdentityRepairService` scan-et ajánlott indítani fragmentáció-feloldáshoz.
-- Merge javaslatokat létrehozó kódban az `IdentityRepairService` scan eredményeiből kell kiindulni, nem önálló név-alapú keresésből.
+- Merge javaslatokat létrehozó kódban a `MergeSuggestionService` konfigurált face+név scoringját és `MergeSuggestion` státuszmodelljét kell használni; név-only merge javaslat nem lehet automatikusan elégséges.
 - Személycsoport szerkesztésnél a DB-ben `PersonGroupMembership` rekordokat kell változtatni, nem a `Person` tábla módosítása.
 - `.facepack` export/import esetén az `ImageLibraryService` relatív útvonal resolverét kell használni; abszolút utak nem hordozhatók.
-- Képernyőrögzítés szinkron üzeneteit a `RecordingTimelineLog`-ba kell írni idő-index-szel.
-- Fragment-rápaálóból javaslat elfogadása után a kiválasztott persona-hozzárendeléseket kell módosítani, ezt követően `IntraImageConsistencyService` pass.
+- Képernyőrögzítés szinkron üzeneteit a `RecordingTimelineLog`-ba kell írni idő-indexszel.
+- Fragmentáció-javító vagy merge javaslat elfogadása után a kiválasztott személy-hozzárendeléseket kell módosítani, ezt követően `IntraImageConsistencyService` pass ajánlott.
 - A Személyek oldal adatműveleteit a `PersonService`-en keresztül kell végezni; üzleti logika ne kerüljön a `PersonsPanel` widgetbe.
 
 ---
@@ -1046,7 +1157,7 @@ Egy helyen áttekinthető és szerkeszthető legyen az összes személy minden a
 ### UI felépítés
 
 - Felül szűrősor: név (+ becenév és strukturált nevek) és családi kód kereső, „Alkalmaz” gomb, találatszám.
-- Bal oldali fő panel: rendezhető `QTableWidget` az összes mezővel (id, bélyegkép ikon, név, családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett-e). Az id numerikusan rendeződik, a kis bélyegkép ikonok háttérben (`ThumbnailRunnable`) töltődnek.
+- Bal oldali fő panel: rendezhető `QTableWidget` az összes mezővel (id, bélyegkép ikon, név, családi kód, külső családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett-e). Az id numerikusan rendeződik, a kis bélyegkép ikonok háttérben (`ThumbnailRunnable`) töltődnek.
 - Jobb oldali részletező panel: nagy bélyegkép, arc/kép darabszám, műveletgombok, az arc cropok galériája és a kapcsolódó képek galériája (`PlaceGalleryWidget`, lazy-load).
 
 ### Service réteg
