@@ -162,6 +162,16 @@ class PersonInfoDialog(QDialog):
             self._groups.setEnabled(False)
             self._groups.setToolTip(t("person_groups_protected_tip"))
         layout.addWidget(self._groups)
+
+        # --- Related objects (read-only; managed from the Objects tab) ---
+        objects_label = QLabel(t("person_related_objects"))
+        objects_label.setStyleSheet("margin-top: 8px;")
+        layout.addWidget(objects_label)
+
+        self._objects_view = QLabel()
+        self._objects_view.setWordWrap(True)
+        self._objects_view.setStyleSheet("color: #ccc; font-size: 12px;")
+        layout.addWidget(self._objects_view)
         layout.addStretch()
 
         # --- Buttons pinned outside the scroll area ---
@@ -179,6 +189,7 @@ class PersonInfoDialog(QDialog):
 
         self._setup_completers()
         self._load_groups()
+        self._load_objects()
 
     def accept(self) -> None:
         try:
@@ -272,6 +283,25 @@ class PersonInfoDialog(QDialog):
             return
         self._groups.set_available_groups(all_groups)
         self._groups.set_selected_groups(person_groups)
+
+    def _load_objects(self) -> None:
+        """Show the objects this person is linked to (read-only)."""
+        from app.services.object_service import ObjectService
+
+        try:
+            with session_scope() as session:
+                links = ObjectService(session).get_objects_for_person(self._person_id)
+        except Exception:
+            log.exception("Failed to load objects for person id=%d", self._person_id)
+            return
+        if not links:
+            self._objects_view.setText(t("person_no_objects"))
+            return
+        lines = []
+        for link in links:
+            role = t(f"object_role_{link.role}")
+            lines.append(f"• {link.name} — {role}")
+        self._objects_view.setText("\n".join(lines))
 
     # ------------------------------------------------------------------
     # Accessors

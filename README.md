@@ -61,6 +61,7 @@ app/
 │   ├── embedding_service.py EmbeddingService — runs embedder, stores vectors
 │   ├── clustering_service.py ClusteringService — DBSCAN → Person assignment
 │   ├── identity_service.py  IdentityService — rename/merge/reassign ops
+│   ├── object_service.py    ObjectService — tagged objects (cars, boats, …), point occurrences, person links, merge
 │   └── export_service.py    ExportService — CSV/JSON/image export
 ├── workers/
 │   └── pipeline_worker.py PipelineWorker — QThread, runs all 4 stages

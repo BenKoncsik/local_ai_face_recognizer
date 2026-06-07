@@ -50,6 +50,7 @@ TOKEN_FAMILY_CODE = "family_code"
 TOKEN_PLACE = "place"
 TOKEN_DATE = "date"
 TOKEN_IMAGE = "image"
+TOKEN_OBJECT = "object"
 TOKEN_ANY = "any"
 
 # i18n key for each token type
@@ -60,6 +61,7 @@ _TOKEN_TYPE_I18N = {
     TOKEN_PLACE: "search_token_place",
     TOKEN_DATE: "search_token_date",
     TOKEN_IMAGE: "search_token_image",
+    TOKEN_OBJECT: "search_token_object",
     TOKEN_ANY: "",
 }
 
@@ -71,6 +73,7 @@ _TYPE_COLOURS: dict[str, tuple[str, str]] = {
     TOKEN_PLACE:       ("#7a4500", "#fce8cb"),
     TOKEN_DATE:        ("#5a5a00", "#f5f5c0"),
     TOKEN_IMAGE:       ("#444444", "#e8e8e8"),
+    TOKEN_OBJECT:      ("#0a5a66", "#cdeef2"),
     TOKEN_ANY:         ("#333333", "#e0e0e0"),
 }
 

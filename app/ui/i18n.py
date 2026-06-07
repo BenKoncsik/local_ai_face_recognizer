@@ -1896,6 +1896,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "search_token_place":       {"en": "Place",     "hu": "Hely"},
     "search_token_date":        {"en": "Date",      "hu": "Dátum"},
     "search_token_image":       {"en": "Image",     "hu": "Képadat"},
+    "search_token_object":      {"en": "Object",    "hu": "Objektum"},
     "search_only_person_cb": {
         "en": "Only this person",
         "hu": "Csak az adott személy",
@@ -1968,6 +1969,100 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "sc_fn_html_export":    {"en": "HTML Export",            "hu": "HTML export"},
     "sc_fn_bbox_undo":      {"en": "Undo BBox Edit",         "hu": "Arckeret szerkesztés visszavonása"},
     "sc_fn_bbox_redo":      {"en": "Redo BBox Edit",         "hu": "Arckeret szerkesztés visszaállítása"},
+
+    # ── Object tagging ─────────────────────────────────────────────────────────
+    "tab_objects":          {"en": "Objects",                "hu": "Objektumok"},
+    "object_mode":          {"en": "📌 Object",              "hu": "📌 Objektum"},
+    "object_mode_tip":      {"en": "Click a point on the image to tag an object",
+                             "hu": "Kattints egy pontra a képen objektum megjelöléséhez"},
+    "object_point_hint":    {"en": "Click a point on the image to place an object marker.",
+                             "hu": "Kattints egy pontra a képen az objektum-jelölő elhelyezéséhez."},
+    "object_rect_hint":     {"en": "Drag a rectangle around the object on the image.",
+                             "hu": "Húzz egy téglalapot az objektum köré a képen."},
+    "overlay_objects":      {"en": "Objects",                "hu": "Objektumok"},
+    "overlay_objects_tip":  {"en": "Show/hide object boxes and adjust their opacity",
+                             "hu": "Objektum-keretek megjelenítése/elrejtése és átlátszóságuk állítása"},
+
+    # Picker dialog (click → choose/create object)
+    "object_picker_title":  {"en": "Tag an Object",          "hu": "Objektum megjelölése"},
+    "object_picker_search": {"en": "Find existing object …", "hu": "Meglévő objektum keresése …"},
+    "object_picker_existing":{"en": "Existing objects",      "hu": "Meglévő objektumok"},
+    "object_picker_new":    {"en": "Create new object",      "hu": "Új objektum létrehozása"},
+    "object_picker_occ_note":{"en": "Note for this image (optional)",
+                             "hu": "Megjegyzés ehhez a képhez (opcionális)"},
+    "object_use_selected":  {"en": "Tag selected",           "hu": "Kiválasztott megjelölése"},
+    "object_create_and_tag":{"en": "Create & tag",           "hu": "Létrehozás és megjelölés"},
+
+    # Object fields
+    "object_name":          {"en": "Name",                   "hu": "Név"},
+    "object_description":   {"en": "Description",            "hu": "Leírás"},
+    "object_notes":         {"en": "Notes",                  "hu": "Megjegyzések"},
+    "object_example_name":  {"en": "e.g. BMW E91",           "hu": "pl. BMW E91"},
+    "object_example_desc":  {"en": "e.g. 2004 BMW E91 330D Touring",
+                             "hu": "pl. 2004-es BMW E91 330D Touring"},
+
+    # Objects panel
+    "objects_filter_name":  {"en": "Filter by name …",       "hu": "Szűrés név szerint …"},
+    "objects_col_name":     {"en": "Name",                   "hu": "Név"},
+    "objects_col_images":   {"en": "Images",                 "hu": "Képek"},
+    "objects_col_notes":    {"en": "Notes",                  "hu": "Megjegyzések"},
+    "objects_col_persons":  {"en": "Persons",                "hu": "Személyek"},
+    "objects_new":          {"en": "New Object",             "hu": "Új objektum"},
+    "objects_delete":       {"en": "Delete Object",          "hu": "Objektum törlése"},
+    "objects_merge":        {"en": "Merge …",                "hu": "Összevonás …"},
+    "objects_edit":         {"en": "Edit",                   "hu": "Szerkesztés"},
+    "objects_empty":        {"en": "No object selected.",    "hu": "Nincs kiválasztott objektum."},
+    "objects_none":         {"en": "No objects yet.",        "hu": "Még nincsenek objektumok."},
+    "objects_delete_confirm":{"en": "Delete object '{name}' and all its occurrences?",
+                             "hu": "Törlöd a(z) '{name}' objektumot és minden előfordulását?"},
+
+    # Object detail / data sheet
+    "object_detail_created":{"en": "Created",                "hu": "Létrehozva"},
+    "object_detail_updated":{"en": "Last modified",          "hu": "Utolsó módosítás"},
+    "object_detail_images": {"en": "Related images",         "hu": "Kapcsolódó képek"},
+    "object_detail_notes":  {"en": "Related notes",          "hu": "Kapcsolódó megjegyzések"},
+    "object_detail_persons":{"en": "Related persons",        "hu": "Kapcsolódó személyek"},
+    "object_detail_gallery":{"en": "Gallery",                "hu": "Galéria"},
+    "object_set_thumbnail": {"en": "Set as object thumbnail",
+                             "hu": "Beállítás objektum bélyegképként"},
+    "object_clear_thumbnail":{"en": "Clear object thumbnail",
+                             "hu": "Objektum bélyegkép törlése"},
+    "object_detail_comments":{"en": "All comments",          "hu": "Összes megjegyzés"},
+    "object_no_comments":   {"en": "No per-image comments.", "hu": "Nincsenek képenkénti megjegyzések."},
+
+    # Person ↔ object roles
+    "object_role":          {"en": "Role",                   "hu": "Szerep"},
+    "object_role_owner":        {"en": "Owner",              "hu": "Tulajdonos"},
+    "object_role_former_owner": {"en": "Former owner",       "hu": "Korábbi tulajdonos"},
+    "object_role_driver":       {"en": "Driver",             "hu": "Sofőr"},
+    "object_role_creator":      {"en": "Creator",            "hu": "Készítő"},
+    "object_role_user":         {"en": "User",               "hu": "Használó"},
+    "object_role_family":       {"en": "Family member",      "hu": "Családtag"},
+    "object_role_other":        {"en": "Other",              "hu": "Egyéb"},
+    "object_add_person":    {"en": "Add person …",           "hu": "Személy hozzáadása …"},
+    "object_remove_person": {"en": "Remove",                 "hu": "Eltávolítás"},
+
+    # Person detail integration
+    "person_related_objects":{"en": "Related objects",       "hu": "Kapcsolódó objektumok"},
+    "person_no_objects":    {"en": "No related objects.",    "hu": "Nincsenek kapcsolódó objektumok."},
+
+    # Merge dialog
+    "object_merge_title":   {"en": "Merge Objects",          "hu": "Objektumok összevonása"},
+    "object_merge_target":  {"en": "Keep this object (target)",
+                             "hu": "Ezt az objektumot tartsd meg (cél)"},
+    "object_merge_hint":    {"en": "All occurrences, notes and person links are preserved.",
+                             "hu": "Minden előfordulás, megjegyzés és személykapcsolat megmarad."},
+    "object_tagged_ok":     {"en": "Object tagged.",         "hu": "Objektum megjelölve."},
+    "object_search":        {"en": "Search objects",         "hu": "Objektumok keresése"},
+
+    # Context menu (right-click on the image / on an object marker)
+    "object_ctx_mark_here": {"en": "📌 Tag object here",      "hu": "📌 Objektum megjelölése itt"},
+    "object_ctx_open":      {"en": "Open object",            "hu": "Objektum megnyitása"},
+    "object_ctx_edit":      {"en": "Edit object …",          "hu": "Objektum szerkesztése …"},
+    "object_ctx_edit_frame":{"en": "Edit frame",            "hu": "Keret szerkesztése"},
+    "object_ctx_edit_note": {"en": "Edit note …",           "hu": "Megjegyzés szerkesztése …"},
+    "object_ctx_delete_occurrence": {"en": "Delete object marker here",
+                             "hu": "Objektum-jelölő törlése"},
 }
 
 

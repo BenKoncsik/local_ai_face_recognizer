@@ -344,6 +344,11 @@ class Person(Base):
         back_populates="person",
         cascade="all, delete-orphan",
     )
+    object_links: Mapped[List["ObjectPersonLink"]] = relationship(
+        "ObjectPersonLink",
+        back_populates="person",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Person id={self.id} name={self.name!r}>"
@@ -835,6 +840,241 @@ class MergeSuggestion(Base):
             f"tgt={self.target_person_id} conf={self.confidence:.2f} "
             f"status={self.status!r}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Object tagging  (a domain entirely separate from face recognition)
+# ---------------------------------------------------------------------------
+#
+# Objects are arbitrary user-tagged things in photos (a car, a house, a
+# gravestone, a painting, …).  They are NOT persons, NOT faces, carry no
+# embedding/biometric data and never take part in any face-recognition step.
+#
+# Geometry: today only a single point per occurrence is stored.  The schema is
+# intentionally future-proofed for bounding boxes, polygons and AI detection
+# via the nullable bbox_*/polygon_json/geometry_type/detection_source/confidence
+# columns, so a later YOLO/CLIP integration needs no migration of existing data.
+
+# Roles a person can have relative to an object.
+OBJECT_ROLE_OWNER = "owner"
+OBJECT_ROLE_FORMER_OWNER = "former_owner"
+OBJECT_ROLE_DRIVER = "driver"
+OBJECT_ROLE_CREATOR = "creator"
+OBJECT_ROLE_USER = "user"
+OBJECT_ROLE_FAMILY = "family"
+OBJECT_ROLE_OTHER = "other"
+
+OBJECT_ROLES = (
+    OBJECT_ROLE_OWNER,
+    OBJECT_ROLE_FORMER_OWNER,
+    OBJECT_ROLE_DRIVER,
+    OBJECT_ROLE_CREATOR,
+    OBJECT_ROLE_USER,
+    OBJECT_ROLE_FAMILY,
+    OBJECT_ROLE_OTHER,
+)
+
+# Occurrence geometry kinds.
+OBJECT_GEOMETRY_POINT = "point"
+OBJECT_GEOMETRY_BBOX = "bbox"
+OBJECT_GEOMETRY_POLYGON = "polygon"
+
+
+class TaggedObject(Base):
+    """A user-tagged object identity that can appear in many images.
+
+    Examples: "BMW E91", "Klotild" (a boat), a gravestone, a painting.  The
+    same object is referenced from every image it appears in via
+    :class:`ObjectOccurrence`.
+    """
+
+    __tablename__ = "tagged_objects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Required display name (e.g. "BMW E91").
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    # Optional global description (e.g. "2004-es BMW E91 330D Touring").
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Optional free-text notes attached to the object globally.  Per-image
+    # comments live on ObjectOccurrence.note, NOT here.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Representative thumbnail (path to a source image or crop).
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    occurrences: Mapped[List["ObjectOccurrence"]] = relationship(
+        "ObjectOccurrence",
+        back_populates="tagged_object",
+        cascade="all, delete-orphan",
+    )
+    person_links: Mapped[List["ObjectPersonLink"]] = relationship(
+        "ObjectPersonLink",
+        back_populates="tagged_object",
+        cascade="all, delete-orphan",
+    )
+    aliases: Mapped[List["ObjectAlias"]] = relationship(
+        "ObjectAlias",
+        back_populates="tagged_object",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<TaggedObject id={self.id} name={self.name!r}>"
+
+
+class ObjectOccurrence(Base):
+    """A single appearance of a :class:`TaggedObject` in one image.
+
+    Currently a single point ``(point_x, point_y)`` in original-image pixels is
+    enough; the bbox/polygon/AI columns are reserved for future selection modes
+    and automatic detection.  A per-image comment lives in ``note`` (kept
+    separate from the object's global description/notes).
+    """
+
+    __tablename__ = "object_occurrences"
+    __table_args__ = (
+        UniqueConstraint(
+            "object_id", "image_id", "point_x", "point_y", name="ux_object_occurrence"
+        ),
+        Index("ix_object_occ_image", "image_id"),
+        Index("ix_object_occ_object", "object_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    object_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("tagged_objects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    image_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Primary position today: a single point in original image pixels.
+    point_x: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    point_y: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # ── Future-proofing (all nullable; unused by the manual point workflow) ──
+    bbox_x: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bbox_y: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bbox_w: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bbox_h: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # JSON-encoded list of [x, y] vertices for a future polygon selection.
+    polygon_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # "point" | "bbox" | "polygon"
+    geometry_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=OBJECT_GEOMETRY_POINT
+    )
+    # "manual" | "ai" — reserved for later automatic object detection.
+    detection_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual"
+    )
+    # Detector confidence [0.0 – 1.0]; NULL for manual occurrences.
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Per-image comment for this occurrence ("Frissen mosva.").
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    tagged_object: Mapped["TaggedObject"] = relationship(
+        "TaggedObject", back_populates="occurrences"
+    )
+    image: Mapped["Image"] = relationship("Image")
+
+    def __repr__(self) -> str:
+        return (
+            f"<ObjectOccurrence id={self.id} object_id={self.object_id} "
+            f"image_id={self.image_id} point=({self.point_x},{self.point_y})>"
+        )
+
+
+class ObjectPersonLink(Base):
+    """A many-to-many link between a :class:`TaggedObject` and a :class:`Person`.
+
+    A person may be linked under several roles (e.g. owner *and* driver), so the
+    role is part of the primary key.
+    """
+
+    __tablename__ = "object_person_links"
+    __table_args__ = (
+        Index("ix_opl_person", "person_id"),
+        Index("ix_opl_object", "object_id"),
+    )
+
+    object_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("tagged_objects.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    person_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("persons.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    # One of OBJECT_ROLES.
+    role: Mapped[str] = mapped_column(
+        String(64), primary_key=True, nullable=False, default=OBJECT_ROLE_OTHER
+    )
+    # Optional free-text qualifier for the role (e.g. "2010–2015").
+    note: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tagged_object: Mapped["TaggedObject"] = relationship(
+        "TaggedObject", back_populates="person_links"
+    )
+    person: Mapped["Person"] = relationship("Person", back_populates="object_links")
+
+    def __repr__(self) -> str:
+        return (
+            f"<ObjectPersonLink object={self.object_id} person={self.person_id} "
+            f"role={self.role!r}>"
+        )
+
+
+class ObjectAlias(Base):
+    """Preserved source data from objects merged into another object.
+
+    Mirrors :class:`PlaceAlias`: when two objects are merged, the source's
+    name/description is kept here for traceability.
+    """
+
+    __tablename__ = "object_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    object_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("tagged_objects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_object_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tagged_object: Mapped["TaggedObject"] = relationship(
+        "TaggedObject", back_populates="aliases"
+    )
+
+    def __repr__(self) -> str:
+        return f"<ObjectAlias id={self.id} object_id={self.object_id} name={self.name!r}>"
 
 
 # ---------------------------------------------------------------------------

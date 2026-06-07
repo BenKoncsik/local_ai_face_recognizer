@@ -709,6 +709,9 @@ class FamilyService:
                     .subquery()
                 )
                 conditions.append(Image.id.in_(face_subq))
+            object_subq = self._object_image_ids_subquery(pattern)
+            if object_subq is not None:
+                conditions.append(Image.id.in_(object_subq))
             q = q.filter(or_(*conditions))
 
         total = q.count()
@@ -718,6 +721,29 @@ class FamilyService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _object_image_ids_subquery(self, pattern: str):
+        """Subquery of image ids that contain an object matching *pattern*.
+
+        Matches the object's name/description or any per-image occurrence note,
+        so a term like "Balaton" mentioned in a comment surfaces its images.
+        """
+        from sqlalchemy import select
+
+        from app.db.models import ObjectOccurrence, TaggedObject
+
+        return (
+            select(ObjectOccurrence.image_id)
+            .join(TaggedObject, TaggedObject.id == ObjectOccurrence.object_id)
+            .where(
+                or_(
+                    TaggedObject.name.ilike(pattern),
+                    TaggedObject.description.ilike(pattern),
+                    ObjectOccurrence.note.ilike(pattern),
+                )
+            )
+            .distinct()
+        )
 
     def _person_ids_matching_name(self, term: str) -> list[int]:
         pattern = self._like_pattern(term)
@@ -884,6 +910,16 @@ class FamilyService:
             .all()
         ):
             _add(pname, "place")
+
+        from app.db.models import TaggedObject
+        for (oname,) in (
+            self._session.query(TaggedObject.name)
+            .filter(TaggedObject.name.ilike(pattern))
+            .distinct()
+            .limit(max_per_type)
+            .all()
+        ):
+            _add(oname, "object")
 
         for (date,) in (
             self._session.query(Image.photo_date)

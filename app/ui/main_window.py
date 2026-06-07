@@ -12,6 +12,7 @@ from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -59,6 +60,7 @@ from app.ui.panels.family_search_panel import FamilySearchPanel
 from app.ui.panels.image_browser_panel import ImageBrowserPanel
 from app.ui.panels.locations_panel import LocationsPanel
 from app.ui.panels.log_panel import LogPanel
+from app.ui.panels.objects_panel import ObjectsPanel
 from app.ui.panels.persons_panel import PersonsPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
@@ -298,6 +300,9 @@ class MainWindow(QMainWindow):
         self._preview_panel.face_clear_thumbnail_requested.connect(
             self._on_face_clear_thumbnail
         )
+        self._preview_panel.object_create_requested.connect(
+            self._on_preview_object_create
+        )
         splitter.addWidget(self._preview_panel)
 
         splitter.setStretchFactor(0, 0)
@@ -315,6 +320,7 @@ class MainWindow(QMainWindow):
         self._image_browser.active_person_changed.connect(
             self._on_browser_person_changed
         )
+        self._image_browser.object_open_requested.connect(self._open_object_sheet)
         self._tabs.addTab(self._image_browser, t("tab_image_browser"))
 
         # --- Tab 2: Családi kereső ---
@@ -331,7 +337,14 @@ class MainWindow(QMainWindow):
         self._persons_panel.person_data_changed.connect(self._refresh_persons)
         self._tabs.addTab(self._persons_panel, t("tab_persons"))
 
-        # --- Tab 5: Kollázs nézet ---
+        # --- Tab 5: Objektumok ---
+        self._objects_panel = ObjectsPanel()
+        self._objects_panel.object_data_changed.connect(
+            self._refresh_preview_object_markers
+        )
+        self._tabs.addTab(self._objects_panel, t("tab_objects"))
+
+        # --- Tab 6: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, t("tab_collage"))
 
@@ -609,7 +622,8 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(2, t("tab_family_search"))
         self._tabs.setTabText(3, t("tab_locations"))
         self._tabs.setTabText(4, t("tab_persons"))
-        self._tabs.setTabText(5, t("tab_collage"))
+        self._tabs.setTabText(5, t("tab_objects"))
+        self._tabs.setTabText(6, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_image_browser"):
@@ -620,6 +634,8 @@ class MainWindow(QMainWindow):
             self._locations_panel.retranslate()
         if hasattr(self, "_persons_panel"):
             self._persons_panel.retranslate()
+        if hasattr(self, "_objects_panel"):
+            self._objects_panel.retranslate()
 
     # ------------------------------------------------------------------
     # Logging
@@ -1536,6 +1552,7 @@ class MainWindow(QMainWindow):
             self._image_browser.refresh()
             self._locations_panel.refresh()
             self._persons_panel.refresh()
+            self._objects_panel.refresh()
             QMessageBox.information(self, t("settings_title"), t("db_switched"))
             log.info("Database switched to: %s", new_db)
 
@@ -2034,6 +2051,7 @@ class MainWindow(QMainWindow):
         self._image_browser.refresh()
         self._locations_panel.refresh()
         self._persons_panel.refresh()
+        self._objects_panel.refresh()
         if not success:
             QMessageBox.warning(self, t("warning"), summary)
             return
@@ -2124,6 +2142,59 @@ class MainWindow(QMainWindow):
                     face_id, face.image.id, len([f for f in face.image.faces if not f.is_excluded]),
                 )
             self._preview_panel.show_face(face)
+        self._refresh_preview_object_markers()
+
+    def _refresh_preview_object_markers(self) -> None:
+        """Load object occurrences for the current preview image and render them."""
+        image_id = self._preview_panel.current_image_id
+        if image_id is None:
+            self._preview_panel.set_object_occurrences([])
+            return
+        from app.db.models import TaggedObject
+        from app.services.object_service import ObjectService
+        markers = []
+        try:
+            with session_scope() as session:
+                for occ in ObjectService(session).get_occurrences_for_image(image_id):
+                    if occ.point_x is None or occ.point_y is None:
+                        continue
+                    obj = session.get(TaggedObject, occ.object_id)
+                    name = obj.name if obj is not None else None
+                    markers.append((occ.occurrence_id, occ.point_x, occ.point_y, name))
+        except Exception:
+            log.exception("Failed to load object markers for image %s", image_id)
+            markers = []
+        self._preview_panel.set_object_occurrences(markers)
+
+    @Slot(int, int, int)
+    def _on_preview_object_create(self, image_id: int, x: int, y: int) -> None:
+        """Open the object picker for a clicked point and record the occurrence."""
+        from app.services.object_service import ObjectService
+        from app.ui.dialogs.object_picker_dialog import ObjectPickerDialog
+
+        dlg = ObjectPickerDialog(self)
+        if dlg.exec() != QDialog.Accepted or dlg.chosen_object_id is None:
+            return
+        try:
+            with session_scope() as session:
+                ObjectService(session).add_occurrence(
+                    dlg.chosen_object_id, image_id, x, y, note=dlg.occurrence_note
+                )
+        except Exception:
+            log.exception("Failed to add object occurrence")
+            return
+        self._refresh_preview_object_markers()
+        if hasattr(self, "_objects_panel"):
+            self._objects_panel.refresh()
+        self.statusBar().showMessage(t("object_tagged_ok"), 3000)
+
+    @Slot(int)
+    def _open_object_sheet(self, object_id: int) -> None:
+        """Switch to the Objects tab and show the given object's data sheet."""
+        if not hasattr(self, "_objects_panel"):
+            return
+        self._tabs.setCurrentWidget(self._objects_panel)
+        self._objects_panel.open_object(object_id)
 
     @Slot(int, int, int)
     def _on_cluster_face_right_clicked(self, face_id: int, gx: int, gy: int) -> None:
@@ -3067,6 +3138,8 @@ class MainWindow(QMainWindow):
             self._locations_panel.refresh()
         if hasattr(self, "_persons_panel"):
             self._persons_panel.refresh()
+        if hasattr(self, "_objects_panel"):
+            self._objects_panel.refresh()
         QMessageBox.information(
             self, t("pkg_import_title"), t("pkg_import_opened")
         )

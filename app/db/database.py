@@ -152,6 +152,134 @@ def _migrate_add_columns(engine: Engine) -> None:
     _migrate_place_types(engine)
     _migrate_geocoding_tables(engine)
     _migrate_place_display_name(engine)
+    _migrate_object_tagging(engine)
+
+
+def _migrate_object_tagging(engine: Engine) -> None:
+    """Create the object-tagging tables if missing (idempotent).
+
+    Objects are a domain entirely separate from face recognition: tagged_objects
+    (the object identity), object_occurrences (one point per appearance in an
+    image, future-proofed for bbox/polygon/AI), object_person_links (people
+    related to the object) and object_aliases (merge provenance).
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS tagged_objects (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name                VARCHAR(255) NOT NULL,
+                    description         TEXT,
+                    notes               TEXT,
+                    thumbnail_path      TEXT,
+                    thumbnail_is_manual BOOLEAN NOT NULL DEFAULT 0,
+                    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_tagged_objects_name "
+                "ON tagged_objects(name)"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS object_occurrences (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    object_id        INTEGER NOT NULL
+                        REFERENCES tagged_objects(id) ON DELETE CASCADE,
+                    image_id         INTEGER NOT NULL
+                        REFERENCES images(id) ON DELETE CASCADE,
+                    point_x          INTEGER,
+                    point_y          INTEGER,
+                    bbox_x           INTEGER,
+                    bbox_y           INTEGER,
+                    bbox_w           INTEGER,
+                    bbox_h           INTEGER,
+                    polygon_json     TEXT,
+                    geometry_type    VARCHAR(16) NOT NULL DEFAULT 'point',
+                    detection_source VARCHAR(32) NOT NULL DEFAULT 'manual',
+                    confidence       FLOAT,
+                    note             TEXT,
+                    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_object_occurrence "
+                "ON object_occurrences(object_id, image_id, point_x, point_y)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_object_occ_image "
+                "ON object_occurrences(image_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_object_occ_object "
+                "ON object_occurrences(object_id)"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS object_person_links (
+                    object_id  INTEGER NOT NULL
+                        REFERENCES tagged_objects(id) ON DELETE CASCADE,
+                    person_id  INTEGER NOT NULL
+                        REFERENCES persons(id) ON DELETE CASCADE,
+                    role       VARCHAR(64) NOT NULL DEFAULT 'other',
+                    note       VARCHAR(255),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (object_id, person_id, role)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_opl_person "
+                "ON object_person_links(person_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_opl_object "
+                "ON object_person_links(object_id)"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS object_aliases (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    object_id        INTEGER NOT NULL
+                        REFERENCES tagged_objects(id) ON DELETE CASCADE,
+                    source_object_id INTEGER,
+                    name             VARCHAR(255),
+                    description      TEXT,
+                    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_object_aliases_object "
+                "ON object_aliases(object_id)"
+            )
+        )
+    log.debug("Migration: object tagging tables ensured")
 
 
 def _migrate_geocoding_tables(engine: Engine) -> None:

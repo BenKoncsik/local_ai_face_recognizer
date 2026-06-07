@@ -64,6 +64,15 @@ _BORDER_SELECTED = QColor(50,  220, 50,  180)
 _BORDER_HOVER    = QColor(255, 200, 60,  180)
 _BORDER_NORMAL   = QColor(100, 100, 100, 120)
 
+# Object markers use a distinct colour scheme (cyan) so they are never
+# confused with face boxes (green/grey).
+_OBJ_COLOR   = QColor(80, 200, 255)
+_OBJ_FILL    = QColor(80, 200, 255, 170)
+_OBJ_BG      = QColor(0, 35, 50, 210)
+_OBJ_BORDER  = QColor(80, 200, 255, 200)
+# (occ_id, x, y, name)
+_ObjectData = Tuple[int, int, int, Optional[str]]
+
 
 # ---------------------------------------------------------------------------
 # PIL-based renderer kept for the full-resolution Zoom dialog
@@ -284,6 +293,7 @@ class _FaceImageLabel(QLabel):
     canvas_clicked = Signal()
     face_right_clicked = Signal(int, int, int)
     rect_drawn = Signal(QRect)
+    point_clicked = Signal(float, float)  # label-space x, y (object mode)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -298,8 +308,12 @@ class _FaceImageLabel(QLabel):
         # Extended render data including names
         self._face_render_data: List[_FaceData] = []  # (id, x, y, w, h, name)
 
+        # Object occurrence markers (display-only in the preview)
+        self._object_data: List[_ObjectData] = []  # (occ_id, x, y, name)
+
         # Draw-mode state
         self._draw_mode = False
+        self._object_mode = False
         self._start: Optional[QPoint] = None
         self._end: Optional[QPoint] = None
 
@@ -348,10 +362,19 @@ class _FaceImageLabel(QLabel):
         self._selected_face_id = selected_id
         self.update()
 
+    def set_object_data(self, objects: List[_ObjectData]) -> None:
+        self._object_data = objects
+        self.update()
+
     def set_draw_mode(self, enabled: bool) -> None:
         self._draw_mode = enabled
         self._start = None
         self._end = None
+        self.setCursor(Qt.CrossCursor if enabled else Qt.PointingHandCursor)
+        self.update()
+
+    def set_object_mode(self, enabled: bool) -> None:
+        self._object_mode = enabled
         self.setCursor(Qt.CrossCursor if enabled else Qt.PointingHandCursor)
         self.update()
 
@@ -402,6 +425,11 @@ class _FaceImageLabel(QLabel):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
+            if self._object_mode:
+                pos = event.position()
+                log.debug("pointer down: object point at (%.0f,%.0f)", pos.x(), pos.y())
+                self.point_clicked.emit(pos.x(), pos.y())
+                return
             if self._draw_mode:
                 self._start = event.position().toPoint()
                 self._end = self._start
@@ -460,7 +488,7 @@ class _FaceImageLabel(QLabel):
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        needs_overlay = bool(self._face_render_data)
+        needs_overlay = bool(self._face_render_data) or bool(self._object_data)
         needs_rubber  = self._draw_mode and self._start is not None and self._end is not None
         if not needs_overlay and not needs_rubber:
             return
@@ -526,7 +554,15 @@ class _FaceImageLabel(QLabel):
             p.drawRect(QRect(self._start, self._end).normalized())
             p.end()
 
-        if transform is None or not self._face_render_data:
+        if transform is None:
+            return
+
+        # Object markers render independently of faces (and even when the image
+        # has no faces at all).
+        if self._object_data:
+            self._draw_object_markers(transform)
+
+        if not self._face_render_data:
             return
 
         scale, ox, oy = transform
@@ -636,6 +672,59 @@ class _FaceImageLabel(QLabel):
 
         painter.end()
 
+    def _draw_object_markers(
+        self, transform: Tuple[float, float, float]
+    ) -> None:
+        """Draw object occurrence markers (cyan pin + name) in display space."""
+        scale, ox, oy = transform
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        radius = max(5.0, min(12.0, 9.0 * scale)) if scale > 0 else 7.0
+        font = QFont()
+        font.setPixelSize(max(9, int(
+            max(34, min(96, int(min(self._full_w, self._full_h) * 0.028))) * scale
+        )))
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        pad_x = max(4, font.pixelSize() // 4)
+        pad_y = max(3, font.pixelSize() // 7)
+
+        for occ_id, ix, iy, name in self._object_data:
+            dx = ox + ix * scale
+            dy = oy + iy * scale
+
+            # Marker dot
+            painter.setOpacity(1.0)
+            painter.setPen(QPen(_OBJ_COLOR, 2.0))
+            painter.setBrush(QBrush(_OBJ_FILL))
+            painter.drawEllipse(QPointF(dx, dy), radius, radius)
+            # Inner pin dot
+            painter.setBrush(QBrush(QColor(255, 255, 255, 230)))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(dx, dy), radius * 0.32, radius * 0.32)
+
+            # Name label above the marker
+            display_name = name or "?"
+            tw = metrics.horizontalAdvance(display_name)
+            th = metrics.height()
+            lw = tw + 2 * pad_x
+            lh = th + 2 * pad_y
+            lx = dx - lw / 2
+            ly = dy - radius - lh - 2
+            painter.setPen(QPen(_OBJ_BORDER, 1))
+            painter.setBrush(QBrush(_OBJ_BG))
+            painter.drawRoundedRect(QRectF(lx, ly, lw, lh), 3, 3)
+            painter.setPen(_OBJ_COLOR)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawText(
+                QRectF(lx + pad_x, ly + pad_y, lw - 2 * pad_x, lh - 2 * pad_y),
+                Qt.AlignCenter,
+                display_name,
+            )
+
+        painter.end()
+
 
 # ---------------------------------------------------------------------------
 # Preview panel
@@ -662,6 +751,7 @@ class PreviewPanel(QWidget):
     face_diagnostics_requested     = Signal(int)
     face_set_thumbnail_requested   = Signal(int)   # face_id
     face_clear_thumbnail_requested = Signal(int)   # person_id
+    object_create_requested        = Signal(int, int, int)  # image_id, x, y
     prev_image_requested           = Signal()
     next_image_requested           = Signal()
 
@@ -704,6 +794,7 @@ class PreviewPanel(QWidget):
         self._image_label.canvas_clicked.connect(self._open_zoom)
         self._image_label.face_right_clicked.connect(self._on_face_right_clicked)
         self._image_label.rect_drawn.connect(self._on_rect_drawn)
+        self._image_label.point_clicked.connect(self._on_object_point_clicked)
         layout.addWidget(self._image_label)
 
         # ── Draw-mode hint ───────────────────────────────────────────────
@@ -839,6 +930,13 @@ class PreviewPanel(QWidget):
         self._draw_btn.toggled.connect(self._on_draw_mode_toggled)
         _add(self._draw_btn)
 
+        self._object_btn = _action_btn(t("object_mode"))
+        self._object_btn.setCheckable(True)
+        self._object_btn.setEnabled(False)
+        self._object_btn.setToolTip(t("object_mode_tip"))
+        self._object_btn.toggled.connect(self._on_object_mode_toggled)
+        _add(self._object_btn)
+
         self._edit_btn = _action_btn(t("modify_selection"))
         self._edit_btn.setEnabled(False)
         self._edit_btn.clicked.connect(self._start_selected_face_edit)
@@ -954,6 +1052,11 @@ class PreviewPanel(QWidget):
         self._selected_face_id = face.id
         self._editing_face_id = None
         self._draw_btn.setChecked(False)
+        # Clear stale object markers; the caller repopulates via
+        # set_object_occurrences() after show_face().
+        if not same_image:
+            self._object_btn.setChecked(False)
+            self._image_label.set_object_data([])
 
         log.debug(
             "show_face: face_id=%d image_id=%d annotations=%d same_image=%s preserve_draw=%s",
@@ -970,6 +1073,7 @@ class PreviewPanel(QWidget):
         self._open_btn.setEnabled(True)
         self._zoom_btn.setEnabled(True)
         self._draw_btn.setEnabled(True)
+        self._object_btn.setEnabled(True)
         self._prev_btn.setEnabled(True)
         self._next_btn.setEnabled(True)
         self._update_action_buttons()
@@ -994,7 +1098,9 @@ class PreviewPanel(QWidget):
         self._editing_face_id = None
         self._current_image_id = None
         self._image_label.set_face_data([], 0, 0)
+        self._image_label.set_object_data([])
         self._image_label.set_draw_mode(False)
+        self._image_label.set_object_mode(False)
         self._image_label.clear()
         self._image_label.setText(t("preview_empty"))
         self._path_label.setText("")
@@ -1002,6 +1108,8 @@ class PreviewPanel(QWidget):
         self._zoom_btn.setEnabled(False)
         self._draw_btn.setChecked(False)
         self._draw_btn.setEnabled(False)
+        self._object_btn.setChecked(False)
+        self._object_btn.setEnabled(False)
         self._draw_hint.setVisible(False)
         self._edit_btn.setEnabled(False)
         self._assign_btn.setEnabled(False)
@@ -1110,11 +1218,37 @@ class PreviewPanel(QWidget):
             self.face_clear_thumbnail_requested.emit(face_id)
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
+        if active and self._object_btn.isChecked():
+            self._object_btn.setChecked(False)  # mutually exclusive
         self._image_label.set_draw_mode(active)
         self._draw_hint.setVisible(active)
         if not active:
             self._editing_face_id = None
             self._draw_hint.setText(t("draw_face_hint"))
+
+    def _on_object_mode_toggled(self, active: bool) -> None:
+        if active and self._draw_btn.isChecked():
+            self._draw_btn.setChecked(False)  # mutually exclusive
+        self._image_label.set_object_mode(active)
+        self._draw_hint.setVisible(active)
+        self._draw_hint.setText(
+            t("object_point_hint") if active else t("draw_face_hint")
+        )
+
+    def _on_object_point_clicked(self, lx: float, ly: float) -> None:
+        if self._current_image_id is None:
+            return
+        ix, iy = self._label_to_image(lx, ly)
+        if ix < 0 or iy < 0:
+            log.debug("object point outside image — ignored")
+            return
+        log.debug("object create requested: image_id=%d point=(%d,%d)",
+                  self._current_image_id, ix, iy)
+        self.object_create_requested.emit(self._current_image_id, ix, iy)
+
+    def set_object_occurrences(self, occurrences: List[_ObjectData]) -> None:
+        """Set the object markers to render on the current image."""
+        self._image_label.set_object_data(occurrences)
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
         log.debug(

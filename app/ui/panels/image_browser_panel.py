@@ -36,6 +36,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QDockWidget,
     QFrame,
     QHBoxLayout,
@@ -540,10 +541,13 @@ class _DrawableImageLabel(QLabel):
     redo_requested       = Signal()
     # Deoldified compare divider dragged → emits split position as percent (0..100)
     compare_dragged      = Signal(int)
+    # Object-tagging: a rectangle was drawn in object mode (label-space QRect)
+    object_rect_drawn    = Signal(QRect)
 
     _BORDER_NORMAL = "QLabel { background: #1a1a1a; }"
     _BORDER_DRAW   = "QLabel { background: #1a1a1a; border: 2px solid #ffcc00; }"
     _BORDER_EDIT   = "QLabel { background: #1a1a1a; border: 2px solid #32dc32; }"
+    _BORDER_OBJECT = "QLabel { background: #1a1a1a; border: 2px solid #50c8ff; }"
 
     # Handle rendering constants
     _HANDLE_HALF = 6    # half-side of handle squares in display pixels
@@ -559,6 +563,13 @@ class _DrawableImageLabel(QLabel):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)   # needed for hover cursor changes without button held
         self._draw_mode = False
+        self._object_mode = False
+        # Object occurrence markers in image coords:
+        # (occ_id, x, y, name, bbox_or_None) where bbox = (bx, by, bw, bh)
+        self._object_markers: list[tuple] = []
+        self._selected_occ_id: Optional[int] = None
+        self._show_objects: bool = True
+        self._object_opacity: float = 0.8
         self._start: Optional[QPoint] = None
         self._end: Optional[QPoint] = None
         self._mid_start: Optional[QPoint] = None
@@ -602,6 +613,38 @@ class _DrawableImageLabel(QLabel):
         if enabled:
             self._exit_interactive_edit(commit=False, silent=True)
         self.setStyleSheet(self._BORDER_DRAW if enabled else self._BORDER_NORMAL)
+        self.update()
+
+    def set_object_mode(self, enabled: bool) -> None:
+        """Toggle object-tagging mode (click places an object marker)."""
+        self._object_mode = enabled
+        if enabled:
+            self._draw_mode = False
+            self._start = None
+            self._end = None
+            self.setStyleSheet(self._BORDER_OBJECT)
+        else:
+            self.setStyleSheet(self._BORDER_NORMAL)
+        self.update()
+
+    def set_object_markers(self, markers: list[tuple]) -> None:
+        """Set object occurrence markers (image coords) to overlay.
+
+        Each marker is ``(occ_id, x, y, name, bbox_or_None)`` where bbox is
+        ``(bx, by, bw, bh)`` in image coords.
+        """
+        self._object_markers = markers
+        self.update()
+
+    def set_object_overlay(self, show: bool, opacity: float) -> None:
+        """Control object overlay visibility and opacity (0.0–1.0)."""
+        self._show_objects = show
+        self._object_opacity = max(0.0, min(1.0, opacity))
+        self.update()
+
+    def set_selected_object(self, occ_id: Optional[int]) -> None:
+        """Highlight the marker for *occ_id* (or clear when None)."""
+        self._selected_occ_id = occ_id
         self.update()
 
     def set_compare_mode(self, enabled: bool, split_percent: int = 50) -> None:
@@ -865,6 +908,13 @@ class _DrawableImageLabel(QLabel):
                 self._exit_interactive_edit(commit=True, silent=False)
             return
 
+        if self._object_mode:
+            # Draw a rectangle just like face draw mode.
+            self._start = event.position().toPoint()
+            self._end = self._start
+            self.update()
+            return
+
         if self._draw_mode:
             self._start = event.position().toPoint()
             self._end = self._start
@@ -907,7 +957,7 @@ class _DrawableImageLabel(QLabel):
             self._update_edit_cursor(handle)
             return
 
-        if self._draw_mode and self._start is not None:
+        if (self._draw_mode or self._object_mode) and self._start is not None:
             self._end = event.position().toPoint()
             self.update()
 
@@ -938,6 +988,16 @@ class _DrawableImageLabel(QLabel):
                 self._last_op_type = "move" if (ow == nw and oh == nh) else "resize"
                 self.bbox_edit_committed.emit(*new_bbox)
             self.update()
+            return
+
+        if self._object_mode and self._start is not None:
+            end = event.position().toPoint()
+            rect = QRect(self._start, end).normalized()
+            self._start = None
+            self._end = None
+            self.update()
+            if rect.width() >= 8 and rect.height() >= 8:
+                self.object_rect_drawn.emit(rect)
             return
 
         if not self._draw_mode or self._start is None:
@@ -1070,12 +1130,92 @@ class _DrawableImageLabel(QLabel):
             painter.setPen(Qt.gray)
             painter.drawText(cr, Qt.AlignCenter | Qt.TextWordWrap, self.text())
 
+        if self._object_markers and self._show_objects:
+            self._paint_object_markers(painter)
+
         if self._draw_mode and self._start is not None and self._end is not None:
             painter.setPen(QPen(Qt.yellow, 2, Qt.DashLine))
             painter.drawRect(QRect(self._start, self._end).normalized())
 
+        if self._object_mode and self._start is not None and self._end is not None:
+            painter.setPen(QPen(QColor(80, 200, 255), 2, Qt.DashLine))
+            painter.drawRect(QRect(self._start, self._end).normalized())
+
         if self._imode and self._imode_bbox is not None:
             self._paint_edit_handles(painter)
+
+    def _paint_object_markers(self, painter: QPainter) -> None:
+        """Draw cyan object boxes (rectangle + name) using the current transform.
+
+        Bounding-box occurrences render as a rectangle (like a face box); legacy
+        point-only occurrences fall back to a small dot.  The selected marker is
+        always shown at full opacity with a white highlight; the rest honour the
+        object-overlay opacity slider.
+        """
+        t = self._imode_transform()
+        if t is None:
+            return
+        eff, ox, oy = t
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        base_op = self._object_opacity
+        for marker in self._object_markers:
+            occ_id, ix, iy, name = marker[0], marker[1], marker[2], marker[3]
+            bbox = marker[4] if len(marker) > 4 else None
+            selected = occ_id == self._selected_occ_id
+            painter.setOpacity(1.0 if selected else base_op)
+
+            if bbox is not None:
+                bx, by, bw, bh = bbox
+                dx = ox + bx * eff
+                dy = oy + by * eff
+                dw = bw * eff
+                dh = bh * eff
+                if selected:
+                    painter.setPen(QPen(QColor(255, 255, 255), 3))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(QRectF(dx - 2, dy - 2, dw + 4, dh + 4))
+                painter.setPen(QPen(QColor(80, 200, 255), 3 if selected else 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(dx, dy, dw, dh))
+                label_x = dx
+                label_y = dy - 4
+            else:
+                dx = ox + ix * eff
+                dy = oy + iy * eff
+                if selected:
+                    painter.setPen(QPen(QColor(255, 255, 255), 2))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawEllipse(QPointF(dx, dy), 11.0, 11.0)
+                painter.setPen(QPen(QColor(80, 200, 255), 3 if selected else 2))
+                painter.setBrush(QBrush(QColor(80, 200, 255, 220 if selected else 170)))
+                r = 8.0 if selected else 7.0
+                painter.drawEllipse(QPointF(dx, dy), r, r)
+                painter.setBrush(QBrush(QColor(255, 255, 255, 230)))
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(QPointF(dx, dy), 2.4, 2.4)
+                label_x = dx
+                label_y = dy - 9
+
+            if name:
+                tw = metrics.horizontalAdvance(name)
+                th = metrics.height()
+                lx = label_x
+                ly = label_y - th
+                painter.setPen(QPen(QColor(80, 200, 255, 200), 1))
+                painter.setBrush(QBrush(QColor(0, 35, 50, 210)))
+                painter.drawRoundedRect(QRectF(lx, ly, tw + 10, th + 4), 3, 3)
+                painter.setPen(QColor(80, 200, 255))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawText(
+                    QRectF(lx + 5, ly + 2, tw, th),
+                    Qt.AlignCenter,
+                    name,
+                )
+        painter.setOpacity(1.0)
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
         t = self._imode_transform()
@@ -1124,6 +1264,8 @@ class ImageBrowserPanel(QWidget):
     # Emitted with the selected face's person name (str) or None whenever the
     # active face selection / assignment changes — drives the recording log.
     active_person_changed = Signal(object)
+    # Emitted when the user asks to open a tagged object's data sheet (object_id)
+    object_open_requested = Signal(int)
 
     def __init__(self, config=None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -1135,6 +1277,13 @@ class ImageBrowserPanel(QWidget):
         self._current_path: str = ""
         self._detection_done: bool = False
         self._face_data: List[_FaceData] = []
+        # Object occurrence markers for the current image, with object_id:
+        # (occ_id, object_id, x, y, name, bbox_or_None)
+        self._object_marker_data: List[tuple] = []
+        self._selected_occurrence_id: Optional[int] = None
+        self._show_objects: bool = True
+        self._object_opacity: float = 0.8
+        self._prev_object_opacity: float = 0.8
         self._selected_face_id: Optional[int] = None
         self._editing_face_id: Optional[int] = None
         self._renaming: bool = False
@@ -1149,6 +1298,9 @@ class ImageBrowserPanel(QWidget):
         # Interactive bbox editor state
         self._interactive_edit_face_id: Optional[int] = None
         self._interactive_edit_orig_bbox: Optional[Tuple[int, int, int, int]] = None
+        # When set, the interactive bbox editor is editing an object occurrence
+        # (not a face); the bbox commit/finalize/cancel signals route to it.
+        self._interactive_edit_occ_id: Optional[int] = None
         # Whether manual-mark (draw) mode was active when the interactive edit
         # started, so it can be restored after the edit finishes/cancels.
         self._draw_mode_before_edit: bool = False
@@ -1333,6 +1485,11 @@ class ImageBrowserPanel(QWidget):
         self._draw_mode_btn.toggled.connect(self._on_draw_mode_toggled)
         top_bar.addWidget(self._draw_mode_btn)
 
+        self._object_mode_btn = QPushButton()
+        self._object_mode_btn.setCheckable(True)
+        self._object_mode_btn.toggled.connect(self._on_object_mode_toggled)
+        top_bar.addWidget(self._object_mode_btn)
+
         top_bar.addStretch()
 
         # ── Overlay controls ─────────────────────────────────────────────
@@ -1394,11 +1551,36 @@ class ImageBrowserPanel(QWidget):
 
         top_bar.addSpacing(12)
 
+        # Object overlay controls (independent show/opacity, cyan colour)
+        self._object_check = QCheckBox(t("overlay_objects"))
+        self._object_check.setChecked(True)
+        self._object_check.setToolTip(t("overlay_objects_tip"))
+        self._object_check.setStyleSheet(_ov_chk_style)
+        top_bar.addWidget(self._object_check)
+
+        self._object_slider = QSlider(Qt.Horizontal)
+        self._object_slider.setRange(0, 100)
+        self._object_slider.setValue(80)
+        self._object_slider.setToolTip(t("overlay_objects_tip"))
+        self._object_slider.setMinimumWidth(60)
+        self._object_slider.setMaximumWidth(110)
+        self._object_slider.setStyleSheet(_ov_sld_style)
+        top_bar.addWidget(self._object_slider)
+
+        self._object_pct_label = QLabel("80%")
+        self._object_pct_label.setStyleSheet(_ov_pct_style)
+        self._object_pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        top_bar.addWidget(self._object_pct_label)
+
+        top_bar.addSpacing(12)
+
         # Wire overlay signals
         self._bbox_check.toggled.connect(self._on_ov_bbox_check)
         self._bbox_slider.valueChanged.connect(self._on_ov_bbox_slider)
         self._label_check.toggled.connect(self._on_ov_label_check)
         self._label_slider.valueChanged.connect(self._on_ov_label_slider)
+        self._object_check.toggled.connect(self._on_ov_object_check)
+        self._object_slider.valueChanged.connect(self._on_ov_object_slider)
         # ─────────────────────────────────────────────────────────────────
 
         self._prev_btn = QPushButton("◀")
@@ -1491,6 +1673,7 @@ class ImageBrowserPanel(QWidget):
         self._image_label.undo_requested.connect(self._undo_bbox_edit)
         self._image_label.redo_requested.connect(self._redo_bbox_edit)
         self._image_label.compare_dragged.connect(self._on_compare_dragged)
+        self._image_label.object_rect_drawn.connect(self._on_object_rect_drawn)
         im_layout.addWidget(self._image_label, stretch=1)
 
         # Register undo/redo with the global ShortcutService so Ctrl+Z/Y
@@ -1814,6 +1997,10 @@ class ImageBrowserPanel(QWidget):
         self._save_meta_btn.setToolTip(t("ib3_save_meta_tip"))
         self._draw_mode_btn.setText(t("ibp_manual_mark"))
         self._draw_mode_btn.setToolTip(t("ibp_manual_mark_tooltip"))
+        self._object_mode_btn.setText(t("object_mode"))
+        self._object_mode_btn.setToolTip(t("object_mode_tip"))
+        self._object_check.setText(t("overlay_objects"))
+        self._object_check.setToolTip(t("overlay_objects_tip"))
         self._fs_btn.setText(t("ibp_fullscreen"))
         self._exit_fs_btn.setText(t("ibp_exit_fullscreen"))
         self._draw_hint.setText(t("ibp_draw_hint_add"))
@@ -2536,6 +2723,21 @@ class ImageBrowserPanel(QWidget):
         self._label_pct_label.setText(f"{value}%")
         self._redraw_faces()
 
+    def _on_ov_object_check(self, checked: bool) -> None:
+        self._show_objects = checked
+        self._object_slider.setEnabled(checked)
+        if checked:
+            self._object_opacity = self._prev_object_opacity
+        self._image_label.set_object_overlay(self._show_objects, self._object_opacity)
+
+    def _on_ov_object_slider(self, value: int) -> None:
+        pct = value / 100.0
+        self._object_opacity = pct
+        if self._show_objects:
+            self._prev_object_opacity = pct
+        self._object_pct_label.setText(f"{value}%")
+        self._image_label.set_object_overlay(self._show_objects, self._object_opacity)
+
     # ── Navigation ───────────────────────────────────────────────────────
 
     def _navigate_prev(self) -> None:
@@ -2890,6 +3092,7 @@ class ImageBrowserPanel(QWidget):
         self._clear_face_panel()
         self._reload_persons_combo()
         self._reload_places()
+        self._refresh_object_markers()
 
     def _on_save_face_metadata(self) -> None:
         """Write everything about the current image into its metadata.
@@ -3025,6 +3228,13 @@ class ImageBrowserPanel(QWidget):
         if self._full_pixmap is None:
             return
 
+        # Object markers take precedence over faces — they are small, deliberate
+        # targets the user explicitly placed.
+        obj_hit = self._object_occ_at_label(lx, ly)
+        if obj_hit is not None:
+            self._select_object_marker(obj_hit)
+            return
+
         orig_x, orig_y = self._label_to_image(lx, ly)
         if orig_x < 0 or orig_y < 0:
             return
@@ -3070,10 +3280,48 @@ class ImageBrowserPanel(QWidget):
             face_id,
         )
 
+        obj_hit = self._object_occ_at_label(lx, ly)
+
         menu = QMenu(self)
         assign_action: Optional[object] = None
         edit_action: Optional[object] = None
         delete_action: Optional[object] = None
+        object_open_action: Optional[object] = None
+        object_delete_action: Optional[object] = None
+
+        # Object marker actions take precedence (small deliberate targets).
+        if obj_hit is not None:
+            self._select_object_marker(obj_hit)
+            _occ_id, _object_id, obj_name = obj_hit[0], obj_hit[1], obj_hit[4]
+            _bbox = obj_hit[5] if len(obj_hit) > 5 else None
+            title = menu.addAction(f"📌 {obj_name or '?'}")
+            title.setEnabled(False)
+            menu.addSeparator()
+            object_edit_action = menu.addAction(t("object_ctx_edit"))
+            object_frame_action = None
+            if _bbox is not None:
+                object_frame_action = menu.addAction(t("object_ctx_edit_frame"))
+            object_note_action = menu.addAction(t("object_ctx_edit_note"))
+            menu.addSeparator()
+            object_open_action = menu.addAction(t("object_ctx_open"))
+            object_delete_action = menu.addAction(t("object_ctx_delete_occurrence"))
+            menu.addSeparator()
+            object_mark_action = menu.addAction(t("object_ctx_mark_here"))
+            global_pos = self._image_label.mapToGlobal(QPoint(lx, ly))
+            chosen = menu.exec(global_pos)
+            if chosen is object_edit_action:
+                self._edit_object_data(_object_id)
+            elif object_frame_action is not None and chosen is object_frame_action:
+                self._start_interactive_object_edit(_occ_id, _bbox)
+            elif chosen is object_note_action:
+                self._edit_object_note(_occ_id)
+            elif chosen is object_open_action:
+                self.object_open_requested.emit(_object_id)
+            elif chosen is object_delete_action:
+                self._delete_object_occurrence(_occ_id)
+            elif chosen is object_mark_action:
+                self._object_mode_btn.setChecked(True)
+            return
 
         if face_id is not None:
             if self._selected_face_id != face_id:
@@ -3097,6 +3345,7 @@ class ImageBrowserPanel(QWidget):
             menu.addSeparator()
 
         manual_mark_action = menu.addAction(t("ibp_ctx_manual_mark"))
+        object_mark_action = menu.addAction(t("object_ctx_mark_here"))
 
         global_pos = self._image_label.mapToGlobal(QPoint(lx, ly))
         chosen = menu.exec(global_pos)
@@ -3114,6 +3363,105 @@ class ImageBrowserPanel(QWidget):
             self._delete_face(face_id)
         elif chosen is manual_mark_action:
             self._draw_mode_btn.setChecked(True)
+        elif chosen is object_mark_action:
+            self._object_mode_btn.setChecked(True)
+
+    def _delete_object_occurrence(self, occurrence_id: int) -> None:
+        """Remove a single object occurrence marker from the current image."""
+        from app.services.object_service import ObjectService
+
+        try:
+            with session_scope() as session:
+                ObjectService(session).remove_occurrence(occurrence_id)
+        except Exception:
+            log.exception("Failed to delete object occurrence %d", occurrence_id)
+            return
+        if self._selected_occurrence_id == occurrence_id:
+            self._selected_occurrence_id = None
+            self._draw_hint.setVisible(False)
+        self._refresh_object_markers()
+
+    def _commit_object_bbox(
+        self, occurrence_id: int, x: int, y: int, w: int, h: int
+    ) -> None:
+        """Persist a resized/moved object bounding box."""
+        from app.services.object_service import ObjectService
+
+        try:
+            with session_scope() as session:
+                ObjectService(session).update_occurrence_bbox(occurrence_id, x, y, w, h)
+        except Exception:
+            log.exception("Failed to update object bbox for occurrence %d", occurrence_id)
+
+    def _edit_object_data(self, object_id: int) -> None:
+        """Open the object data sheet (name/description/notes) for editing."""
+        from app.ui.dialogs.object_info_dialog import ObjectInfoDialog
+
+        if ObjectInfoDialog(object_id, self).exec() == QDialog.Accepted:
+            self._refresh_object_markers()
+            self.object_data_changed.emit()
+
+    def _edit_object_note(self, occurrence_id: int) -> None:
+        """Edit the per-image note attached to an object occurrence."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.services.object_service import ObjectService
+
+        current = ""
+        try:
+            with session_scope() as session:
+                for info in ObjectService(session).get_occurrences_for_image(
+                    self._current_image_id
+                ):
+                    if info.occurrence_id == occurrence_id:
+                        current = info.note or ""
+                        break
+        except Exception:
+            log.exception("Failed to read occurrence note %d", occurrence_id)
+        text, ok = QInputDialog.getMultiLineText(
+            self, t("object_ctx_edit_note"), t("object_picker_occ_note"), current
+        )
+        if not ok:
+            return
+        try:
+            with session_scope() as session:
+                ObjectService(session).update_occurrence_note(occurrence_id, text)
+        except Exception:
+            log.exception("Failed to update occurrence note %d", occurrence_id)
+            return
+        self._refresh_object_markers()
+        self.object_data_changed.emit()
+
+    def _start_interactive_object_edit(
+        self, occurrence_id: int, bbox: Tuple[int, int, int, int]
+    ) -> None:
+        """Enter handle-drag edit mode for an object occurrence's bounding box."""
+        if self._full_pixmap is None:
+            return
+        self._hide_inline_editor()
+        self._draw_mode_btn.setChecked(False)
+        self._object_mode_btn.setChecked(False)
+        self._interactive_edit_occ_id = occurrence_id
+        self._interactive_edit_face_id = None
+
+        # Hide the cyan marker for the box being edited so only the handles show.
+        self._image_label.set_object_markers(
+            [
+                (oid, x, y, name, bb)
+                for oid, _o, x, y, name, bb in self._object_marker_data
+                if oid != occurrence_id
+            ]
+        )
+
+        if self._orig_img_bgr is not None:
+            ih, iw = self._orig_img_bgr.shape[:2]
+        else:
+            iw = self._full_pixmap.width()
+            ih = self._full_pixmap.height()
+        self._image_label.set_interactive_edit(tuple(bbox), iw, ih)
+        self._image_label.setFocus()
+        self._draw_hint.setText(t("ibp_bbox_edit_hint"))
+        self._draw_hint.setVisible(True)
 
     # ──────────────────────────────────────────────────────────────────
     # Draw mode
@@ -3132,6 +3480,140 @@ class ImageBrowserPanel(QWidget):
         else:
             self._editing_face_id = None
             self._draw_hint.setText(t("ibp_draw_hint_add"))
+        if active and self._object_mode_btn.isChecked():
+            self._object_mode_btn.setChecked(False)
+
+    def _on_object_mode_toggled(self, active: bool) -> None:
+        if active and self._draw_mode_btn.isChecked():
+            self._draw_mode_btn.setChecked(False)
+        self._image_label.set_object_mode(active)
+        self._draw_hint.setVisible(active)
+        if active:
+            self._hide_inline_editor()
+            self._draw_hint.setText(t("object_rect_hint"))
+
+    def _on_object_rect_drawn(self, label_rect: QRect) -> None:
+        """A rectangle was drawn in object mode → pick object, store bbox."""
+        if self._current_image_id is None or self._full_pixmap is None:
+            return
+        x1, y1 = self._label_to_image(label_rect.left(), label_rect.top())
+        if x1 < 0 or y1 < 0:
+            return
+        x2, y2 = self._label_to_image_clamped(label_rect.right(), label_rect.bottom())
+        if x2 < 0 or y2 < 0:
+            return
+        bx, by = min(x1, x2), min(y1, y2)
+        bw, bh = max(1, abs(x2 - x1)), max(1, abs(y2 - y1))
+
+        from app.services.object_service import ObjectService
+        from app.ui.dialogs.object_picker_dialog import ObjectPickerDialog
+
+        dlg = ObjectPickerDialog(self)
+        if dlg.exec() != QDialog.Accepted or dlg.chosen_object_id is None:
+            return
+        try:
+            with session_scope() as session:
+                ObjectService(session).add_occurrence_bbox(
+                    dlg.chosen_object_id,
+                    self._current_image_id,
+                    bx, by, bw, bh,
+                    note=dlg.occurrence_note,
+                )
+        except Exception:
+            log.exception("Failed to add object bbox occurrence in image browser")
+            return
+        self._refresh_object_markers()
+
+    def _refresh_object_markers(self) -> None:
+        """Load object occurrences for the current image and overlay them."""
+        if self._current_image_id is None:
+            self._object_marker_data = []
+            self._selected_occurrence_id = None
+            self._image_label.set_object_markers([])
+            self._image_label.set_selected_object(None)
+            return
+        from app.db.models import TaggedObject
+        from app.services.object_service import ObjectService
+
+        data: List[tuple] = []
+        try:
+            with session_scope() as session:
+                svc = ObjectService(session)
+                for occ in svc.get_occurrences_for_image(self._current_image_id):
+                    if occ.point_x is None or occ.point_y is None:
+                        continue
+                    obj = session.get(TaggedObject, occ.object_id)
+                    name = obj.name if obj is not None else None
+                    bbox = None
+                    if (
+                        occ.bbox_x is not None and occ.bbox_y is not None
+                        and occ.bbox_w is not None and occ.bbox_h is not None
+                    ):
+                        bbox = (occ.bbox_x, occ.bbox_y, occ.bbox_w, occ.bbox_h)
+                    data.append(
+                        (occ.occurrence_id, occ.object_id, occ.point_x, occ.point_y, name, bbox)
+                    )
+        except Exception:
+            log.exception("Failed to load object markers")
+            data = []
+        self._object_marker_data = data
+        # Drop a stale selection that no longer exists on this image.
+        if self._selected_occurrence_id not in {d[0] for d in data}:
+            self._selected_occurrence_id = None
+        self._image_label.set_object_markers(
+            [(occ_id, x, y, name, bbox) for occ_id, _oid, x, y, name, bbox in data]
+        )
+        self._image_label.set_selected_object(self._selected_occurrence_id)
+
+    def _object_occ_at_label(self, lx: int, ly: int) -> Optional[tuple]:
+        """Return the marker tuple under the label point, or None.
+
+        Bounding-box markers match when the click is inside the box; legacy
+        point markers match within a small display-pixel radius.
+        """
+        if self._full_pixmap is None or not self._object_marker_data:
+            return None
+        cr = self._image_label.contentsRect()
+        lw, lh = cr.width(), cr.height()
+        pw, ph = self._full_pixmap.width(), self._full_pixmap.height()
+        if pw == 0 or ph == 0:
+            return None
+        base = min(lw / pw, lh / ph)
+        eff = base * self._zoom
+        ox = cr.x() + (lw - pw * eff) / 2 + self._pan_x
+        oy = cr.y() + (lh - ph * eff) / 2 + self._pan_y
+        best = None
+        best_metric = None
+        for occ_id, object_id, ix, iy, name, bbox in self._object_marker_data:
+            if bbox is not None:
+                bxx, byy, bww, bhh = bbox
+                dx = ox + bxx * eff
+                dy = oy + byy * eff
+                dw = bww * eff
+                dh = bhh * eff
+                if dx <= lx <= dx + dw and dy <= ly <= dy + dh:
+                    area = dw * dh
+                    # Prefer the smallest enclosing box (topmost).
+                    if best_metric is None or area < best_metric:
+                        best_metric = area
+                        best = (occ_id, object_id, ix, iy, name, bbox)
+            else:
+                dx = ox + ix * eff
+                dy = oy + iy * eff
+                d = ((dx - lx) ** 2 + (dy - ly) ** 2) ** 0.5
+                if d <= 14.0 and (best_metric is None or d < best_metric):
+                    best_metric = d
+                    best = (occ_id, object_id, ix, iy, name, bbox)
+        return best
+
+    def _select_object_marker(self, marker: tuple) -> None:
+        """Highlight a clicked object marker and surface its name."""
+        occ_id = marker[0]
+        name = marker[4]
+        self._selected_occurrence_id = occ_id
+        self._image_label.set_selected_object(occ_id)
+        self._draw_hint.setVisible(True)
+        self._draw_hint.setText(f"📌 {name or '?'}")
 
     def _on_rect_drawn(self, label_rect: QRect) -> None:
         log.debug(
@@ -3225,6 +3707,16 @@ class ImageBrowserPanel(QWidget):
         self, ix: int, iy: int, iw: int, ih: int
     ) -> None:
         """Called each time the user releases a drag handle with a changed bbox."""
+        if self._interactive_edit_occ_id is not None:
+            self._commit_object_bbox(self._interactive_edit_occ_id, ix, iy, iw, ih)
+            # Keep editing: refresh the handle overlay to the new box.
+            if self._orig_img_bgr is not None:
+                img_h, img_w = self._orig_img_bgr.shape[:2]
+            else:
+                img_w = self._full_pixmap.width() if self._full_pixmap else 1
+                img_h = self._full_pixmap.height() if self._full_pixmap else 1
+            self._image_label.set_interactive_edit((ix, iy, iw, ih), img_w, img_h)
+            return
         face_id = self._interactive_edit_face_id
         if face_id is None:
             return
@@ -3272,6 +3764,13 @@ class ImageBrowserPanel(QWidget):
         self, ix: int, iy: int, iw: int, ih: int
     ) -> None:
         """Called when the user clicks outside the box or presses Enter — save and exit."""
+        if self._interactive_edit_occ_id is not None:
+            occ_id = self._interactive_edit_occ_id
+            self._interactive_edit_occ_id = None
+            self._draw_hint.setVisible(False)
+            self._commit_object_bbox(occ_id, ix, iy, iw, ih)
+            self._refresh_object_markers()
+            return
         face_id = self._interactive_edit_face_id
         if face_id is None:
             return
@@ -3315,6 +3814,11 @@ class ImageBrowserPanel(QWidget):
 
     def _on_interactive_bbox_cancelled(self) -> None:
         """Called when the user presses Esc or otherwise cancels the edit."""
+        if self._interactive_edit_occ_id is not None:
+            self._interactive_edit_occ_id = None
+            self._draw_hint.setVisible(False)
+            self._refresh_object_markers()
+            return
         face_id = self._interactive_edit_face_id
         orig_bbox = self._interactive_edit_orig_bbox
         self._interactive_edit_face_id = None
