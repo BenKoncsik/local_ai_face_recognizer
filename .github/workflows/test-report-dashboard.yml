@@ -146,15 +146,33 @@ jobs:
             & $bin -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>$null
             if ($LASTEXITCODE -eq 0) { $pyBin = $bin; break }
           }
-          if (-not $pyBin) {
-            Write-Error "Python 3.11+ not found on the Windows self-hosted runner."
-            exit 1
-          }
 
           $venvDir = Join-Path $env:RUNNER_TEMP "face-local-test-venv"
           if (Test-Path $venvDir) { Remove-Item $venvDir -Recurse -Force }
-          & $pyBin -m venv $venvDir
-          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create Python virtual environment"; exit 1 }
+
+          if ($pyBin) {
+            Write-Host "Using local Python: $pyBin"
+            & $pyBin -m venv $venvDir
+            if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create Python virtual environment"; exit 1 }
+          } else {
+            Write-Host "Python 3.11+ not found on self-hosted runner; bootstrapping a local Python with uv."
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $uvRoot = Join-Path $env:RUNNER_TEMP "uv"
+            $uvZip = Join-Path $env:RUNNER_TEMP "uv.zip"
+            if (Test-Path $uvRoot) { Remove-Item $uvRoot -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $uvRoot | Out-Null
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile $uvZip
+            Expand-Archive -LiteralPath $uvZip -DestinationPath $uvRoot -Force
+            $uv = Get-ChildItem $uvRoot -Filter "uv.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $uv) { Write-Error "uv.exe was not found after extraction"; exit 1 }
+            $env:UV_CACHE_DIR = Join-Path $env:RUNNER_TEMP "uv-cache"
+            $env:UV_PYTHON_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "uv-python"
+            & $uv --version
+            & $uv python install 3.11
+            if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to install Python 3.11"; exit 1 }
+            & $uv venv --seed $venvDir --python 3.11
+            if ($LASTEXITCODE -ne 0) { Write-Error "uv failed to create Python virtual environment"; exit 1 }
+          }
 
           Add-Content $env:GITHUB_PATH (Join-Path $venvDir "Scripts")
           Add-Content $env:GITHUB_ENV "VIRTUAL_ENV=$venvDir"
@@ -167,19 +185,24 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          required_packages=(
+            libegl1
+            libgl1
+            libopengl0
+            libglvnd0
+            libglx0
+            libgl1-mesa-dri
+            libxkbcommon-x11-0
+            libxcb-cursor0
+            libxcb-icccm4
+            libxcb-image0
+            libxcb-keysyms1
+            libxcb-randr0
+            libxcb-render-util0
+            libxcb-xinerama0
+          )
           missing=()
-          for pkg in \
-            libegl1 \
-            libgl1 \
-            libopengl0 \
-            libxkbcommon-x11-0 \
-            libxcb-cursor0 \
-            libxcb-icccm4 \
-            libxcb-image0 \
-            libxcb-keysyms1 \
-            libxcb-randr0 \
-            libxcb-render-util0 \
-            libxcb-xinerama0; do
+          for pkg in "${required_packages[@]}"; do
             dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
           done
 
@@ -192,7 +215,30 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y "${missing[@]}"
           else
-            echo "::warning::Missing Linux GUI packages: ${missing[*]}. Install them once on the self-hosted runner if Qt tests fail."
+            echo "::warning::Missing Linux GUI packages: ${missing[*]}. No passwordless sudo is available; extracting packages into RUNNER_TEMP."
+            work_dir="$RUNNER_TEMP/apt-downloads"
+            root_dir="$RUNNER_TEMP/apt-root"
+            rm -rf "$work_dir" "$root_dir"
+            mkdir -p "$work_dir" "$root_dir"
+            pushd "$work_dir"
+            apt-get download "${missing[@]}"
+            for deb in ./*.deb; do
+              dpkg-deb -x "$deb" "$root_dir"
+            done
+            popd
+
+            lib_paths="$(
+              find "$root_dir" -type d \( -path '*/lib/*' -o -path '*/usr/lib/*' \) \
+                | paste -sd: -
+            )"
+            if [ -n "$lib_paths" ]; then
+              echo "LD_LIBRARY_PATH=$lib_paths:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+              echo "Extracted Qt runtime library paths: $lib_paths"
+            fi
+
+            if ! find "$root_dir" -name 'libEGL.so.1*' -print -quit | grep -q .; then
+              echo "::warning::libEGL.so.1 was not found after package extraction. Install ${missing[*]} once on the runner if Qt import still fails."
+            fi
           fi
 
       - name: Install Python dependencies
@@ -414,8 +460,34 @@ jobs:
             gh --version
             exit 0
           fi
-          echo "gh CLI not found. Install GitHub CLI on this self-hosted Linux runner." >&2
-          exit 1
+
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          release_json="$tmp_dir/gh-release.json"
+          curl -fsSL "https://api.github.com/repos/cli/cli/releases/latest" -o "$release_json"
+          gh_url="$(
+            sed -nE 's/.*"browser_download_url": "(.*linux_arm64\.tar\.gz)".*/\1/p' "$release_json" \
+              | head -n 1
+          )"
+          if [ -z "$gh_url" ]; then
+            echo "Could not find GitHub CLI linux_arm64 download URL." >&2
+            exit 1
+          fi
+
+          curl -fsSL "$gh_url" -o "$tmp_dir/gh.tar.gz"
+          tar -xzf "$tmp_dir/gh.tar.gz" -C "$tmp_dir"
+          gh_bin="$(find "$tmp_dir" -type f -path '*/bin/gh' | head -n 1)"
+          if [ -z "$gh_bin" ]; then
+            echo "gh binary not found after extraction." >&2
+            exit 1
+          fi
+
+          install_dir="$RUNNER_TEMP/gh-cli/bin"
+          mkdir -p "$install_dir"
+          cp "$gh_bin" "$install_dir/gh"
+          chmod +x "$install_dir/gh"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/gh" --version
 
       - uses: actions/setup-python@v6
         with:
