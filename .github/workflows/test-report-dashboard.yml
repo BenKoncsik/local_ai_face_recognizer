@@ -257,6 +257,46 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -e ".[dev,gdrive,tflite]"
 
+      - name: Configure Windows DLL search paths
+        shell: powershell
+        if: runner.os == 'Windows'
+        run: |
+          $sitecustomize = @'
+          import os
+          import site
+          import sys
+
+          if os.name == "nt":
+              _dll_directory_handles = []
+              paths = [
+                  os.path.join(sys.prefix, "Scripts"),
+                  sys.prefix,
+              ]
+              for site_dir in site.getsitepackages():
+                  paths.extend([
+                      os.path.join(site_dir, "cv2"),
+                      os.path.join(site_dir, "msvc_runtime"),
+                  ])
+
+              for path in paths:
+                  if not os.path.isdir(path):
+                      continue
+                  os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
+                  if hasattr(os, "add_dll_directory"):
+                      try:
+                          _dll_directory_handles.append(os.add_dll_directory(path))
+                      except OSError:
+                          pass
+          '@
+          $sitePackages = python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
+          $sitecustomizePath = Join-Path $sitePackages "sitecustomize.py"
+          $sitecustomize | Out-File -Encoding utf8 $sitecustomizePath
+          $customizeCheck = @'
+          import sitecustomize
+          print("Windows DLL search path customization loaded.")
+          '@
+          $customizeCheck | python -
+
       - name: Verify Windows OpenCV runtime
         shell: powershell
         if: runner.os == 'Windows'
