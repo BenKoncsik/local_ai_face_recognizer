@@ -77,6 +77,37 @@ def _decimal_to_dms_rational(value: float) -> list:
     return [(d, 1), (m, 1), (s, 10_000)]
 
 
+def _rewrite_with_exif(path: Path, new_exif: bytes) -> None:
+    """Re-save *path* with *new_exif*, safely on Windows.
+
+    Writes to a temp file (never the locked target) and then performs a
+    lock-tolerant atomic replace — the same strategy used for embedded face
+    metadata. ``quality="keep"`` avoids re-compressing the JPEG. Reuses
+    :func:`app.utils.image_metadata._replace_atomic` so the Windows file-lock
+    handling lives in one place.
+    """
+    from PIL import Image as PilImage
+
+    from app.utils.image_metadata import _replace_atomic, _tmp_for
+
+    tmp = _tmp_for(path)
+    with PilImage.open(path) as src:
+        fmt = src.format or "JPEG"
+        src.load()
+        save_kwargs: dict = {"format": fmt, "exif": new_exif}
+        if fmt == "JPEG":
+            save_kwargs["quality"] = "keep"
+        try:
+            src.save(tmp, **save_kwargs)
+        except (ValueError, OSError):
+            # "keep" needs the original quant tables; fall back to high quality.
+            save_kwargs.pop("quality", None)
+            if fmt == "JPEG":
+                save_kwargs["quality"] = 95
+            src.save(tmp, **save_kwargs)
+    _replace_atomic(tmp, path)
+
+
 def write_exif_gps(path: str | Path, lat: float, lon: float) -> bool:
     """Write GPS coordinates into the EXIF of an image file.
 
@@ -102,7 +133,6 @@ def write_exif_gps(path: str | Path, lat: float, lon: float) -> bool:
 
         with PilImage.open(path) as img:
             raw = img.info.get("exif", b"")
-            img_format = img.format or "JPEG"
 
         exif_dict: dict = piexif.load(raw) if raw else {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}}
 
@@ -113,9 +143,7 @@ def write_exif_gps(path: str | Path, lat: float, lon: float) -> bool:
         exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = _decimal_to_dms_rational(lon)
 
         new_exif = piexif.dump(exif_dict)
-
-        with PilImage.open(path) as img:
-            img.save(str(path), format=img_format, exif=new_exif)
+        _rewrite_with_exif(path, new_exif)
 
         log.info("EXIF GPS written for %s: %.6f, %.6f", path, lat, lon)
         return True
@@ -150,7 +178,6 @@ def write_exif_date(path: str | Path, dt: datetime) -> bool:
 
         with PilImage.open(path) as img:
             raw = img.info.get("exif", b"")
-            img_format = img.format or "JPEG"
 
         exif_dict: dict = piexif.load(raw) if raw else {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}}
 
@@ -161,9 +188,7 @@ def write_exif_date(path: str | Path, dt: datetime) -> bool:
         exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = dt_bytes
 
         new_exif = piexif.dump(exif_dict)
-
-        with PilImage.open(path) as img:
-            img.save(str(path), format=img_format, exif=new_exif)
+        _rewrite_with_exif(path, new_exif)
 
         log.info("EXIF date written for %s: %s", path, dt.strftime("%Y:%m:%d %H:%M:%S"))
         return True

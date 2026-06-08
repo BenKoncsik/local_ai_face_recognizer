@@ -320,7 +320,7 @@ def _save_jpeg(path: Path, img, *, xmp: bytes, exif: bytes) -> None:
         # original tables; retry with a high explicit quality.
         save_kwargs["quality"] = 95
         img.save(tmp, **save_kwargs)
-    os.replace(tmp, path)
+    _replace_atomic(tmp, path)
 
 
 def _save_jpeg_exif_comment(
@@ -355,7 +355,7 @@ def _save_jpeg_exif_comment(
     except (ValueError, OSError):
         save_kwargs["quality"] = 95
         img.save(tmp, **save_kwargs)
-    os.replace(tmp, path)
+    _replace_atomic(tmp, path)
     return WRITE_MODE_EXIF_USER_COMMENT
 
 
@@ -379,7 +379,7 @@ def _save_png(path: Path, img, existing_text: dict, *, xmp: str) -> None:
 
     tmp = _tmp_for(path)
     img.save(tmp, format="PNG", pnginfo=info)
-    os.replace(tmp, path)
+    _replace_atomic(tmp, path)
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +524,51 @@ def _read_exif_comment(exif: bytes) -> Optional[dict]:
 
 def _tmp_for(path: Path) -> Path:
     return path.with_name(path.name + ".facelocal.tmp")
+
+
+def _replace_atomic(tmp: Path, path: Path) -> None:
+    """Replace *path* with *tmp*, tolerating transient Windows file locks.
+
+    ``os.replace`` over an existing file raises ``PermissionError`` on Windows
+    whenever another handle is briefly open on the target — the Search indexer,
+    antivirus, Explorer's thumbnail cache, or the app's own preview. (POSIX has
+    no such restriction, which is why this only bites on Windows.) We retry a few
+    times with a short backoff, then fall back to overwriting the file contents
+    in place. Only if *all* of that fails does the exception propagate, letting
+    the caller degrade to a sidecar JSON file.
+    """
+    import time
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:  # Windows: target momentarily locked
+            last_exc = exc
+            time.sleep(0.08 * (attempt + 1))
+
+    # Last resort: overwrite the original file's bytes in place. This keeps the
+    # original inode/handle and succeeds in some lock scenarios os.replace can't.
+    try:
+        data = tmp.read_bytes()
+        with open(path, "r+b") as dst:
+            dst.seek(0)
+            dst.write(data)
+            dst.truncate()
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        log.info("Atomic replace blocked; wrote in place instead: %s", path)
+        return
+    except Exception as exc:  # noqa: BLE001
+        log.warning("In-place fallback failed for %s: %s", path, exc)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise last_exc if last_exc is not None else exc
 
 
 def _atomic_write_bytes(target: Path, data: bytes) -> None:

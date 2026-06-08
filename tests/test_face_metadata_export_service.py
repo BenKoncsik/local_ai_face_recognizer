@@ -389,6 +389,38 @@ def test_no_overwrite_skips_when_block_exists(db):
     assert result.success
 
 
+def test_windows_lock_on_replace_still_embeds(db, monkeypatch):
+    """Simulate the Windows case where os.replace fails on a locked target.
+
+    The embed must succeed via the in-place fallback, NOT degrade to a sidecar.
+    """
+    jpg = db / "locked.jpg"
+    _write_jpeg(jpg)
+
+    real_replace = os.replace
+
+    def fake_replace(src, dst):
+        # Only the image target is "locked"; the sidecar (a new file) is fine.
+        if str(dst).endswith("locked.jpg"):
+            raise PermissionError("simulated Windows lock")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(meta.os, "replace", fake_replace)
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+    with session_scope() as session:
+        alice = _make_person(session, "Alice")
+        img = _make_image(session, jpg)
+        _make_face(session, img, alice)
+        result = FaceMetadataExportService(session).export_image(img.id)
+
+    assert result.success
+    assert result.write_mode == meta.WRITE_MODE_EXIF_USER_COMMENT  # embedded, not sidecar
+    assert not meta.sidecar_path_for(jpg).exists()
+    payload = meta.read_face_metadata(jpg)
+    assert payload["faces"][0]["person_name"] == "Alice"
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS Finder comment")
 def test_macos_finder_comment_writes_xattr(tmp_path, monkeypatch):
     # The helper is a no-op under pytest (avoids Finder prompts); clear the
