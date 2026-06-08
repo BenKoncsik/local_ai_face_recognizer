@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QCompleter,
     QComboBox,
@@ -16,7 +17,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QScrollArea,
+    QStyle,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -40,8 +43,8 @@ class PersonInfoDialog(QDialog):
         self._is_protected = person.is_protected
         self.setWindowTitle(t("person_info_title", name=person.name))
         self.setMinimumWidth(460)
-        self.setMinimumHeight(420)
-        self.resize(460, 680)
+        self.setMinimumHeight(380)
+        self.resize(460, 600)
 
         # Outer layout: scroll area fills space, buttons pinned at bottom
         outer = QVBoxLayout(self)
@@ -82,23 +85,15 @@ class PersonInfoDialog(QDialog):
 
         self._family_code = QLineEdit(person.family_code or "")
         self._family_code.setPlaceholderText(t("example_family_code"))
-        self._family_code.setToolTip(t("family_code_help"))
+        self._add_help_action(self._family_code, t("family_code_help"))
         form.addRow(t("family_code"), self._family_code)
-
-        family_help = QLabel(t("family_code_help"))
-        family_help.setWordWrap(True)
-        family_help.setStyleSheet("color: #888; font-size: 11px;")
-        form.addRow("", family_help)
 
         self._external_family_code = QLineEdit(person.external_family_code or "")
         self._external_family_code.setPlaceholderText(t("example_external_family_code"))
-        self._external_family_code.setToolTip(t("external_family_code_help"))
+        self._add_help_action(
+            self._external_family_code, t("external_family_code_help")
+        )
         form.addRow(t("external_family_code"), self._external_family_code)
-
-        external_help = QLabel(t("external_family_code_help"))
-        external_help.setWordWrap(True)
-        external_help.setStyleSheet("color: #888; font-size: 11px;")
-        form.addRow("", external_help)
 
         self._last_name = QLineEdit(person.last_name or "")
         self._last_name.setPlaceholderText(t("example_last_name"))
@@ -190,6 +185,29 @@ class PersonInfoDialog(QDialog):
         self._setup_completers()
         self._load_groups()
         self._load_objects()
+
+    def _add_help_action(self, field: QLineEdit, help_text: str) -> None:
+        """Attach a trailing ``?`` help icon inside *field*.
+
+        The icon lives inside the line edit (so editing/clicking the field is
+        never blocked by a wrapping container) and reveals the full *help_text*
+        as a multi-line tooltip on hover. The detail is kept out of the layout,
+        so the dialog stays compact.
+        """
+        # The <html> wrapper guarantees Qt treats the tooltip as rich text on
+        # every platform; each example then sits on its own wrapped line.
+        tooltip_html = "<html>" + help_text.replace(", ", ",<br>") + "</html>"
+        field.setToolTip(tooltip_html)
+
+        icon = self.style().standardIcon(QStyle.SP_TitleBarContextHelpButton)
+        action = field.addAction(icon, QLineEdit.TrailingPosition)
+        action.setToolTip(tooltip_html)
+        # Clicking the icon should reveal the same help, not just hovering it.
+        action.triggered.connect(
+            lambda _=False, w=field, html=tooltip_html: QToolTip.showText(
+                QCursor.pos(), html, w
+            )
+        )
 
     def accept(self) -> None:
         try:
