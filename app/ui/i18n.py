@@ -801,6 +801,18 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                  "Skipped: {skipped}\nFailed: {failed}",
                            "hu": "Feldolgozva: {total}\nKépbe írva: {embedded}\nSidecar JSON: {sidecar}\n"
                                  "Kihagyva: {skipped}\nHiba: {failed}"},
+    "fmeta_summary_cancelled": {"en": "Export cancelled by you.\n\nProcessed: {total}\n"
+                                      "Not processed: {remaining}\nEmbedded: {embedded}\n"
+                                      "Sidecar JSON: {sidecar}\nSkipped: {skipped}\nFailed: {failed}",
+                                "hu": "Az exportot megszakítottad.\n\nFeldolgozva: {total}\n"
+                                      "Kimaradt: {remaining}\nKépbe írva: {embedded}\n"
+                                      "Sidecar JSON: {sidecar}\nKihagyva: {skipped}\nHiba: {failed}"},
+    "fmeta_export_starting": {"en": "Starting export…", "hu": "Export indítása…"},
+    "fmeta_cancel":       {"en": "Cancel export", "hu": "Export megszakítása"},
+    "fmeta_cancelling":   {"en": "Cancelling — finishing the current image…",
+                           "hu": "Megszakítás — az aktuális kép befejezése…"},
+    "fmeta_processing":   {"en": "Processing {done}/{total}: {name}",
+                           "hu": "Feldolgozás {done}/{total}: {name}"},
 
     # ── Status bar update notification ────────────────────────────────────
     "status_update_available":     {"en": "New version available: v{version}  ↑",

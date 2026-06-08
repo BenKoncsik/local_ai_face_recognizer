@@ -34,6 +34,7 @@ from typing import Callable, Iterable, Optional
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image, Person
+from app.jobs.cancellation import CancellationToken
 from app.services.image_library_service import resolve_image_path
 from app.utils import image_metadata as meta
 
@@ -90,13 +91,28 @@ class FaceMetadataExportResult:
 
 @dataclass
 class FaceMetadataExportSummary:
-    """Aggregate outcome for a batch export — what the UI summarises."""
+    """Aggregate outcome for a batch export — what the UI summarises.
+
+    ``cancelled`` is True when the user interrupted the batch.  In that case
+    ``requested_total`` records how many images the batch was asked to process,
+    so the UI can report how many were left untouched (``remaining_count``).
+    A cancellation is **not** a failure: interrupted images are simply absent
+    from ``results`` (they were never started), so they never inflate
+    ``failed_count``.
+    """
 
     results: list[FaceMetadataExportResult] = field(default_factory=list)
+    cancelled: bool = False
+    requested_total: int = 0
 
     @property
     def total(self) -> int:
         return len(self.results)
+
+    @property
+    def remaining_count(self) -> int:
+        """Images that were requested but never processed (e.g. after cancel)."""
+        return max(self.requested_total - self.total, 0)
 
     @property
     def embedded_count(self) -> int:
@@ -171,27 +187,69 @@ class FaceMetadataExportService:
         self,
         image_ids: Iterable[int],
         options: Optional[FaceMetadataExportOptions] = None,
-        progress_cb: Optional[Callable[[int, int], None]] = None,
+        progress_cb: Optional[Callable[[int, int, Optional[str]], None]] = None,
+        cancel_token: Optional[CancellationToken] = None,
     ) -> FaceMetadataExportSummary:
-        """Export metadata for many image ids, returning an aggregate summary."""
+        """Export metadata for many image ids, returning an aggregate summary.
+
+        The export is cooperatively cancellable: ``cancel_token`` is checked
+        *before* each image, so a cancel never interrupts an in-progress
+        metadata write (the writes themselves are atomic — see
+        :mod:`app.utils.image_metadata`).  Already-processed images are kept;
+        the unstarted remainder is simply left out of the summary and the
+        summary is flagged :attr:`~FaceMetadataExportSummary.cancelled`.
+
+        ``progress_cb`` is invoked as ``(done, total, current_name)`` — once
+        before each image with that image's filename (so the UI can show which
+        image is being processed) and once after the last image completes.
+        """
         options = options or FaceMetadataExportOptions()
         ids = list(image_ids)
         total = len(ids)
-        summary = FaceMetadataExportSummary()
+        summary = FaceMetadataExportSummary(requested_total=total)
         for idx, image_id in enumerate(ids):
-            summary.results.append(self.export_image(image_id, options))
+            # Check before starting each image so we never interrupt a write.
+            if cancel_token is not None and cancel_token.cancelled:
+                summary.cancelled = True
+                break
+
+            image = self._session.get(Image, image_id)
+            current_name = None
+            if image is not None:
+                abs_path = resolve_image_path(image)
+                current_name = (
+                    Path(abs_path).name if abs_path
+                    else (Path(image.file_path).name if image.file_path else None)
+                )
             if progress_cb:
-                progress_cb(idx + 1, total)
+                progress_cb(idx, total, current_name)
+
+            if image is None:
+                summary.results.append(
+                    FaceMetadataExportResult(
+                        image_id=image_id,
+                        image_path=None,
+                        success=False,
+                        write_mode=meta.WRITE_MODE_FAILED,
+                        error_message="image not found in database",
+                    )
+                )
+            else:
+                summary.results.append(self._export_one(image, options))
+
+            if progress_cb:
+                progress_cb(idx + 1, total, current_name)
         return summary
 
     def export_all(
         self,
         options: Optional[FaceMetadataExportOptions] = None,
-        progress_cb: Optional[Callable[[int, int], None]] = None,
+        progress_cb: Optional[Callable[[int, int, Optional[str]], None]] = None,
+        cancel_token: Optional[CancellationToken] = None,
     ) -> FaceMetadataExportSummary:
         """Export metadata for every image in the database."""
         ids = [row[0] for row in self._session.query(Image.id).order_by(Image.id).all()]
-        return self.export_images(ids, options, progress_cb)
+        return self.export_images(ids, options, progress_cb, cancel_token)
 
     def build_payload(
         self,

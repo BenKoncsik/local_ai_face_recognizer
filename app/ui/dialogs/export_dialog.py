@@ -545,32 +545,82 @@ class ExportDialog(QDialog):
     def _on_embed_all(self) -> None:
         if not self._confirm_embed():
             return
-        from app.services.face_metadata_export_service import FaceMetadataExportService
 
-        progress = QProgressDialog(t("fmeta_group"), t("close"), 0, 100, self)
+        from app.jobs.cancellation import CancellationToken
+        from app.workers.face_metadata_export_worker import FaceMetadataExportWorker
+
+        # The export touches one file per image and must run off the UI thread,
+        # otherwise the window — and its Cancel button — would freeze. A
+        # CancellationToken lets the user stop the batch cleanly between images.
+        cancel_token = CancellationToken()
+
+        progress = QProgressDialog(t("fmeta_export_starting"), t("fmeta_cancel"), 0, 100, self)
+        progress.setWindowTitle(t("fmeta_group"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
 
-        def cb(done: int, total: int) -> None:
+        worker = FaceMetadataExportWorker(self._fmeta_options(), cancel_token)
+        self._fmeta_worker = worker  # keep a reference so it isn't GC'd
+
+        def request_cancel() -> None:
+            # Fired by the Cancel/Close button. Acknowledge in the UI and ask
+            # the worker to stop; the actual stop happens at the next image
+            # boundary, then on_done() reports the cancelled summary.
+            worker.cancel()
+            progress.setLabelText(t("fmeta_cancelling"))
+
+        # Both the explicit Cancel button and the window-close [X] map to the
+        # same cooperative cancel — the dialog never tears down a running write.
+        progress.canceled.connect(request_cancel)
+
+        def on_progress(done: int, total: int, name: str) -> None:
+            if cancel_token.cancelled:
+                return  # keep the "cancelling…" label, don't overwrite it
             progress.setMaximum(max(total, 1))
             progress.setValue(done)
+            if name:
+                progress.setLabelText(t("fmeta_processing", name=name, done=done + 1, total=total))
 
-        with session_scope() as session:
-            summary = FaceMetadataExportService(session).export_all(
-                self._fmeta_options(), progress_cb=cb
-            )
-        progress.close()
-        self._show_embed_summary(summary)
+        def on_done(summary) -> None:
+            progress.reset()
+            progress.close()
+            self._fmeta_worker = None
+            self._show_embed_summary(summary)
+
+        def on_fail(message: str) -> None:
+            progress.reset()
+            progress.close()
+            self._fmeta_worker = None
+            QMessageBox.critical(self, t("fmeta_done_title"), message)
+
+        worker.progress.connect(on_progress)
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        progress.show()
 
     def _show_embed_summary(self, summary) -> None:
-        msg = t(
-            "fmeta_summary",
-            total=summary.total,
-            embedded=summary.embedded_count,
-            sidecar=summary.sidecar_count,
-            skipped=summary.skipped_count,
-            failed=summary.failed_count,
-        )
+        if getattr(summary, "cancelled", False):
+            msg = t(
+                "fmeta_summary_cancelled",
+                total=summary.total,
+                remaining=summary.remaining_count,
+                embedded=summary.embedded_count,
+                sidecar=summary.sidecar_count,
+                skipped=summary.skipped_count,
+                failed=summary.failed_count,
+            )
+        else:
+            msg = t(
+                "fmeta_summary",
+                total=summary.total,
+                embedded=summary.embedded_count,
+                sidecar=summary.sidecar_count,
+                skipped=summary.skipped_count,
+                failed=summary.failed_count,
+            )
         errors = summary.errors
         if errors:
             msg += "\n\n" + "\n".join(errors[:10])
