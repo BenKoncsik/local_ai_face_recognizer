@@ -257,7 +257,6 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -e ".[dev,gdrive,tflite]"
           python -m pip uninstall -y opencv-python opencv-python-headless
-          python -m pip install --no-deps "opencv-python-headless==4.8.1.78"
 
       - name: Configure Windows DLL search paths
         shell: powershell
@@ -289,6 +288,10 @@ jobs:
                           _dll_directory_handles.append(os.add_dll_directory(path))
                       except OSError:
                           pass
+              try:
+                  import msvc_runtime  # noqa: F401
+              except Exception:
+                  pass
           '@
           $sitePackages = python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
           $sitecustomizePath = Join-Path $sitePackages "sitecustomize.py"
@@ -299,7 +302,7 @@ jobs:
           '@
           $customizeCheck | python -
 
-      - name: Verify Windows OpenCV runtime
+      - name: Select Windows OpenCV runtime
         continue-on-error: true
         shell: powershell
         if: runner.os == 'Windows'
@@ -329,21 +332,36 @@ jobs:
           '@
 
           $opencvCheck = @'
+          import msvc_runtime  # noqa: F401
           import cv2
           print("OpenCV import OK:", cv2.__version__)
           '@
-          $opencvCheck | python -
-          if ($LASTEXITCODE -eq 0) { exit 0 }
 
-          Write-Warning "OpenCV could not import on Windows. Printing diagnostics and reinstalling the pinned headless wheel."
+          $reportDir = "test-reports\${{ matrix.platform }}"
+          New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+
+          $versions = @(
+            "4.10.0.84",
+            "4.8.1.78",
+            "4.7.0.72",
+            "4.6.0.66",
+            "4.5.5.64"
+          )
+
+          foreach ($version in $versions) {
+            Write-Host "Trying opencv-python-headless==$version"
+            python -m pip uninstall -y opencv-python opencv-python-headless
+            python -m pip install --no-deps "opencv-python-headless==$version"
+            $opencvCheck | python -
+            if ($LASTEXITCODE -eq 0) {
+              Set-Content -Path (Join-Path $reportDir "opencv_version.txt") -Value $version -Encoding ascii
+              exit 0
+            }
+          }
+
+          Write-Warning "No pinned opencv-python-headless wheel could import on this Windows runner. Printing diagnostics."
           $diagnoseOpenCv | python -
-          python -m pip uninstall -y opencv-python
-          python -m pip install --force-reinstall --no-deps "opencv-python-headless==4.8.1.78"
-          $opencvCheck = @'
-          import cv2
-          print("OpenCV headless import OK:", cv2.__version__)
-          '@
-          $opencvCheck | python -
+          exit 1
 
       - name: Run test suite
         id: tests
