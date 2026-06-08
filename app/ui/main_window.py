@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QSystemTrayIcon,
@@ -64,6 +65,7 @@ from app.ui.panels.objects_panel import ObjectsPanel
 from app.ui.panels.persons_panel import PersonsPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
+from app.ui.widgets.flow_layout import FlowContainer
 from app.workers.match_job_worker import MatchJobWorker
 from app.workers.pipeline_worker import PipelineWorker
 
@@ -260,6 +262,12 @@ class MainWindow(QMainWindow):
         face_layout.setContentsMargins(0, 0, 0, 0)
 
         splitter = QSplitter(Qt.Horizontal)
+        # A wide, visible handle that is easy to grab, and panels that can be
+        # dragged down to their real minimums without snapping shut.
+        splitter.setHandleWidth(8)
+        splitter.setChildrenCollapsible(False)
+        splitter.setOpaqueResize(True)
+        self._face_splitter = splitter
 
         self._sidebar = SidebarPanel()
         self._sidebar.person_selected.connect(self._on_person_selected)
@@ -279,11 +287,15 @@ class MainWindow(QMainWindow):
         centre_layout.addWidget(self._cluster_panel)
 
         actions = self._build_action_row()
-        centre_layout.addLayout(actions)
+        centre_layout.addWidget(actions)
+        # The centre column must be able to shrink so the preview splitter
+        # can be dragged wider; only the sidebar keeps a hard minimum.
+        centre.setMinimumWidth(160)
         splitter.addWidget(centre)
 
         self._preview_panel = PreviewPanel()
-        self._preview_panel.setMinimumWidth(280)
+        self._preview_panel.setMinimumWidth(200)
+        self._preview_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._preview_panel.face_selected.connect(self._on_preview_face_selected)
         self._preview_panel.face_assign_requested.connect(self._on_preview_face_assign)
         self._preview_panel.face_delete_requested.connect(self._on_preview_face_delete)
@@ -305,10 +317,17 @@ class MainWindow(QMainWindow):
         )
         splitter.addWidget(self._preview_panel)
 
+        # Sidebar keeps its size; the centre grid and the preview share the
+        # remaining width and follow the handle as it is dragged.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 3)
-        splitter.setSizes([320, 300, 660])
+        splitter.setStretchFactor(2, 2)
+        splitter.setSizes([320, 480, 480])
+        splitter.setStyleSheet(
+            "QSplitter::handle:horizontal { background: #45475a; "
+            "margin: 2px 0; border-radius: 2px; }"
+            "QSplitter::handle:horizontal:hover { background: #89b4fa; }"
+        )
 
         face_layout.addWidget(splitter)
         self._tabs.addTab(face_widget, t("tab_face_recognition"))
@@ -350,8 +369,13 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self._tabs)
 
-    def _build_action_row(self) -> QHBoxLayout:
-        layout = QHBoxLayout()
+    def _build_action_row(self) -> QWidget:
+        # A wrapping flow layout: when the centre column is too narrow to fit
+        # every button on one line, the buttons reflow onto additional rows
+        # instead of clipping or forcing the column wide. This keeps the
+        # preview splitter freely draggable at any width.
+        container = FlowContainer(h_spacing=4, v_spacing=4)
+        layout = container.layout()
 
         self._rename_btn = QPushButton()
         self._rename_btn.setEnabled(False)
@@ -398,8 +422,7 @@ class MainWindow(QMainWindow):
         self._person_info_btn.clicked.connect(self._on_person_info)
         layout.addWidget(self._person_info_btn)
 
-        layout.addStretch()
-        return layout
+        return container
 
     def _build_log_dock(self) -> None:
         self._log_panel = LogPanel()

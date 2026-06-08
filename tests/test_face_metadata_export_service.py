@@ -452,3 +452,76 @@ def test_png_xmp_roundtrip(db):
     assert result.write_mode == meta.WRITE_MODE_XMP
     payload = meta.read_face_metadata(png)
     assert payload["faces"][0]["person_name"] == "Alice"
+
+
+# ---------------------------------------------------------------------------
+# Cancellation
+# ---------------------------------------------------------------------------
+
+def test_cancel_stops_before_next_image(db):
+    """A cancel requested mid-batch stops further processing cleanly."""
+    from app.jobs.cancellation import CancellationToken
+
+    paths = [db / f"img_{i}.jpg" for i in range(4)]
+    for p in paths:
+        _write_jpeg(p)
+
+    token = CancellationToken()
+
+    with session_scope() as session:
+        alice = _make_person(session, "Alice")
+        ids = []
+        for p in paths:
+            img = _make_image(session, p)
+            _make_face(session, img, alice)
+            ids.append(img.id)
+
+        # Cancel after the second image has finished.
+        def cb(done, total, name):
+            if done == 2:
+                token.cancel()
+
+        summary = FaceMetadataExportService(session).export_images(
+            ids, progress_cb=cb, cancel_token=token
+        )
+
+    assert summary.cancelled is True
+    assert summary.requested_total == 4
+    assert summary.total == 2            # only two were processed
+    assert summary.remaining_count == 2  # the rest were left untouched
+    assert summary.failed_count == 0     # cancellation is not a failure
+    # The two unprocessed images must have no metadata written.
+    assert meta.read_face_metadata(paths[0]) is not None
+    assert meta.read_face_metadata(paths[3]) is None
+
+
+def test_no_cancel_processes_all(db):
+    """Without cancellation everything is processed and cancelled stays False."""
+    from app.jobs.cancellation import CancellationToken
+
+    paths = [db / f"all_{i}.jpg" for i in range(3)]
+    for p in paths:
+        _write_jpeg(p)
+
+    seen = []
+
+    with session_scope() as session:
+        alice = _make_person(session, "Alice")
+        ids = []
+        for p in paths:
+            img = _make_image(session, p)
+            _make_face(session, img, alice)
+            ids.append(img.id)
+
+        summary = FaceMetadataExportService(session).export_images(
+            ids,
+            progress_cb=lambda done, total, name: seen.append((done, total, name)),
+            cancel_token=CancellationToken(),
+        )
+
+    assert summary.cancelled is False
+    assert summary.total == 3
+    assert summary.remaining_count == 0
+    # Progress reports the filename of the image being processed.
+    names = {name for _, _, name in seen if name}
+    assert names == {p.name for p in paths}

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QImageReader, QPainter, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +26,7 @@ _BADGE_COLOR = "#f57c00"   # orange
 log = logging.getLogger(__name__)
 
 _THUMB_SIZE = 96
-_THUMB_COLS = 5
+_THUMB_SPACING = 4
 _ZOOM_SIZE = 280
 
 
@@ -244,11 +244,15 @@ class ClusterPanel(QWidget):
         self._face_names: dict[int, Optional[str]] = {}
         self._thumbs: dict[int, FaceThumbnail] = {}
         self._selected_ids: set[int] = set()
+        # Ordered thumbnails as currently shown, used to reflow on resize.
+        self._ordered_thumbs: list[FaceThumbnail] = []
+        self._cur_cols: int = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setContentsMargins(2, 2, 2, 2)
+        outer.setSpacing(2)
 
         self._header = QLabel(t("select_person_sidebar"))
         self._header.setAlignment(Qt.AlignCenter)
@@ -259,13 +263,41 @@ class ClusterPanel(QWidget):
         self._hint.setStyleSheet("color: #888; font-size: 11px;")
         outer.addWidget(self._hint)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
         self._grid_widget = QWidget()
         self._grid = QGridLayout(self._grid_widget)
-        self._grid.setSpacing(6)
-        scroll.setWidget(self._grid_widget)
-        outer.addWidget(scroll)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(_THUMB_SPACING)
+        # Pack thumbnails to the top-left; leftover space goes to the edges
+        # rather than spreading the fixed-size cells apart.
+        self._grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._scroll.setWidget(self._grid_widget)
+        # React directly to the viewport width changing — this is the value the
+        # column count is derived from, so reflowing here makes the grid track
+        # the splitter live as the preview panel is dragged wider/narrower.
+        self._scroll.viewport().installEventFilter(self)
+        outer.addWidget(self._scroll)
+
+    def _compute_cols(self) -> int:
+        """How many thumbnail columns fit in the current viewport width."""
+        avail = self._scroll.viewport().width()
+        per_item = _THUMB_SIZE + _THUMB_SPACING
+        return max(1, (avail + _THUMB_SPACING) // per_item)
+
+    def _maybe_reflow(self) -> None:
+        cols = self._compute_cols()
+        if cols != self._cur_cols:
+            self._reflow(cols)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if obj is self._scroll.viewport() and event.type() == QEvent.Resize:
+            self._maybe_reflow()
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._maybe_reflow()
 
     # ------------------------------------------------------------------
     # Public API
@@ -276,15 +308,15 @@ class ClusterPanel(QWidget):
         self._clear_grid()
         self._face_names.clear()
         self._thumbs.clear()
+        self._ordered_thumbs.clear()
         self._selected_ids.clear()
         self.selection_changed.emit(0)
         self._header.setText(t("face_count_header", name=person_name, n=len(faces)))
 
-        for i, face in enumerate(faces):
-            row, col = divmod(i, _THUMB_COLS)
+        for face in faces:
             log.debug(
                 "Cluster grid item: FaceId=%s PersonId=%s crop_path=%r "
-                "image_path=%r bbox=(%s,%s,%s,%s) preview_source=%r row=%d col=%d",
+                "image_path=%r bbox=(%s,%s,%s,%s) preview_source=%r",
                 face.id,
                 face.person_id,
                 face.crop_path,
@@ -294,24 +326,27 @@ class ClusterPanel(QWidget):
                 face.bbox_w,
                 face.bbox_h,
                 face.crop_path,
-                row,
-                col,
             )
             thumb = FaceThumbnail(face)
             thumb.clicked.connect(self._on_thumb_clicked)
             thumb.right_clicked.connect(self.face_right_clicked.emit)
             self._face_names[face.id] = thumb._person_name
             self._thumbs[face.id] = thumb
-            self._grid.addWidget(thumb, row, col)
+            self._ordered_thumbs.append(thumb)
 
-        # Fill remaining cells in last row
-        if faces:
-            remainder = len(faces) % _THUMB_COLS
-            if remainder:
-                for col in range(remainder, _THUMB_COLS):
-                    spacer = QWidget()
-                    spacer.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
-                    self._grid.addWidget(spacer, len(faces) // _THUMB_COLS, col)
+        # Force a re-layout at the current width.
+        self._cur_cols = 0
+        self._reflow(self._compute_cols())
+
+    def _reflow(self, cols: int) -> None:
+        """Arrange the existing thumbnails into *cols* columns."""
+        self._cur_cols = cols
+        # Detach without deleting — the thumbnails are reused.
+        for thumb in self._ordered_thumbs:
+            self._grid.removeWidget(thumb)
+        for i, thumb in enumerate(self._ordered_thumbs):
+            row, col = divmod(i, cols)
+            self._grid.addWidget(thumb, row, col)
 
     def get_face_person_name(self, face_id: int) -> Optional[str]:
         """Return the person name for *face_id* as loaded in the current grid."""
@@ -334,6 +369,8 @@ class ClusterPanel(QWidget):
         self._clear_grid()
         self._face_names.clear()
         self._thumbs.clear()
+        self._ordered_thumbs.clear()
+        self._cur_cols = 0
         self._selected_ids.clear()
         self.selection_changed.emit(0)
         self._header.setText(t("select_person_sidebar"))

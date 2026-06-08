@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from app.db.models import Face
 from app.ui.i18n import t
+from app.ui.widgets.flow_layout import FlowContainer
 
 log = logging.getLogger(__name__)
 
@@ -784,7 +785,7 @@ class PreviewPanel(QWidget):
         self._image_label = _FaceImageLabel()
         self._image_label.setText(t("preview_empty"))
         self._image_label.setAlignment(Qt.AlignCenter)
-        self._image_label.setMinimumSize(300, 200)
+        self._image_label.setMinimumSize(160, 160)
         self._image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._image_label.setStyleSheet(
             "QLabel { background: #222; border: 1px solid #444; }"
@@ -893,25 +894,21 @@ class PreviewPanel(QWidget):
         layout.addLayout(nav_row)
 
         # ── Action buttons ────────────────────────────────────────────────
-        # Each button uses Expanding policy so the row fills available width.
-        # The stretch factor passed to addWidget() is proportional to the
-        # character count of the label: longer text → more allocated width →
-        # equal padding density across all buttons regardless of label length.
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(4)
+        # A wrapping flow layout: buttons keep their natural width and break
+        # onto further rows when the panel is too narrow to fit them on one
+        # line, so labels never clip no matter how the splitter is dragged.
+        btn_container = FlowContainer(h_spacing=4, v_spacing=4)
+        btn_row = btn_container.layout()
 
-        _BTN_STYLE = "QPushButton { padding: 3px 4px; }"
+        _BTN_STYLE = "QPushButton { padding: 3px 8px; }"
 
         def _action_btn(text: str) -> QPushButton:
             b = QPushButton(text)
-            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            b.setMinimumWidth(0)
             b.setStyleSheet(_BTN_STYLE)
             return b
 
         def _add(btn: QPushButton) -> None:
-            # stretch ∝ visible character count so label always fits
-            btn_row.addWidget(btn, stretch=max(1, len(btn.text())))
+            btn_row.addWidget(btn)
 
         self._open_btn = _action_btn(t("open_file_manager"))
         self._open_btn.setEnabled(False)
@@ -952,7 +949,7 @@ class PreviewPanel(QWidget):
         self._delete_btn.clicked.connect(self._delete_selected_face)
         _add(self._delete_btn)
 
-        layout.addLayout(btn_row)
+        layout.addWidget(btn_container)
 
     # ── Overlay control handlers ──────────────────────────────────────────
 
