@@ -729,6 +729,55 @@ jobs:
             --repo "${{ env.ARTIFACT_REPO }}" \
             --clobber
 
+      - name: Ensure GitHub Pages branch source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          page_payload='{"source":{"branch":"gh-pages","path":"/"}}'
+
+          set +e
+          echo "$page_payload" | gh api \
+            --method PUT \
+            "repos/${GITHUB_REPOSITORY}/pages" \
+            --input -
+          configure_status=$?
+
+          if [ "$configure_status" -ne 0 ]; then
+            echo "$page_payload" | gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/pages" \
+              --input -
+            configure_status=$?
+          fi
+          set -e
+
+          pages_json="$(gh api "repos/${GITHUB_REPOSITORY}/pages")"
+          PAGES_JSON="$pages_json" python - <<'PY'
+          import json
+          import os
+          import sys
+
+          pages = json.loads(os.environ["PAGES_JSON"])
+          source = pages.get("source") or {}
+          branch = source.get("branch")
+          path = source.get("path")
+          if branch == "gh-pages" and path == "/":
+              print("GitHub Pages source is gh-pages /")
+              raise SystemExit(0)
+
+          print(
+              "::error::GitHub Pages source is "
+              f"{branch or '<unset>'} {path or '<unset>'}; expected gh-pages /"
+          )
+          print(
+              "::error::Set repository Pages source to branch 'gh-pages' and "
+              "folder '/' before publishing the dashboard."
+          )
+          sys.exit(1)
+          PY
+
       - name: Publish GitHub Pages dashboard
         shell: bash
         env:
@@ -750,32 +799,6 @@ jobs:
           git add .
           git commit -m "Update test dashboard for run ${GITHUB_RUN_NUMBER}" || exit 0
           git push --force origin gh-pages
-
-      - name: Configure GitHub Pages branch source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          page_payload='{"source":{"branch":"gh-pages","path":"/"}}'
-
-          echo "$page_payload" | gh api \
-            --method PUT \
-            "repos/${GITHUB_REPOSITORY}/pages" \
-            --input -
-          status=$?
-
-          if [ "$status" -ne 0 ]; then
-            echo "$page_payload" | gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/pages" \
-              --input -
-            status=$?
-          fi
-
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Could not configure GitHub Pages automatically. In repository settings, set Pages source to branch 'gh-pages' and folder '/'."
-          fi
 
       - name: Add dashboard link to job summary
         shell: bash
