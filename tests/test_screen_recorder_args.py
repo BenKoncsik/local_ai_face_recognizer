@@ -204,16 +204,19 @@ def test_cursor_disabled() -> None:
 
 
 def test_concat_list_escapes_quotes() -> None:
-    body = build_concat_list([Path("/a/seg_1.mp4"), Path("/a/o'clock.mp4")])
-    assert "file '/a/seg_1.mp4'" in body
+    first = Path("/a/seg_1.mp4")
+    second = Path("/a/o'clock.mp4")
+    body = build_concat_list([first, second])
+    assert f"file '{first}'" in body
     assert r"o'\''clock" in body
 
 
 def test_concat_args() -> None:
-    args = build_concat_args(Path("/a/list.txt"), Path("/a/out.mp4"))
+    output = Path("/a/out.mp4")
+    args = build_concat_args(Path("/a/list.txt"), output)
     assert "concat" in args
     assert "-c" in args and "copy" in args
-    assert args[-1] == "/a/out.mp4"
+    assert args[-1] == str(output)
 
 
 def test_parse_avfoundation_devices() -> None:

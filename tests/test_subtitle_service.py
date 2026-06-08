@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.services.subtitle_service import (
     find_matching_subtitle,
     subtitle_path_for_video,
@@ -9,9 +11,8 @@ from app.services.subtitle_service import (
 
 
 def test_subtitle_path_for_video_uses_same_basename() -> None:
-    assert str(subtitle_path_for_video("/tmp/recording.mp4")).endswith(
-        "/tmp/recording.srt"
-    )
+    video = Path("/tmp/recording.mp4")
+    assert subtitle_path_for_video(video) == video.with_suffix(".srt")
 
 
 def test_exact_recording_srt_is_selected(tmp_path) -> None:

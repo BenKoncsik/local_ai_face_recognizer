@@ -351,8 +351,10 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           set +e
-          TEST_REPORT_DIR="test-reports/${{ matrix.platform }}" scripts/run_tests.sh
+          report_dir="test-reports/${{ matrix.platform }}"
+          TEST_REPORT_DIR="$report_dir" scripts/run_tests.sh
           status=$?
+          printf '%s\n' "$status" > "$report_dir/exit_code.txt"
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -364,7 +366,9 @@ jobs:
           $env:TEST_REPORT_DIR = "test-reports\${{ matrix.platform }}"
           powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_tests.ps1
           $status = $LASTEXITCODE
-          "exit_code=$status" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          New-Item -ItemType Directory -Force -Path $env:TEST_REPORT_DIR | Out-Null
+          Set-Content -Path (Join-Path $env:TEST_REPORT_DIR "exit_code.txt") -Value $status -Encoding ascii
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "exit_code=$status"
           exit 0
 
       - name: Package test report bundle
@@ -377,6 +381,7 @@ jobs:
           [ -f "$report_dir/latest.md" ] || printf '# Test Report\n\nThe pytest report was not generated.\n' > "$report_dir/latest.md"
           [ -f "$report_dir/latest.log" ] || printf 'The pytest log was not generated.\n' > "$report_dir/latest.log"
           [ -f "$report_dir/latest.junit.xml" ] || printf '<testsuites tests="0" failures="0" errors="0" skipped="0"></testsuites>\n' > "$report_dir/latest.junit.xml"
+          [ -f "$report_dir/exit_code.txt" ] || printf '1\n' > "$report_dir/exit_code.txt"
           python - <<'PY'
           from pathlib import Path
           import zipfile
@@ -401,6 +406,8 @@ jobs:
           if (-not (Test-Path $latestMd)) { "# Test Report`n`nThe pytest report was not generated." | Out-File -Encoding utf8 $latestMd }
           if (-not (Test-Path $latestLog)) { "The pytest log was not generated." | Out-File -Encoding utf8 $latestLog }
           if (-not (Test-Path $latestXml)) { '<testsuites tests="0" failures="0" errors="0" skipped="0"></testsuites>' | Out-File -Encoding utf8 $latestXml }
+          $exitCodePath = Join-Path $reportDir "exit_code.txt"
+          if (-not (Test-Path $exitCodePath)) { Set-Content -Path $exitCodePath -Value "1" -Encoding ascii }
           python -c "from pathlib import Path; import zipfile; report_dir=Path('test-reports')/'${{ matrix.platform }}'; bundle=report_dir/'test-report-bundle.zip'; zf=zipfile.ZipFile(bundle,'w',compression=zipfile.ZIP_DEFLATED); [zf.write(report_dir/name,name) for name in ('latest.md','latest.log','latest.junit.xml')]; zf.close()"
 
       - name: Upload test report artifact
@@ -486,31 +493,35 @@ jobs:
         if: always() && runner.os != 'Windows'
         shell: bash
         run: |
+          report_dir="test-reports/${{ matrix.platform }}"
+          status="$(cat "$report_dir/exit_code.txt" 2>/dev/null || printf 'missing')"
           {
             echo "## Test report (${{ matrix.label }})"
             echo ""
             echo "- Local report path in artifact: test-reports/${{ matrix.platform }}/latest.md"
             echo "- Artifact fallback release tag: artifact-tests-${{ matrix.platform }}-${{ github.run_number }}-${{ github.run_attempt }}"
-            echo "- Test exit code: ${{ steps.tests.outputs.exit_code }}${{ steps.tests_windows.outputs.exit_code }}"
+            echo "- Test exit code: $status"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Add report links to job summary
         if: always() && runner.os == 'Windows'
         shell: powershell
         run: |
+          $statusPath = "test-reports\${{ matrix.platform }}\exit_code.txt"
+          $status = if (Test-Path $statusPath) { (Get-Content $statusPath -Raw).Trim() } else { "missing" }
           @(
             "## Test report (${{ matrix.label }})",
             "",
             "- Local report path in artifact: test-reports/${{ matrix.platform }}/latest.md",
             "- Artifact fallback release tag: artifact-tests-${{ matrix.platform }}-${{ github.run_number }}-${{ github.run_attempt }}",
-            "- Test exit code: ${{ steps.tests.outputs.exit_code }}${{ steps.tests_windows.outputs.exit_code }}"
+            "- Test exit code: $status"
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Fail job if tests failed
         if: always() && runner.os != 'Windows'
         shell: bash
         run: |
-          status="${{ steps.tests.outputs.exit_code }}${{ steps.tests_windows.outputs.exit_code }}"
+          status="$(cat "test-reports/${{ matrix.platform }}/exit_code.txt" 2>/dev/null || true)"
           if [ -z "$status" ]; then
             echo "Test step did not report an exit code."
             exit 1
@@ -521,7 +532,8 @@ jobs:
         if: always() && runner.os == 'Windows'
         shell: powershell
         run: |
-          $status = "${{ steps.tests.outputs.exit_code }}${{ steps.tests_windows.outputs.exit_code }}"
+          $statusPath = "test-reports\${{ matrix.platform }}\exit_code.txt"
+          $status = if (Test-Path $statusPath) { (Get-Content $statusPath -Raw).Trim() } else { "" }
           if (-not $status) {
             Write-Error "Test step did not report an exit code."
             exit 1
