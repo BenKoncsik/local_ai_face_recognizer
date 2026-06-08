@@ -11,6 +11,8 @@ $ReportDir = if ($env:TEST_REPORT_DIR) { $env:TEST_REPORT_DIR } else { Join-Path
 $LogFile = Join-Path $ReportDir "latest.log"
 $JunitFile = Join-Path $ReportDir "latest.junit.xml"
 $ReportFile = Join-Path $ReportDir "latest.md"
+$CoverageJson = Join-Path $ReportDir "coverage.json"
+$CoverageXml = Join-Path $ReportDir "coverage.xml"
 
 Set-Location $RepoRoot
 
@@ -32,9 +34,21 @@ if (-not $PytestArgs -or $PytestArgs.Count -eq 0) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
-Remove-Item $LogFile, $JunitFile, $ReportFile -ErrorAction SilentlyContinue
+Remove-Item $LogFile, $JunitFile, $ReportFile, $CoverageJson, $CoverageXml -ErrorAction SilentlyContinue
 
-$Command = @($Python, "-m", "pytest", "--tb=short", "-ra") + $PytestArgs + @("--junitxml=$JunitFile")
+$Command = @(
+    $Python,
+    "-m",
+    "pytest",
+    "--tb=short",
+    "-ra"
+) + $PytestArgs + @(
+    "--junitxml=$JunitFile",
+    "--cov=app",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=json:$CoverageJson",
+    "--cov-report=xml:$CoverageXml"
+)
 
 Write-Host "==> Running tests"
 Write-Host "    Python: $(& $Python -c 'import sys; print(sys.executable)')"
@@ -43,7 +57,7 @@ Write-Host "    Log: $LogFile"
 Write-Host "    Report: $ReportFile"
 Write-Host ""
 
-$Output = & $Python -m pytest --tb=short -ra @PytestArgs "--junitxml=$JunitFile" 2>&1
+$Output = & $Python -m pytest --tb=short -ra @PytestArgs "--junitxml=$JunitFile" "--cov=app" "--cov-report=term-missing:skip-covered" "--cov-report=json:$CoverageJson" "--cov-report=xml:$CoverageXml" 2>&1
 $PytestStatus = $LASTEXITCODE
 $Output | Tee-Object -FilePath $LogFile
 
@@ -52,6 +66,8 @@ $env:PYTEST_COMMAND = ($Command -join " ")
 $env:LOG_FILE = "$LogFile"
 $env:JUNIT_FILE = "$JunitFile"
 $env:REPORT_FILE = "$ReportFile"
+$env:COVERAGE_JSON = "$CoverageJson"
+$env:COVERAGE_XML = "$CoverageXml"
 
 $ReportScript = @'
 from __future__ import annotations
@@ -59,6 +75,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -81,11 +98,41 @@ def testcase_id(case: ET.Element) -> str:
     return name
 
 
+def coverage_summary(path: Path) -> dict[str, float | int | None]:
+    empty = {
+        "percent": None,
+        "covered_lines": None,
+        "total_lines": None,
+        "missing_lines": None,
+    }
+    if not path.exists() or not path.stat().st_size:
+        return empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return empty
+    totals = payload.get("totals") if isinstance(payload, dict) else None
+    if not isinstance(totals, dict):
+        return empty
+    total_lines = totals.get("num_statements")
+    covered_lines = totals.get("covered_lines")
+    missing_lines = totals.get("missing_lines")
+    percent = totals.get("percent_covered")
+    return {
+        "percent": float(percent) if isinstance(percent, int | float) else None,
+        "covered_lines": int(covered_lines) if isinstance(covered_lines, int) else None,
+        "total_lines": int(total_lines) if isinstance(total_lines, int) else None,
+        "missing_lines": int(missing_lines) if isinstance(missing_lines, int) else None,
+    }
+
+
 pytest_status = int(os.environ["PYTEST_STATUS"])
 pytest_command = os.environ["PYTEST_COMMAND"]
 log_path = Path(os.environ["LOG_FILE"])
 junit_path = Path(os.environ["JUNIT_FILE"])
 report_path = Path(os.environ["REPORT_FILE"])
+coverage_json_path = Path(os.environ["COVERAGE_JSON"])
+coverage_xml_path = Path(os.environ["COVERAGE_XML"])
 
 log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
 log_lines = log_text.splitlines()
@@ -141,8 +188,11 @@ if junit_path.exists() and junit_path.stat().st_size:
         elif skipped is not None:
             tests["skipped"].append((node_id, first_line(skipped.attrib.get("message") or skipped.text)))
         else:
-            tests["passed"].append((node_id, "All assertions and fixtures completed successfully."))
+                tests["passed"].append((node_id, "All assertions and fixtures completed successfully."))
 
+total_tests = sum(len(items) for items in tests.values())
+pass_rate = (len(tests["passed"]) / total_tests * 100.0) if total_tests else 0.0
+coverage = coverage_summary(coverage_json_path)
 status_text = "PASS" if pytest_status == 0 else f"FAIL (exit code {pytest_status})"
 generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -154,7 +204,16 @@ lines = [
     f"- Command: `{pytest_command}`",
     f"- Raw log: `{log_path}`",
     f"- JUnit XML: `{junit_path}`",
+    f"- Coverage JSON: `{coverage_json_path}`",
+    f"- Coverage XML: `{coverage_xml_path}`",
+    f"- Total tests: {total_tests}",
+    f"- Pass rate: {pass_rate:.2f}",
 ]
+if coverage["percent"] is not None:
+    lines.append(f"- Coverage: {coverage['percent']:.2f}")
+    lines.append(f"- Coverage covered lines: {coverage['covered_lines']}")
+    lines.append(f"- Coverage total lines: {coverage['total_lines']}")
+    lines.append(f"- Coverage missing lines: {coverage['missing_lines']}")
 if summary_line:
     lines.append(f"- Pytest summary: `{summary_line}`")
 
