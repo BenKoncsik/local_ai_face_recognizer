@@ -62,7 +62,7 @@ def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
-def build_run_metadata(parsed: dict[str, Any], run_slug: str) -> dict[str, Any]:
+def build_run_metadata(parsed: dict[str, Any], run_slug: str, platform: str) -> dict[str, Any]:
     repository = env("GITHUB_REPOSITORY", "local")
     server_url = env("GITHUB_SERVER_URL", "https://github.com")
     run_id = env("GITHUB_RUN_ID", f"local-{run_slug}")
@@ -72,13 +72,14 @@ def build_run_metadata(parsed: dict[str, Any], run_slug: str) -> dict[str, Any]:
     ref_name = env("GITHUB_REF_NAME", "")
 
     return {
-        "key": f"{run_id}-{run_attempt}",
+        "key": f"{run_id}-{run_attempt}-{platform}",
         "run_id": run_id,
         "run_attempt": run_attempt,
         "run_number": run_number,
         "workflow": env("GITHUB_WORKFLOW", "Local test run"),
         "event": env("GITHUB_EVENT_NAME", "local"),
         "actor": env("GITHUB_ACTOR", ""),
+        "platform": platform,
         "repository": repository,
         "branch": ref_name,
         "sha": sha,
@@ -142,6 +143,7 @@ def render_index(history: list[dict[str, Any]]) -> str:
             "<tr>"
             f"<td><span class=\"badge {status_class(result)}\">{html.escape(result)}</span></td>"
             f"<td><a href=\"{run_link}\">{html.escape(run_label)}</a></td>"
+            f"<td>{html.escape(run.get('platform', ''))}</td>"
             f"<td>{html.escape(run.get('branch', ''))}</td>"
             f"<td><a href=\"{commit_link}\">{commit}</a></td>"
             f"<td>{counts_for_run.get('passed', 0)}</td>"
@@ -214,12 +216,12 @@ def render_index(history: list[dict[str, Any]]) -> str:
       <table>
         <thead>
           <tr>
-            <th>Result</th><th>Run</th><th>Branch</th><th>Commit</th>
+            <th>Result</th><th>Run</th><th>Platform</th><th>Branch</th><th>Commit</th>
             <th>Pass</th><th>Fail</th><th>Error</th><th>Skip</th><th>Warn</th><th>Generated</th><th>Files</th>
           </tr>
         </thead>
         <tbody>
-          {''.join(rows) if rows else '<tr><td colspan="11">No runs recorded yet.</td></tr>'}
+          {''.join(rows) if rows else '<tr><td colspan="12">No runs recorded yet.</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -240,6 +242,7 @@ def main() -> int:
     parser.add_argument("--report-dir", default="test-reports")
     parser.add_argument("--site-dir", default="test-reports/site")
     parser.add_argument("--max-history", type=int, default=100)
+    parser.add_argument("--platform", default=os.environ.get("TEST_PLATFORM", "local"))
     args = parser.parse_args()
 
     report_dir = Path(args.report_dir)
@@ -255,7 +258,8 @@ def main() -> int:
     sha = env("GITHUB_SHA", "local")
     run_number = env("GITHUB_RUN_NUMBER", datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
     run_attempt = env("GITHUB_RUN_ATTEMPT", "1")
-    run_slug = f"{run_number}-{run_attempt}-{sha[:7]}"
+    safe_platform = re.sub(r"[^A-Za-z0-9_.-]+", "-", args.platform.strip()).strip("-") or "local"
+    run_slug = f"{run_number}-{run_attempt}-{safe_platform}-{sha[:7]}"
     run_dir = site_dir / "runs" / run_slug
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -267,7 +271,7 @@ def main() -> int:
     copy_if_exists(log_path, run_dir / "latest.log")
     copy_if_exists(junit_path, run_dir / "latest.junit.xml")
 
-    metadata = build_run_metadata(parsed, run_slug)
+    metadata = build_run_metadata(parsed, run_slug, args.platform)
     (run_dir / "report.html").write_text(render_report_html(report_text, metadata), encoding="utf-8")
 
     history_path = site_dir / "history.json"
