@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -56,6 +57,16 @@ def _make_detector_with_net(monkeypatch, faces):
         "cv2.FaceDetectorYN.create", lambda *a, **k: _FakeNet(faces)
     )
     return YuNetDetector()
+
+
+def _opencv_version_at_least(major: int, minor: int) -> bool:
+    """Return True when the imported OpenCV runtime is at least major.minor."""
+    parts = cv2.__version__.split(".")
+    try:
+        version = tuple(int(p) for p in parts[:2])
+    except ValueError:
+        return True
+    return version >= (major, minor)
 
 
 class TestYuNetParsing:
@@ -110,7 +121,15 @@ class TestYuNetRealModel:
         det = YuNetDetector()
         assert det.backend_name == "yunet"
         # Blank image → no faces, but the call must succeed and return a list.
-        out = det.detect(np.full((240, 320, 3), 127, np.uint8))
+        try:
+            out = det.detect(np.full((240, 320, 3), 127, np.uint8))
+        except cv2.error as exc:
+            if not _opencv_version_at_least(4, 8):
+                pytest.skip(
+                    f"OpenCV {cv2.__version__} cannot run the YuNet ONNX smoke "
+                    f"test on this runner: {exc}"
+                )
+            raise
         assert isinstance(out, list)
         for d in out:
             assert isinstance(d, Detection)
