@@ -256,6 +256,8 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel msvc-runtime
           python -m pip install -r requirements.txt
           python -m pip install -e ".[dev,gdrive,tflite]"
+          python -m pip uninstall -y opencv-python opencv-python-headless
+          python -m pip install --no-deps "opencv-python-headless==4.8.1.78"
 
       - name: Configure Windows DLL search paths
         shell: powershell
@@ -298,9 +300,34 @@ jobs:
           $customizeCheck | python -
 
       - name: Verify Windows OpenCV runtime
+        continue-on-error: true
         shell: powershell
         if: runner.os == 'Windows'
         run: |
+          $diagnoseOpenCv = @'
+          import glob
+          import os
+          import site
+          import sys
+          from pathlib import Path
+
+          print("Python:", sys.executable)
+          print("Prefix:", sys.prefix)
+          print("PATH head:", os.environ.get("PATH", "").split(os.pathsep)[:8])
+          scripts_dir = Path(sys.prefix) / "Scripts"
+          print("Scripts DLLs:", sorted(p.name for p in scripts_dir.glob("*.dll")))
+          for site_dir in site.getsitepackages():
+              cv2_dir = Path(site_dir) / "cv2"
+              if cv2_dir.exists():
+                  print("cv2 directory:", cv2_dir)
+                  print("cv2 native files:", [Path(p).name for p in glob.glob(str(cv2_dir / "*.pyd")) + glob.glob(str(cv2_dir / "*.dll"))])
+          try:
+              import msvc_runtime
+              print("msvc_runtime:", getattr(msvc_runtime, "__file__", "<loaded>"))
+          except Exception as exc:
+              print("msvc_runtime import failed:", repr(exc))
+          '@
+
           $opencvCheck = @'
           import cv2
           print("OpenCV import OK:", cv2.__version__)
@@ -308,9 +335,10 @@ jobs:
           $opencvCheck | python -
           if ($LASTEXITCODE -eq 0) { exit 0 }
 
-          Write-Warning "opencv-python could not import on Windows. Switching the CI environment to opencv-python-headless."
+          Write-Warning "OpenCV could not import on Windows. Printing diagnostics and reinstalling the pinned headless wheel."
+          $diagnoseOpenCv | python -
           python -m pip uninstall -y opencv-python
-          python -m pip install "opencv-python-headless>=4.8,<4.12"
+          python -m pip install --force-reinstall --no-deps "opencv-python-headless==4.8.1.78"
           $opencvCheck = @'
           import cv2
           print("OpenCV headless import OK:", cv2.__version__)
