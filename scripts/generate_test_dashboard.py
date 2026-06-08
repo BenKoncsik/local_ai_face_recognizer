@@ -215,23 +215,62 @@ def status_class(result: str) -> str:
     return "pass" if result == "PASS" else "fail" if result.startswith("FAIL") else "unknown"
 
 
+def display_result(result: str) -> str:
+    if result == "PASS":
+        return "Sikeres"
+    if result.startswith("FAIL"):
+        exit_match = re.search(r"exit code\s+(\d+)", result)
+        if exit_match:
+            return f"Sikertelen (kilépési kód {exit_match.group(1)})"
+        return "Sikertelen"
+    return "Ismeretlen"
+
+
+def display_platform(platform: Any) -> str:
+    value = str(platform or "").strip()
+    return "Ismeretlen" if not value or value.lower() == "unknown" else value
+
+
 def as_float(value: Any) -> float | None:
     return float(value) if isinstance(value, int | float) else None
 
 
 def format_percent(value: Any) -> str:
     number = as_float(value)
-    return "n/a" if number is None else f"{number:.2f}%"
+    return "nincs adat" if number is None else f"{number:.2f}%".replace(".", ",")
 
 
 def format_delta(value: float | None) -> tuple[str, str]:
     if value is None:
-        return ("no previous run", "neutral")
+        return ("nincs előző futás", "neutral")
     if abs(value) < 0.005:
-        return ("+0.00 pts", "neutral")
+        return ("+0,00 pont", "neutral")
     sign = "+" if value > 0 else "-"
     css_class = "positive" if value > 0 else "negative"
-    return (f"{sign}{abs(value):.2f} pts", css_class)
+    return (f"{sign}{abs(value):.2f} pont".replace(".", ","), css_class)
+
+
+def run_summary_hu(run: dict[str, Any]) -> str:
+    counts = run.get("counts")
+    if not isinstance(counts, dict):
+        return "Nincs pytest összefoglaló."
+
+    passed = int(counts.get("passed", 0) or 0)
+    failed = int(counts.get("failed", 0) or 0)
+    errors = int(counts.get("errors", 0) or 0)
+    skipped = int(counts.get("skipped", 0) or 0)
+    total = passed + failed + errors + skipped
+    if total == 0:
+        return "Nincs gyűjtött teszteredmény."
+
+    parts = [f"{passed} sikeres"]
+    if failed:
+        parts.append(f"{failed} sikertelen")
+    if errors:
+        parts.append(f"{errors} hibás")
+    if skipped:
+        parts.append(f"{skipped} kihagyott")
+    return ", ".join(parts) + "."
 
 
 def previous_same_platform(history: list[dict[str, Any]], index: int) -> dict[str, Any] | None:
@@ -254,24 +293,32 @@ def metric_delta(history: list[dict[str, Any]], index: int, key: str) -> float |
 def latest_by_platform(history: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
     seen: set[str] = set()
     latest: list[tuple[int, dict[str, Any]]] = []
+    unknown: list[tuple[int, dict[str, Any]]] = []
     for index, run in enumerate(history):
-        platform = str(run.get("platform", "unknown"))
+        platform = display_platform(run.get("platform", "unknown"))
+        if platform == "Ismeretlen":
+            unknown.append((index, run))
+            continue
         if platform in seen:
             continue
         seen.add(platform)
         latest.append((index, run))
-    return latest
+    return latest if latest else unknown[:1]
 
 
 def render_metric_chart(history: list[dict[str, Any]]) -> str:
+    known_platform_history = [
+        run for run in history if display_platform(run.get("platform", "unknown")) != "Ismeretlen"
+    ]
+    chart_history = known_platform_history if known_platform_history else history
     points = [
         run
-        for run in reversed(history[:30])
+        for run in reversed(chart_history[:30])
         if as_float(run.get("coverage_percent")) is not None
         or as_float(run.get("pass_rate")) is not None
     ]
     if not points:
-        return '<p class="empty">No coverage history has been recorded yet.</p>'
+        return '<p class="empty">Még nincs lefedettségi előzmény.</p>'
 
     width = 760
     height = 230
@@ -323,15 +370,21 @@ def render_metric_chart(history: list[dict[str, Any]]) -> str:
     for index in label_indices:
         run = points[index]
         x, _ = xy(index, 0)
-        label = f"#{run.get('run_number', '?')} {run.get('platform', '')}"
+        label = f"#{run.get('run_number', '?')} {display_platform(run.get('platform', ''))}"
+        if index == 0:
+            anchor = "start"
+        elif index == len(points) - 1:
+            anchor = "end"
+        else:
+            anchor = "middle"
         x_labels.append(
-            f'<text class="axis x-label" x="{x:.1f}" y="{height - 8}" text-anchor="middle">'
+            f'<text class="axis x-label" x="{x:.1f}" y="{height - 8}" text-anchor="{anchor}">'
             f"{html.escape(label)}</text>"
         )
 
     return f"""
     <div class="chart-wrap">
-      <svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Coverage and pass-rate history">
+      <svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Lefedettség és sikerarány előzményei">
         {''.join(labels)}
         <line class="axis-line" x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{height - pad_b}" />
         <line class="axis-line" x1="{pad_l}" y1="{height - pad_b}" x2="{width - pad_r}" y2="{height - pad_b}" />
@@ -342,17 +395,17 @@ def render_metric_chart(history: list[dict[str, Any]]) -> str:
         {''.join(x_labels)}
       </svg>
       <div class="legend">
-        <span><i class="swatch coverage"></i>Coverage</span>
-        <span><i class="swatch pass"></i>Pass rate</span>
+        <span><i class="swatch coverage"></i>Lefedettség</span>
+        <span><i class="swatch pass"></i>Sikerarány</span>
       </div>
     </div>
     """
 
 
 def render_report_html(report_text: str, metadata: dict[str, Any]) -> str:
-    title = f"Test Report #{metadata['run_number']}"
+    title = f"Tesztjelentés #{metadata['run_number']}"
     return f"""<!doctype html>
-<html lang="en">
+<html lang="hu">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -366,7 +419,7 @@ def render_report_html(report_text: str, metadata: dict[str, Any]) -> str:
 </head>
 <body>
   <main>
-    <p><a href="../../index.html">Back to dashboard</a></p>
+    <p><a href="../../index.html">Vissza az áttekintőhöz</a></p>
     <pre>{html.escape(report_text)}</pre>
   </main>
 </body>
@@ -380,6 +433,7 @@ def render_index(history: list[dict[str, Any]]) -> str:
     for index, run in latest_platforms:
         counts = run.get("counts", {})
         result = str(run.get("result", "UNKNOWN"))
+        platform_name = display_platform(run.get("platform", "unknown"))
         coverage_delta, coverage_delta_class = format_delta(
             metric_delta(history, index, "coverage_percent")
         )
@@ -389,20 +443,20 @@ def render_index(history: list[dict[str, Any]]) -> str:
       <article class="panel platform-panel">
         <div class="panel-head">
           <div>
-            <div class="label">{html.escape(str(run.get('platform', 'unknown')))}</div>
-            <h2>{html.escape(str(run.get('platform', 'unknown')))}</h2>
+            <div class="label">{html.escape(platform_name)}</div>
+            <h2>{html.escape(platform_name)}</h2>
           </div>
-          <span class="badge {status_class(result)}">{html.escape(result)}</span>
+          <span class="badge {status_class(result)}">{html.escape(display_result(result))}</span>
         </div>
         <div class="metrics">
-          <div><div class="label">Coverage</div><div class="metric">{format_percent(run.get('coverage_percent'))}</div><div class="delta {coverage_delta_class}">{html.escape(coverage_delta)}</div></div>
-          <div><div class="label">Pass rate</div><div class="metric">{format_percent(run.get('pass_rate'))}</div><div class="delta {pass_delta_class}">{html.escape(pass_delta)}</div></div>
-          <div><div class="label">Passed</div><div class="metric">{counts.get('passed', 0)}</div></div>
-          <div><div class="label">Failed</div><div class="metric">{counts.get('failed', 0) + counts.get('errors', 0)}</div></div>
-          <div><div class="label">Skipped</div><div class="metric">{counts.get('skipped', 0)}</div></div>
+          <div class="metric-cell"><div class="label">Lefedettség</div><div class="metric">{format_percent(run.get('coverage_percent'))}</div><div class="delta {coverage_delta_class}">{html.escape(coverage_delta)}</div></div>
+          <div class="metric-cell"><div class="label">Sikerarány</div><div class="metric">{format_percent(run.get('pass_rate'))}</div><div class="delta {pass_delta_class}">{html.escape(pass_delta)}</div></div>
+          <div class="metric-cell"><div class="label">Sikeres</div><div class="metric">{counts.get('passed', 0)}</div></div>
+          <div class="metric-cell"><div class="label">Hibás</div><div class="metric">{counts.get('failed', 0) + counts.get('errors', 0)}</div></div>
+          <div class="metric-cell"><div class="label">Kihagyott</div><div class="metric">{counts.get('skipped', 0)}</div></div>
         </div>
-        <p class="summary-line">{html.escape(str(run.get('summary') or 'No pytest summary recorded.'))}</p>
-        <p class="links"><a href="{html.escape(run.get('report_url', '#'))}">report</a> <a href="{html.escape(run.get('log_url', '#'))}">log</a> <a href="{html.escape(run.get('coverage_json_url', '#'))}">coverage json</a></p>
+        <p class="summary-line">{html.escape(run_summary_hu(run))}</p>
+        <p class="links"><a href="{html.escape(run.get('report_url', '#'))}">jelentés</a> <a href="{html.escape(run.get('log_url', '#'))}">napló</a> <a href="{html.escape(run.get('coverage_json_url', '#'))}">lefedettség JSON</a></p>
       </article>
             """
         )
@@ -423,9 +477,9 @@ def render_index(history: list[dict[str, Any]]) -> str:
         pass_delta, pass_delta_class = format_delta(metric_delta(history, index, "pass_rate"))
         rows.append(
             "<tr>"
-            f"<td><span class=\"badge {status_class(result)}\">{html.escape(result)}</span></td>"
+            f"<td><span class=\"badge {status_class(result)}\">{html.escape(display_result(result))}</span></td>"
             f"<td><a href=\"{run_link}\">{html.escape(run_label)}</a></td>"
-            f"<td>{html.escape(run.get('platform', ''))}</td>"
+            f"<td>{html.escape(display_platform(run.get('platform', '')))}</td>"
             f"<td>{html.escape(run.get('branch', ''))}</td>"
             f"<td><a href=\"{commit_link}\">{commit}</a></td>"
             f"<td>{format_percent(run.get('coverage_percent'))}<br><span class=\"delta {coverage_delta_class}\">{html.escape(coverage_delta)}</span></td>"
@@ -437,8 +491,8 @@ def render_index(history: list[dict[str, Any]]) -> str:
             f"<td>{counts_for_run.get('skipped', 0)}</td>"
             f"<td>{counts_for_run.get('warnings', 0)}</td>"
             f"<td>{html.escape(run.get('generated_at', ''))}</td>"
-            f"<td><a href=\"{html.escape(run.get('report_url', '#'))}\">report</a> "
-            f"<a href=\"{html.escape(run.get('log_url', '#'))}\">log</a></td>"
+            f"<td><a href=\"{html.escape(run.get('report_url', '#'))}\">jelentés</a> "
+            f"<a href=\"{html.escape(run.get('log_url', '#'))}\">napló</a></td>"
             "</tr>"
         )
 
@@ -446,11 +500,11 @@ def render_index(history: list[dict[str, Any]]) -> str:
     chart = render_metric_chart(history)
 
     return f"""<!doctype html>
-<html lang="en">
+<html lang="hu">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Face-Local Test Dashboard</title>
+  <title>Face-Local Tesztáttekintő</title>
   <style>
     :root {{ color-scheme: light; }}
     body {{ margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172026; background: #f5f7fa; }}
@@ -460,16 +514,17 @@ def render_index(history: list[dict[str, Any]]) -> str:
     .section-title {{ margin: 28px 0 10px; font-size: 18px; }}
     a {{ color: #0b5cad; }}
     .topline {{ color: #5f6b7a; margin: 0 0 24px; }}
-    .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }}
+    .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }}
     .panel {{ background: #fff; border: 1px solid #d7dee8; border-radius: 6px; padding: 14px; }}
     .panel-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }}
-    .metrics {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }}
-    .metric {{ font-size: 24px; font-weight: 700; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(124px, 1fr)); gap: 14px 12px; margin-top: 14px; align-items: start; }}
+    .metric-cell {{ min-width: 0; }}
+    .metric {{ font-size: 24px; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; }}
     .label {{ color: #5f6b7a; font-size: 12px; text-transform: uppercase; }}
     .delta {{ color: #5f6b7a; font-size: 12px; }}
     .delta.positive {{ color: #116329; }}
     .delta.negative {{ color: #9f1c11; }}
-    .summary-line {{ min-height: 20px; color: #415063; }}
+    .summary-line {{ min-height: 20px; color: #415063; overflow-wrap: anywhere; }}
     .links {{ margin-bottom: 0; }}
     .badge {{ display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; }}
     .badge.pass {{ background: #ddf7e8; color: #116329; }}
@@ -494,32 +549,35 @@ def render_index(history: list[dict[str, Any]]) -> str:
     th {{ background: #edf2f7; color: #415063; font-size: 12px; text-transform: uppercase; }}
     tr:last-child td {{ border-bottom: 0; }}
     .table-wrap {{ overflow-x: auto; }}
-    @media (max-width: 860px) {{ .metrics {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 860px) {{
+      .summary {{ grid-template-columns: 1fr; }}
+      .metrics {{ grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }}
+    }}
   </style>
 </head>
 <body>
   <main>
-    <h1>Face-Local Test Dashboard</h1>
-    <p class="topline">Updated {html.escape(updated_at)}</p>
+    <h1>Face-Local tesztáttekintő</h1>
+    <p class="topline">Frissítve: {html.escape(updated_at)}</p>
 
     <section class="summary">
-      {''.join(platform_cards) if platform_cards else '<div class="panel">No runs recorded yet.</div>'}
+      {''.join(platform_cards) if platform_cards else '<div class="panel">Még nincs rögzített futás.</div>'}
     </section>
 
-    <h2 class="section-title">Coverage And Pass Rate</h2>
+    <h2 class="section-title">Lefedettség és sikerarány</h2>
     {chart}
 
-    <h2 class="section-title">Run History</h2>
+    <h2 class="section-title">Futási előzmények</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Result</th><th>Run</th><th>Platform</th><th>Branch</th><th>Commit</th>
-            <th>Coverage</th><th>Pass rate</th><th>Total</th><th>Pass</th><th>Fail</th><th>Error</th><th>Skip</th><th>Warn</th><th>Generated</th><th>Files</th>
+            <th>Eredmény</th><th>Futás</th><th>Platform</th><th>Ág</th><th>Commit</th>
+            <th>Lefedettség</th><th>Sikerarány</th><th>Összes</th><th>Sikeres</th><th>Sikertelen</th><th>Hiba</th><th>Kihagyott</th><th>Figy.</th><th>Generálva</th><th>Fájlok</th>
           </tr>
         </thead>
         <tbody>
-          {''.join(rows) if rows else '<tr><td colspan="15">No runs recorded yet.</td></tr>'}
+          {''.join(rows) if rows else '<tr><td colspan="15">Még nincs rögzített futás.</td></tr>'}
         </tbody>
       </table>
     </div>
