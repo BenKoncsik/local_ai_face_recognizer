@@ -1,9 +1,8 @@
 name: Build And Release
 
 on:
-  push:
-    branches:
-      - main
+  # Temporarily disabled on commit/push to avoid version-only release churn.
+  # Run manually from GitHub Actions when an application build is needed.
   workflow_dispatch:
     inputs:
       prerelease:
