@@ -399,6 +399,8 @@ jobs:
           [ -f "$report_dir/latest.md" ] || printf '# Test Report\n\nThe pytest report was not generated.\n' > "$report_dir/latest.md"
           [ -f "$report_dir/latest.log" ] || printf 'The pytest log was not generated.\n' > "$report_dir/latest.log"
           [ -f "$report_dir/latest.junit.xml" ] || printf '<testsuites tests="0" failures="0" errors="0" skipped="0"></testsuites>\n' > "$report_dir/latest.junit.xml"
+          [ -f "$report_dir/coverage.json" ] || printf '{"totals":{}}\n' > "$report_dir/coverage.json"
+          [ -f "$report_dir/coverage.xml" ] || printf '<coverage></coverage>\n' > "$report_dir/coverage.xml"
           [ -f "$report_dir/exit_code.txt" ] || printf '1\n' > "$report_dir/exit_code.txt"
           python - <<'PY'
           from pathlib import Path
@@ -408,7 +410,7 @@ jobs:
           report_dir = Path("test-reports") / platform
           bundle = report_dir / "test-report-bundle.zip"
           with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-              for name in ("latest.md", "latest.log", "latest.junit.xml"):
+              for name in ("latest.md", "latest.log", "latest.junit.xml", "coverage.json", "coverage.xml"):
                   zf.write(report_dir / name, name)
           PY
 
@@ -421,12 +423,16 @@ jobs:
           $latestMd = Join-Path $reportDir "latest.md"
           $latestLog = Join-Path $reportDir "latest.log"
           $latestXml = Join-Path $reportDir "latest.junit.xml"
+          $coverageJson = Join-Path $reportDir "coverage.json"
+          $coverageXml = Join-Path $reportDir "coverage.xml"
           if (-not (Test-Path $latestMd)) { "# Test Report`n`nThe pytest report was not generated." | Out-File -Encoding utf8 $latestMd }
           if (-not (Test-Path $latestLog)) { "The pytest log was not generated." | Out-File -Encoding utf8 $latestLog }
           if (-not (Test-Path $latestXml)) { '<testsuites tests="0" failures="0" errors="0" skipped="0"></testsuites>' | Out-File -Encoding utf8 $latestXml }
+          if (-not (Test-Path $coverageJson)) { '{"totals":{}}' | Out-File -Encoding utf8 $coverageJson }
+          if (-not (Test-Path $coverageXml)) { '<coverage></coverage>' | Out-File -Encoding utf8 $coverageXml }
           $exitCodePath = Join-Path $reportDir "exit_code.txt"
           if (-not (Test-Path $exitCodePath)) { Set-Content -Path $exitCodePath -Value "1" -Encoding ascii }
-          python -c "from pathlib import Path; import zipfile; report_dir=Path('test-reports')/'${{ matrix.platform }}'; bundle=report_dir/'test-report-bundle.zip'; zf=zipfile.ZipFile(bundle,'w',compression=zipfile.ZIP_DEFLATED); [zf.write(report_dir/name,name) for name in ('latest.md','latest.log','latest.junit.xml')]; zf.close()"
+          python -c "from pathlib import Path; import zipfile; report_dir=Path('test-reports')/'${{ matrix.platform }}'; bundle=report_dir/'test-report-bundle.zip'; zf=zipfile.ZipFile(bundle,'w',compression=zipfile.ZIP_DEFLATED); [zf.write(report_dir/name,name) for name in ('latest.md','latest.log','latest.junit.xml','coverage.json','coverage.xml')]; zf.close()"
 
       - name: Upload test report artifact
         id: upload_test_report
@@ -439,6 +445,8 @@ jobs:
             test-reports/${{ matrix.platform }}/latest.md
             test-reports/${{ matrix.platform }}/latest.log
             test-reports/${{ matrix.platform }}/latest.junit.xml
+            test-reports/${{ matrix.platform }}/coverage.json
+            test-reports/${{ matrix.platform }}/coverage.xml
             test-reports/${{ matrix.platform }}/test-report-bundle.zip
           if-no-files-found: warn
 
