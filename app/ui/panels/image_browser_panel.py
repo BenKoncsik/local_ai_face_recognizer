@@ -3920,6 +3920,16 @@ class ImageBrowserPanel(QWidget):
                 if crop_path is not None:
                     face.crop_path = str(crop_path)
 
+            # Compute the embedding right away so the manually-marked face is
+            # comparable in the person-assign panel (face-match ordering),
+            # exactly like an automatically detected face.  Best-effort: a
+            # missing model or read error leaves the face without a vector but
+            # never blocks marking.
+            if self._config is not None and face.crop_path:
+                from app.services.embedding_service import embed_manual_face
+
+                embed_manual_face(session, face, self._config)
+
         log.info(
             "Manual face saved: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
             img_id, new_id, x, y, w, h,
@@ -4200,8 +4210,18 @@ class ImageBrowserPanel(QWidget):
                 face = session.get(Face, face_id)
                 if face is None:
                     return {}
+                embedding = face.get_embedding()
+                # Fallback for faces saved without a vector (e.g. older manual
+                # marks, or a marking where the model was unavailable): try to
+                # compute the embedding now so match-ordering becomes available
+                # instead of silently dropping the option.
+                if embedding is None and self._config is not None and face.crop_path:
+                    from app.services.embedding_service import embed_manual_face
+
+                    if embed_manual_face(session, face, self._config):
+                        embedding = face.get_embedding()
                 return RecognitionService(session, recognition_cfg).score_persons(
-                    face.get_embedding()
+                    embedding
                 )
         except Exception:  # noqa: BLE001 — ordering is best-effort, never fatal
             log.exception("Face-match scoring failed; using default order")

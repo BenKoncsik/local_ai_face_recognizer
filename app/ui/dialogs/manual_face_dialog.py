@@ -244,6 +244,14 @@ class ManualMarkDialog(QDialog):
             if crop_path is not None:
                 face.crop_path = str(crop_path)
 
+            # Embed the manual face immediately so it is comparable in the
+            # person-assign UI (face-match ordering), like a detected face.
+            # Best-effort: never blocks marking on embedding failure.
+            if face.crop_path:
+                from app.services.embedding_service import embed_manual_face
+
+                embed_manual_face(session, face, self._config)
+
         log.info(
             "Manual face added: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
             self._image_id, new_face_id, x, y, w, h,

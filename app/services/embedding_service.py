@@ -136,3 +136,44 @@ class EmbeddingService:
         # Marking the parent image as embedding-done is handled lazily by
         # later pipeline stages.
         return True
+
+    def embed_face(self, face: Face) -> bool:
+        """Compute and persist the embedding for a single already-saved face.
+
+        Public wrapper around the per-face embedding step.  Used for faces that
+        are created outside the batch pipeline (e.g. manually marked faces) so
+        they get a full embedding immediately and become comparable in the
+        person-assign UI.  Returns ``True`` on success.
+        """
+        return self._embed_face(face)
+
+
+def build_embedder(config: AppConfig) -> FaceEmbedder:
+    """Construct the default face embedder from the embedding configuration.
+
+    Mirrors the embedder built by the batch pipeline so manually-created faces
+    are embedded with the exact same model/geometry as detected ones.
+    """
+    from app.embeddings.tflite_embedder import TFLiteEmbedder
+
+    return TFLiteEmbedder(
+        model_path=config.embedding.model_path,
+        embedding_dim=config.embedding.embedding_dim,
+        input_size=config.embedding.input_size,
+    )
+
+
+def embed_manual_face(session: Session, face: Face, config: AppConfig) -> bool:
+    """Best-effort embedding for a manually-marked face.
+
+    Builds the default embedder and computes the embedding for *face* (which
+    must already have a saved crop).  Never raises — embedding is best-effort,
+    so a missing model or read error simply leaves the face without a vector
+    and returns ``False``.
+    """
+    try:
+        embedder = build_embedder(config)
+        return EmbeddingService(session, embedder, config).embed_face(face)
+    except Exception as exc:  # noqa: BLE001 — embedding must never break marking
+        log.warning("Manual-face embedding failed for face id=%s: %s", face.id, exc)
+        return False
