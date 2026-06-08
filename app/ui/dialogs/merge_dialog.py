@@ -52,6 +52,11 @@ class MergeDialog(QDialog):
         self._selector.set_entries(entries)
         if match_scores:
             self._selector.set_match_scores(match_scores)
+        # Accept the dialog when the user double-clicks a person in the list.
+        # PersonSearchSelect emits person_double_clicked after the selection
+        # has already been committed, so accepting here behaves like clicking
+        # OK on a highlighted entry.
+        self._selector.person_double_clicked.connect(self.accept)
 
         layout.addWidget(self._selector)
         layout.addWidget(
