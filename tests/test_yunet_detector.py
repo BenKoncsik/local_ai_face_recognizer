@@ -34,6 +34,7 @@ class _FakeNet:
         self._faces = faces
         self.input_size = None
         self.score_threshold = None
+        self.detect_shape = None
 
     def setInputSize(self, size):  # noqa: N802 (OpenCV API name)
         self.input_size = size
@@ -42,6 +43,7 @@ class _FakeNet:
         self.score_threshold = t
 
     def detect(self, image):
+        self.detect_shape = image.shape
         return 1, self._faces
 
 
@@ -88,7 +90,8 @@ class TestYuNetParsing:
     def test_input_size_and_threshold_pushed_to_net(self, monkeypatch):
         det = _make_detector_with_net(monkeypatch, None)
         det.detect(np.zeros((120, 160, 3), np.uint8), confidence_threshold=0.4)
-        assert det._net.input_size == (160, 120)  # (w, h)
+        assert det._net.input_size == (160, 128)  # (w, h), padded to YuNet stride
+        assert det._net.detect_shape == (128, 160, 3)
         assert det._net.score_threshold == pytest.approx(0.4)
 
     def test_small_faces_filtered(self, monkeypatch):

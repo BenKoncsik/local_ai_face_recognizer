@@ -46,6 +46,7 @@ _DEFAULT_MODEL = "models/face_detection_yunet_2023mar.onnx"
 #   [14]   confidence score
 _LANDMARK_SLICE = slice(4, 14)
 _SCORE_INDEX = 14
+_DNN_STRIDE = 32
 
 
 class YuNetDetector(FaceDetector):
@@ -106,6 +107,25 @@ class YuNetDetector(FaceDetector):
         aspect = det.w / det.h if det.h > 0 else 0
         return 0.4 <= aspect <= 2.5
 
+    @staticmethod
+    def _pad_to_dnn_stride(image_bgr: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+        """Pad YuNet input to avoid OpenCV DNN shape mismatches."""
+        img_h, img_w = image_bgr.shape[:2]
+        padded_w = ((img_w + _DNN_STRIDE - 1) // _DNN_STRIDE) * _DNN_STRIDE
+        padded_h = ((img_h + _DNN_STRIDE - 1) // _DNN_STRIDE) * _DNN_STRIDE
+        if padded_w == img_w and padded_h == img_h:
+            return image_bgr, (img_w, img_h)
+
+        padded = cv2.copyMakeBorder(
+            image_bgr,
+            0,
+            padded_h - img_h,
+            0,
+            padded_w - img_w,
+            cv2.BORDER_REPLICATE,
+        )
+        return padded, (padded_w, padded_h)
+
     # ------------------------------------------------------------------
 
     @property
@@ -133,11 +153,14 @@ class YuNetDetector(FaceDetector):
             return []
 
         img_h, img_w = image_bgr.shape[:2]
+        input_bgr, input_size = self._pad_to_dnn_stride(image_bgr)
         # YuNet requires the input size to match the image before each detect().
-        self._net.setInputSize((img_w, img_h))
+        # Older OpenCV DNN builds also need dimensions aligned to the model's
+        # stride pyramid, otherwise some non-square images fail inside ONNX Add.
+        self._net.setInputSize(input_size)
         self._net.setScoreThreshold(float(confidence_threshold))
 
-        _, faces = self._net.detect(image_bgr)
+        _, faces = self._net.detect(input_bgr)
         if faces is None:
             return []
 
