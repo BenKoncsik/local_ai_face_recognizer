@@ -1,0 +1,151 @@
+name: Test Report Dashboard
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: test-report-dashboard-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  QT_QPA_PLATFORM: offscreen
+  QTWEBENGINE_DISABLE_SANDBOX: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  tests:
+    name: Run Tests And Publish Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install Linux GUI libraries
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libopengl0 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-xinerama0
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+          python -m pip install -e ".[dev,gdrive,tflite]"
+
+      - name: Run test suite
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          scripts/run_tests.sh
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Restore dashboard history
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p test-reports/site
+          git fetch origin gh-pages --depth=1 || true
+          git show origin/gh-pages:history.json > test-reports/site/history.json 2>/dev/null || true
+
+      - name: Generate dashboard site
+        if: always()
+        shell: bash
+        env:
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+        run: |
+          python scripts/generate_test_dashboard.py \
+            --report-dir test-reports \
+            --site-dir test-reports/site
+
+      - name: Upload test report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            test-reports/latest.md
+            test-reports/latest.log
+            test-reports/latest.junit.xml
+            test-reports/site/index.html
+            test-reports/site/history.json
+          if-no-files-found: warn
+
+      - name: Add report links to job summary
+        if: always()
+        shell: bash
+        run: |
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          pages_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}/"
+          {
+            echo "## Test report"
+            echo ""
+            echo "- Dashboard: ${pages_url}"
+            echo "- Local report path in artifact: test-reports/latest.md"
+            echo "- Test exit code: ${{ steps.tests.outputs.exit_code }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish GitHub Pages dashboard
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          publish_dir="$RUNNER_TEMP/test-dashboard-pages"
+          rm -rf "$publish_dir"
+          mkdir -p "$publish_dir"
+          cp -R test-reports/site/. "$publish_dir"
+
+          cd "$publish_dir"
+          git init
+          git checkout -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git add .
+          git commit -m "Update test dashboard for run ${GITHUB_RUN_NUMBER}" || exit 0
+          git push --force origin gh-pages
+
+      - name: Fail job if tests failed
+        if: always()
+        shell: bash
+        run: |
+          status="${{ steps.tests.outputs.exit_code }}"
+          if [ -z "$status" ]; then
+            echo "Test step did not report an exit code."
+            exit 1
+          fi
+          exit "$status"
