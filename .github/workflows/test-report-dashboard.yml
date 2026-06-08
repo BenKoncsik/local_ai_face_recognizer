@@ -10,6 +10,7 @@ on:
 permissions:
   contents: write
   actions: read
+  pages: write
 
 concurrency:
   group: test-report-dashboard-${{ github.ref }}
@@ -20,14 +21,61 @@ env:
   QT_QPA_PLATFORM: offscreen
   QTWEBENGINE_DISABLE_SANDBOX: "1"
   PYTHONUNBUFFERED: "1"
+  ARTIFACT_REPO: ${{ github.repository_owner }}/private_artifact
 
 jobs:
   tests:
     name: Run Tests And Publish Report
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Selected runner
+        shell: bash
+        run: |
+          echo "Runner labels: self-hosted, Linux, ARM64"
+          echo "GitHub Actions will keep this job queued until a matching self-hosted runner is online."
+
+      - name: Ensure GitHub CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          release_json="$tmp_dir/gh-release.json"
+          curl -fsSL "https://api.github.com/repos/cli/cli/releases/latest" -o "$release_json"
+          gh_url="$(
+            sed -nE 's/.*"browser_download_url": "(.*linux_arm64\.tar\.gz)".*/\1/p' "$release_json" \
+              | head -n 1
+          )"
+          if [ -z "$gh_url" ]; then
+            echo "Could not find GitHub CLI linux_arm64 download URL." >&2
+            exit 1
+          fi
+
+          curl -fsSL "$gh_url" -o "$tmp_dir/gh.tar.gz"
+          tar -xzf "$tmp_dir/gh.tar.gz" -C "$tmp_dir"
+          gh_bin="$(find "$tmp_dir" -type f -path '*/bin/gh' | head -n 1)"
+          if [ -z "$gh_bin" ]; then
+            echo "gh binary not found after extraction." >&2
+            exit 1
+          fi
+
+          install_dir="$RUNNER_TEMP/gh-cli/bin"
+          mkdir -p "$install_dir"
+          cp "$gh_bin" "$install_dir/gh"
+          chmod +x "$install_dir/gh"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/gh" --version
 
       - uses: actions/setup-python@v6
         with:
@@ -40,8 +88,8 @@ jobs:
       - name: Install Linux GUI libraries
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          missing=()
+          for pkg in \
             libegl1 \
             libgl1 \
             libopengl0 \
@@ -52,7 +100,21 @@ jobs:
             libxcb-keysyms1 \
             libxcb-randr0 \
             libxcb-render-util0 \
-            libxcb-xinerama0
+            libxcb-xinerama0; do
+            dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "Linux GUI libraries are already installed."
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y "${missing[@]}"
+          else
+            echo "::warning::Missing Linux GUI packages: ${missing[*]}. Install them once on the self-hosted runner if Qt tests fail."
+          fi
 
       - name: Install Python dependencies
         shell: bash
@@ -89,7 +151,25 @@ jobs:
             --report-dir test-reports \
             --site-dir test-reports/site
 
+      - name: Package test report bundle
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-reports
+          [ -f test-reports/latest.md ] || printf '# Test Report\n\nThe pytest report was not generated.\n' > test-reports/latest.md
+          [ -f test-reports/latest.log ] || printf 'The pytest log was not generated.\n' > test-reports/latest.log
+          [ -f test-reports/latest.junit.xml ] || printf '<testsuites tests="0" failures="0" errors="0" skipped="0"></testsuites>\n' > test-reports/latest.junit.xml
+          tar -czf test-reports/test-report-bundle.tar.gz \
+            -C test-reports \
+            latest.md \
+            latest.log \
+            latest.junit.xml \
+            site
+
       - name: Upload test report artifact
+        id: upload_test_report
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -98,9 +178,40 @@ jobs:
             test-reports/latest.md
             test-reports/latest.log
             test-reports/latest.junit.xml
-            test-reports/site/index.html
-            test-reports/site/history.json
+            test-reports/test-report-bundle.tar.gz
+            test-reports/site/**
           if-no-files-found: warn
+
+      - name: Fallback upload test report to private artifact repo
+        if: always() && steps.upload_test_report.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_ARTIFACT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "PRIVATE_ARTIFACT_TOKEN is empty; cannot use private artifact fallback." >&2
+            exit 1
+          fi
+          if [ ! -f test-reports/test-report-bundle.tar.gz ]; then
+            echo "Fallback bundle not found: test-reports/test-report-bundle.tar.gz" >&2
+            exit 1
+          fi
+
+          tag="artifact-tests-${{ github.run_number }}-${{ github.run_attempt }}"
+          if ! gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "${{ env.ARTIFACT_REPO }}" \
+              --title "Test report artifact run ${{ github.run_number }}.${{ github.run_attempt }}" \
+              --notes "Test report artifact fallback for ${{ github.repository }} run ${{ github.run_number }} attempt ${{ github.run_attempt }}." \
+              --prerelease \
+              || gh release view "$tag" --repo "${{ env.ARTIFACT_REPO }}" >/dev/null
+          fi
+
+          gh release upload "$tag" \
+            test-reports/test-report-bundle.tar.gz \
+            --repo "${{ env.ARTIFACT_REPO }}" \
+            --clobber
 
       - name: Add report links to job summary
         if: always()
@@ -113,6 +224,7 @@ jobs:
             echo ""
             echo "- Dashboard: ${pages_url}"
             echo "- Local report path in artifact: test-reports/latest.md"
+            echo "- Artifact fallback release tag: artifact-tests-${{ github.run_number }}-${{ github.run_attempt }}"
             echo "- Test exit code: ${{ steps.tests.outputs.exit_code }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -138,6 +250,33 @@ jobs:
           git add .
           git commit -m "Update test dashboard for run ${GITHUB_RUN_NUMBER}" || exit 0
           git push --force origin gh-pages
+
+      - name: Configure GitHub Pages branch source
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          page_payload='{"source":{"branch":"gh-pages","path":"/"}}'
+
+          echo "$page_payload" | gh api \
+            --method PUT \
+            "repos/${GITHUB_REPOSITORY}/pages" \
+            --input -
+          status=$?
+
+          if [ "$status" -ne 0 ]; then
+            echo "$page_payload" | gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/pages" \
+              --input -
+            status=$?
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Could not configure GitHub Pages automatically. In repository settings, set Pages source to branch 'gh-pages' and folder '/'."
+          fi
 
       - name: Fail job if tests failed
         if: always()
