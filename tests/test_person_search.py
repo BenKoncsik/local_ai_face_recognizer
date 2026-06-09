@@ -277,3 +277,81 @@ class TestPersonSearchSelectReset:
         # no exception, current selection is None.
         widget.set_current_by_id(999)
         assert widget.current_person_id() is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PersonSearchSelect widget — match-score ordering (merge dialog default)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPersonSearchSelectMatchSort:
+    @staticmethod
+    def _visible_ids(widget) -> list[int]:
+        from app.ui.widgets.person_search_select import _ROLE_ID
+
+        return [
+            widget._list.item(row).data(_ROLE_ID)
+            for row in range(widget._list.count())
+        ]
+
+    @staticmethod
+    def _make(qtbot):
+        from app.ui.widgets.person_search_select import PersonSearchSelect
+
+        widget = PersonSearchSelect()
+        qtbot.addWidget(widget)
+        persons = [
+            _FakePerson(1, "Andris"),
+            _FakePerson(2, "Béla"),
+            _FakePerson(3, "Cili"),
+            _FakePerson(4, "Dani"),
+        ]
+        widget.set_persons(persons)
+        return widget
+
+    def test_default_sort_orders_list_by_score_desc(self, qtbot):
+        widget = self._make(qtbot)
+        # Deliberately not in name order: Cili highest, then Andris, Dani, Béla.
+        widget.set_match_scores(
+            {1: 0.71, 2: 0.10, 3: 0.93, 4: 0.55}, default_sort=True
+        )
+        # default_sort turns the checkbox on without the caller toggling it.
+        assert widget._match_checkbox.isChecked() is True
+        assert self._visible_ids(widget) == [3, 1, 4, 2]
+
+    def test_default_sort_does_not_persist_global_preference(self, qtbot):
+        # Forcing the checkbox on for this selector must not write the global
+        # QSettings preference (it is set with signals blocked).
+        from app.ui.widgets.person_search_select import _MATCH_SORT_QSETTINGS_KEY
+        from app.app_settings import app_qsettings
+
+        app_qsettings().setValue(_MATCH_SORT_QSETTINGS_KEY, False)
+        widget = self._make(qtbot)
+        widget.set_match_scores({1: 0.9, 2: 0.1}, default_sort=True)
+        assert (
+            app_qsettings().value(_MATCH_SORT_QSETTINGS_KEY, False, type=bool)
+            is False
+        )
+
+    def test_search_preserves_score_order(self, qtbot):
+        widget = self._make(qtbot)
+        widget.set_match_scores(
+            {1: 0.71, 2: 0.10, 3: 0.93, 4: 0.55}, default_sort=True
+        )
+        # All four names contain "i"; the filtered results keep score order.
+        widget._search.setText("i")
+        ids = self._visible_ids(widget)
+        assert ids == [3, 1, 4], "score order must survive filtering"
+
+    def test_no_default_sort_keeps_name_order(self, qtbot):
+        widget = self._make(qtbot)
+        # Without default_sort the checkbox stays off → alphabetical order.
+        widget._match_checkbox.setChecked(False)
+        widget.set_match_scores({1: 0.71, 2: 0.10, 3: 0.93, 4: 0.55})
+        assert widget._match_checkbox.isChecked() is False
+        assert self._visible_ids(widget) == [1, 2, 3, 4]
+
+    def test_percentage_shown_when_match_sorted(self, qtbot):
+        widget = self._make(qtbot)
+        widget.set_match_scores({1: 0.9, 2: 0.1}, default_sort=True)
+        # Top row shows the match percentage next to the name.
+        assert "90%" in widget._list.item(0).text()

@@ -169,7 +169,12 @@ class PersonSearchSelect(QWidget):
         self._entries = list(entries)
         self._refresh_list()
 
-    def set_match_scores(self, scores: Optional[Dict[int, float]]) -> None:
+    def set_match_scores(
+        self,
+        scores: Optional[Dict[int, float]],
+        *,
+        default_sort: bool = False,
+    ) -> None:
         """Provide per-person face-match similarity scores.
 
         *scores* maps ``person_id`` → similarity (higher is a closer match).
@@ -178,12 +183,24 @@ class PersonSearchSelect(QWidget):
         percentage is shown next to each scored person.  Passing ``None`` or an
         empty mapping hides the checkbox and restores the default ordering, so
         a missing embedding never breaks the selector.
+
+        *default_sort* — when ``True`` and scores are present, the match-sort
+        checkbox is turned on for this selector regardless of the saved global
+        preference, so the list opens best-match-first (e.g. the merge dialog).
+        The toggle is set without persisting, so the user's global preference is
+        untouched; they can still uncheck it to fall back to name order.
         """
         self._match_scores = dict(scores or {})
         has_scores = bool(self._match_scores)
         self._match_checkbox.setVisible(has_scores)
         self._match_spacer_top.setVisible(has_scores)
         self._match_spacer.setVisible(has_scores)
+        if has_scores and default_sort and not self._match_checkbox.isChecked():
+            # Force match-sort on for this selector without writing the global
+            # QSettings preference (block the toggled signal that persists it).
+            self._match_checkbox.blockSignals(True)
+            self._match_checkbox.setChecked(True)
+            self._match_checkbox.blockSignals(False)
         self._refresh_list()
 
     def current_person_id(self) -> Optional[int]:

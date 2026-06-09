@@ -51,7 +51,11 @@ class MergeDialog(QDialog):
         self._selector = PersonSearchSelect()
         self._selector.set_entries(entries)
         if match_scores:
-            self._selector.set_match_scores(match_scores)
+            # Open best-match-first: the most likely target persons rise to the
+            # top of the list so the user does not have to hunt through hundreds
+            # of names.  default_sort only flips this selector's checkbox; the
+            # user can still uncheck it to fall back to alphabetical order.
+            self._selector.set_match_scores(match_scores, default_sort=True)
         # Accept the dialog when the user double-clicks a person in the list.
         # PersonSearchSelect emits person_double_clicked after the selection
         # has already been committed, so accepting here behaves like clicking
