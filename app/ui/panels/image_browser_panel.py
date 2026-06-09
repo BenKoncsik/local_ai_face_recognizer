@@ -736,6 +736,9 @@ class _DrawableImageLabel(QLabel):
         self._imode_drag_start = None
         self._imode_drag_start_bbox = None
         self.setStyleSheet(self._BORDER_NORMAL)
+        # Reset the cursor: during edit mode it may have been changed to a
+        # resize/move shape by _update_edit_cursor(); restore the panel default.
+        self.setCursor(Qt.CrossCursor)
         self.update()
         if not silent:
             if commit and bbox is not None:
