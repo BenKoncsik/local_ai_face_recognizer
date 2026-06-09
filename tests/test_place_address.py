@@ -17,6 +17,7 @@ from app.services.place_service import (
     PlaceFilters,
     PlaceService,
     build_display_name,
+    build_place_label,
     classify_address,
 )
 
@@ -38,6 +39,19 @@ def test_build_display_name_levels():
         "Balatonszemes, Bajcsy-Zsilinszky utca 12."
     )
     assert build_display_name("") == ""
+
+
+def test_build_place_label_keeps_original_name():
+    # Settlement is prefixed without losing the original name.
+    assert build_place_label("Fagylaltkert", "Balatonszemes") == "Balatonszemes, Fagylaltkert"
+    # No duplication when the name already starts with the settlement.
+    assert build_place_label("Balatonszemes, Kikötő", "Balatonszemes") == "Balatonszemes, Kikötő"
+    # Without a settlement only the original name is shown.
+    assert build_place_label("Fagylaltkert", "") == "Fagylaltkert"
+    assert build_place_label("Fagylaltkert", None) == "Fagylaltkert"
+    # No stray comma / "None" when a part is missing.
+    assert build_place_label("", "Balatonszemes") == "Balatonszemes"
+    assert build_place_label(None, "Balatonszemes") == "Balatonszemes"
 
 
 # --- classification state machine ------------------------------------------

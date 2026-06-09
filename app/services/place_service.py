@@ -91,6 +91,32 @@ def build_display_name(
     return f"{settlement}, {street} {house_number}."
 
 
+def build_place_label(
+    name: Optional[str],
+    settlement: Optional[str] = None,
+) -> str:
+    """Compose the list label, keeping the original place name intact.
+
+    The original ``name`` is always preserved; the settlement is only used as a
+    prefix so the name keeps its context without being overwritten:
+
+    - settlement "Balatonszemes" + name "Fagylaltkert" -> "Balatonszemes, Fagylaltkert"
+    - settlement "Balatonszemes" + name "Balatonszemes, Kikötő" -> "Balatonszemes, Kikötő"
+      (no duplication when the name already starts with the settlement)
+    - no settlement -> just the name
+    Empty parts never produce a stray comma or a "None" fragment.
+    """
+    name = (name or "").strip()
+    settlement = (settlement or "").strip()
+    if not settlement:
+        return name
+    if not name:
+        return settlement
+    if name.casefold().startswith(settlement.casefold()):
+        return name
+    return f"{settlement}, {name}"
+
+
 @dataclass(frozen=True)
 class AddressClassification:
     """Auto-derived place_type / coordinate_source / is_exact for an address."""

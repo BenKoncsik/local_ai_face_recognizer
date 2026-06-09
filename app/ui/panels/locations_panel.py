@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QSize, QRect
-from PySide6.QtGui import QPixmap, QTextOption
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QMessageBox,
     QPushButton,
     QHeaderView,
@@ -38,6 +39,7 @@ from app.services.place_service import (
     PLACE_TYPE_REGION,
     PlaceFilters,
     PlaceService,
+    build_place_label,
 )
 from app.ui.dialogs.place_edit_dialog import PlaceEditDialog
 from app.ui.dialogs.place_merge_dialog import PlaceMergeDialog
@@ -67,28 +69,7 @@ def _type_label(place_type: str) -> str:
 
 
 class _WrappingNameDelegate(QStyledItemDelegate):
-    """Inline editor that wraps long names across multiple lines."""
-
-    def createEditor(self, parent, option, index):
-        editor = QTextEdit(parent)
-        editor.setWordWrapMode(QTextOption.WrapMode.WordWrap)
-        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        editor.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        editor.setFrameShape(QTextEdit.NoFrame)
-        return editor
-
-    def setEditorData(self, editor, index):
-        editor.setPlainText(index.data(Qt.EditRole) or "")
-
-    def setModelData(self, editor, model, index):
-        model.setData(index, editor.toPlainText().strip(), Qt.EditRole)
-
-    def updateEditorGeometry(self, editor, option, index):
-        doc = editor.document()
-        doc.setTextWidth(option.rect.width())
-        content_h = int(doc.size().height()) + 8
-        height = max(option.rect.height(), content_h)
-        editor.setGeometry(QRect(option.rect.x(), option.rect.y(), option.rect.width(), height))
+    """Wraps long place names across multiple lines in the name column."""
 
     def sizeHint(self, option, index):
         text = index.data(Qt.DisplayRole) or ""
@@ -99,14 +80,6 @@ class _WrappingNameDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), max(option.rect.height(), h))
 
 
-class _NoEditDelegate(QStyledItemDelegate):
-    """Suppresses inline editing for read-only columns (the row-level
-    ``ItemIsEditable`` flag would otherwise make every cell editable)."""
-
-    def createEditor(self, parent, option, index):
-        return None
-
-
 # Column indices in the places tree.
 _COL_NAME = 0
 _COL_TYPE = 1
@@ -115,23 +88,6 @@ _COL_IMAGES = 3
 _COL_PERSONS = 4
 _COL_SOURCE = 5
 
-
-def _parse_coords(text: str) -> Optional[Tuple[float, float]]:
-    """Parse a free-form ``"lat, lon"`` string into a (lat, lon) tuple.
-
-    Accepts comma- or whitespace-separated values. Returns ``None`` when the
-    field is blank (meaning "clear the coordinates"). Raises ``ValueError`` for
-    anything that is non-empty but not a valid coordinate pair.
-    """
-    cleaned = text.strip()
-    if not cleaned:
-        return None
-    parts = [p for p in cleaned.replace(",", " ").split() if p]
-    if len(parts) != 2:
-        raise ValueError("Expected two numbers: latitude and longitude")
-    lat = float(parts[0])
-    lon = float(parts[1])
-    return lat, lon
 
 # Collect per-image GPS only if the coordinate differs from the place centre by
 # more than this threshold (degrees) — avoids duplicating the main marker.
@@ -191,20 +147,19 @@ class LocationsPanel(QWidget):
         self._tree.setWordWrap(True)
         self._tree.setUniformRowHeights(False)
         self._tree.setExpandsOnDoubleClick(False)
+        # No inline editing: a double-click (or the Edit button) opens the full
+        # Place edit dialog instead of editing a cell in place.
+        self._tree.setEditTriggers(QTreeWidget.NoEditTriggers)
         header = self._tree.header()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         for col in range(1, 6):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
-        self._tree.itemChanged.connect(self._on_tree_item_changed)
+        self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._name_delegate = _WrappingNameDelegate(self._tree)
         self._tree.setItemDelegateForColumn(_COL_NAME, self._name_delegate)
-        # Lock down the columns that are not meant to be edited inline so they
-        # don't silently accept (and discard) typed-in values. Name and coords
-        # stay editable.
-        self._no_edit_delegate = _NoEditDelegate(self._tree)
-        for col in (_COL_TYPE, _COL_IMAGES, _COL_PERSONS, _COL_SOURCE):
-            self._tree.setItemDelegateForColumn(col, self._no_edit_delegate)
         splitter.addWidget(self._tree)
 
         detail_inner = QWidget()
@@ -227,11 +182,6 @@ class LocationsPanel(QWidget):
         name_row = QHBoxLayout()
         name_row.setSpacing(4)
         name_row.addWidget(self._name, 1)
-        self._rename_btn = QPushButton()
-        self._rename_btn.setToolTip(t("places_rename_tooltip"))
-        self._rename_btn.setEnabled(False)
-        self._rename_btn.clicked.connect(self._start_rename)
-        name_row.addWidget(self._rename_btn)
         self._type_lbl = QLabel()
         self._coords = QLabel()
         self._image_count = QLabel()
@@ -324,8 +274,6 @@ class LocationsPanel(QWidget):
             t("places_source"),
         ])
         self._gallery_hdr.setText(t("places_images"))
-        self._rename_btn.setText(t("places_rename_btn"))
-        self._rename_btn.setToolTip(t("places_rename_tooltip"))
         self._new_btn.setText(t("places_new_btn"))
         self._edit_btn.setText(t("places_edit_btn"))
         self._merge_btn.setText(t("places_merge_btn"))
@@ -378,7 +326,7 @@ class LocationsPanel(QWidget):
         self._tree.blockSignals(False)
 
     def _make_item(self, summary) -> QTreeWidgetItem:
-        name = summary.name
+        name = build_place_label(summary.name, summary.settlement_name)
         if summary.is_anonymous and summary.source == "exif":
             name = f"{ANONYMOUS_GPS_PLACE_NAME} #{summary.place_id}"
         coords = ""
@@ -395,28 +343,33 @@ class LocationsPanel(QWidget):
         item = QTreeWidgetItem(values)
         for col in range(6):
             item.setData(col, _ROLE_ID, summary.place_id)
-        # Name column editable inline (matches the legacy double-click rename).
-        item.setFlags(item.flags() | Qt.ItemIsEditable)
-        item.setToolTip(0, t("places_name_edit_tip", default="Dupla kattintás a név szerkesztéséhez"))
-        item.setToolTip(
-            _COL_COORDS,
-            t(
-                "places_coords_edit_tip",
-                default="Dupla kattintás a koordináták szerkesztéséhez (pl. 47.4979, 19.0402)",
-            ),
-        )
+        # Inline editing is disabled: every edit goes through the Place edit
+        # dialog (opened via the Edit button or a double-click on the row).
+        item.setToolTip(0, t("places_row_edit_tip", default="Dupla kattintás a hely szerkesztéséhez"))
         return item
 
-    def _start_rename(self) -> None:
-        """Open the inline editor for the selected place's name cell."""
-        item = self._tree.currentItem()
-        if item is None:
-            items = self._tree.selectedItems()
-            if not items:
-                return
-            item = items[0]
-        self._tree.scrollToItem(item)
-        self._tree.editItem(item, 0)
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        """Open the Place edit dialog instead of editing a cell inline."""
+        place_id = item.data(0, _ROLE_ID)
+        if place_id is None:
+            return
+        self._edit_place(int(place_id))
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """Right-click menu: edit the clicked row + add a new place; on empty
+        space only the "add new place" action is offered."""
+        item = self._tree.itemAt(pos)
+        menu = QMenu(self._tree)
+        if item is not None:
+            place_id = item.data(0, _ROLE_ID)
+            if place_id is not None:
+                edit_action = menu.addAction(t("places_edit_btn"))
+                edit_action.triggered.connect(
+                    lambda _=False, pid=int(place_id): self._edit_place(pid)
+                )
+        new_action = menu.addAction(t("places_new_btn"))
+        new_action.triggered.connect(lambda _=False: self._create_place())
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _on_selection_changed(self) -> None:
         items = self._tree.selectedItems()
@@ -427,117 +380,6 @@ class LocationsPanel(QWidget):
         place_id = items[0].data(0, _ROLE_ID)
         if place_id is not None:
             self._load_detail(int(place_id))
-
-    def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        """Persist inline edits to the name and coordinates columns."""
-        place_id = item.data(0, _ROLE_ID)
-        if place_id is None:
-            return
-        if column == _COL_NAME:
-            self._commit_name_edit(item, int(place_id))
-        elif column == _COL_COORDS:
-            self._commit_coords_edit(item, int(place_id))
-
-    def _restore_cell(self, item: QTreeWidgetItem, column: int, text: str) -> None:
-        """Reset a cell's text without re-triggering ``itemChanged``."""
-        self._tree.blockSignals(True)
-        item.setText(column, text)
-        self._tree.blockSignals(False)
-
-    def _coords_text(self, place: Place) -> str:
-        if place.latitude is None or place.longitude is None:
-            return ""
-        return f"{place.latitude:.6f}, {place.longitude:.6f}"
-
-    def _commit_name_edit(self, item: QTreeWidgetItem, place_id: int) -> None:
-        new_name = item.text(_COL_NAME).strip()
-
-        if not new_name:
-            QMessageBox.warning(self, t("empty_name_title"), t("empty_name_msg"))
-            with session_scope() as session:
-                place = session.get(Place, place_id)
-                if place is not None:
-                    self._restore_cell(item, _COL_NAME, place.name)
-            return
-
-        with session_scope() as session:
-            place = session.get(Place, place_id)
-            if place is not None and place.name == new_name:
-                return
-
-        try:
-            with session_scope() as session:
-                PlaceService(session).name_place(place_id, new_name)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
-                self,
-                t("places_rename_title", default="Rename Place"),
-                t("places_rename_error", error=str(exc), default="Failed to rename place: {error}"),
-            )
-            with session_scope() as session:
-                place = session.get(Place, place_id)
-                if place is not None:
-                    self._restore_cell(item, _COL_NAME, place.name)
-            return
-
-        if self._current_place_id == place_id:
-            self._load_detail(place_id)
-
-    def _commit_coords_edit(self, item: QTreeWidgetItem, place_id: int) -> None:
-        text = item.text(_COL_COORDS)
-        try:
-            parsed = _parse_coords(text)
-        except ValueError as exc:
-            QMessageBox.warning(
-                self,
-                t("places_coords_invalid_title", default="Invalid coordinates"),
-                t(
-                    "places_coords_invalid_msg",
-                    error=str(exc),
-                    default="Could not parse coordinates: {error}",
-                ),
-            )
-            with session_scope() as session:
-                place = session.get(Place, place_id)
-                if place is not None:
-                    self._restore_cell(item, _COL_COORDS, self._coords_text(place))
-            return
-
-        lat, lon = (parsed if parsed is not None else (None, None))
-
-        with session_scope() as session:
-            place = session.get(Place, place_id)
-            if place is not None and place.latitude == lat and place.longitude == lon:
-                self._restore_cell(item, _COL_COORDS, self._coords_text(place))
-                return
-
-        try:
-            with session_scope() as session:
-                PlaceService(session).set_coordinates(place_id, lat, lon)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
-                self,
-                t("places_coords_invalid_title", default="Invalid coordinates"),
-                t(
-                    "places_coords_invalid_msg",
-                    error=str(exc),
-                    default="Could not save coordinates: {error}",
-                ),
-            )
-            with session_scope() as session:
-                place = session.get(Place, place_id)
-                if place is not None:
-                    self._restore_cell(item, _COL_COORDS, self._coords_text(place))
-            return
-
-        # Normalise the cell display to the canonical format.
-        with session_scope() as session:
-            place = session.get(Place, place_id)
-            if place is not None:
-                self._restore_cell(item, _COL_COORDS, self._coords_text(place))
-
-        if self._current_place_id == place_id:
-            self._load_detail(place_id)
 
     def _load_detail(self, place_id: int) -> None:
         self._current_place_id = place_id
@@ -571,7 +413,6 @@ class LocationsPanel(QWidget):
             nearby = _collect_nearby_points(images, lat, lon)
 
         self._name.setText(name)
-        self._rename_btn.setEnabled(True)
         self._edit_btn.setEnabled(True)
         type_text = _type_label(place_type)
         if radius is not None:
@@ -600,7 +441,6 @@ class LocationsPanel(QWidget):
         self._thumb.setText(t("places_no_thumbnail"))
         self._map_widget.clear()
         self._gallery.clear()
-        self._rename_btn.setEnabled(False)
         self._edit_btn.setEnabled(False)
 
     def _set_thumbnail(self, path: Optional[str]) -> None:
@@ -695,7 +535,9 @@ class LocationsPanel(QWidget):
     def _edit_selected(self) -> None:
         if self._current_place_id is None:
             return
-        place_id = self._current_place_id
+        self._edit_place(self._current_place_id)
+
+    def _edit_place(self, place_id: int) -> None:
         with session_scope() as session:
             place = session.get(Place, place_id)
             if place is None:
