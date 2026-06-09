@@ -58,6 +58,8 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(540)
         self.setMinimumHeight(300)
         self.resize(560, 640)
+        # Open the settings dialog maximised (full screen working area).
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
         self._current_db_path = current_db_path
         self._new_db_path: Optional[str] = None
         self._language_changed = False

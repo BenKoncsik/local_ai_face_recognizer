@@ -1946,10 +1946,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "sc_not_set":           {"en": "Not set",     "hu": "Nincs beállítva"},
     "sc_press_key":         {"en": "⏺ Press a key…",
                              "hu": "⏺ Nyomj le egy billentyűt…"},
-    "sc_conflict_msg":      {"en": "Already in use: {func}",
-                             "hu": "Ez a kombináció már használatban van: {func}"},
-
-    # categories
+    "sc_conflict_msg":      {"en": "Already in use on this page: {func}",
+                             "hu": "Ezen az oldalon már használatban: {func}"},
+    # categories / pages
     "sc_cat_general":       {"en": "General",       "hu": "Általános"},
     "sc_cat_image":         {"en": "Image Browser", "hu": "Képböngésző"},
     "sc_cat_faces":         {"en": "Faces",          "hu": "Arcok"},

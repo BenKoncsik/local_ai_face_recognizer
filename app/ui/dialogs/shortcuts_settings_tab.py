@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -13,6 +12,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -173,54 +173,50 @@ class ShortcutsSettingsTab(QWidget):
         self._conflict_lbl.setVisible(False)
         outer.addWidget(self._conflict_lbl)
 
-        # Scroll area
+        # One sub-tab per page (context). The same key may appear on more than
+        # one page without conflicting; conflicts are only checked within a page.
+        self._page_tabs = QTabWidget()
+        self._populate_pages()
+        outer.addWidget(self._page_tabs, stretch=1)
+
+    def _populate_pages(self) -> None:
+        # Group shortcuts by context, preserving their declaration order. Each
+        # context becomes a sub-tab labelled with that page's name.
+        order: list[str] = []
+        groups: dict[str, tuple[str, list[ShortcutDef]]] = {}
+        for sc in self._svc.all_shortcuts():
+            if sc.context not in groups:
+                groups[sc.context] = (sc.category_key, [])
+                order.append(sc.context)
+            groups[sc.context][1].append(sc)
+
+        for ctx in order:
+            category_key, scs = groups[ctx]
+            self._page_tabs.addTab(self._build_page(scs), t(category_key))
+
+    def _build_page(self, scs: list[ShortcutDef]) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         content = QWidget()
-        self._list_layout = QVBoxLayout(content)
-        self._list_layout.setSpacing(2)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        layout = QVBoxLayout(content)
+        layout.setSpacing(2)
+        layout.setContentsMargins(4, 6, 4, 4)
 
-        self._populate_rows()
-        self._list_layout.addStretch()
-
-        scroll.setWidget(content)
-        outer.addWidget(scroll, stretch=1)
-
-    def _populate_rows(self) -> None:
-        shortcuts = self._svc.all_shortcuts()
-        current_cat = None
-
-        header_font = QFont()
-        header_font.setBold(True)
-
-        for sc in shortcuts:
-            cat = t(sc.category_key)
-            if cat != current_cat:
-                current_cat = cat
-                if self._list_layout.count() > 0:
-                    spacer = QWidget()
-                    spacer.setFixedHeight(6)
-                    self._list_layout.addWidget(spacer)
-                hdr = QLabel(cat)
-                hdr.setFont(header_font)
-                hdr.setStyleSheet("color: #aaa; padding-top: 4px;")
-                self._list_layout.addWidget(hdr)
-                sep = QWidget()
-                sep.setFixedHeight(1)
-                sep.setStyleSheet("background: #383838;")
-                self._list_layout.addWidget(sep)
-
+        for sc in scs:
             row = _ShortcutRow(sc, self)
             row.modify_requested.connect(self._on_modify)
             row.delete_requested.connect(self._on_delete)
             row.save_requested.connect(self._on_save)
             row.cancel_requested.connect(self._on_cancel)
             self._rows[sc.id] = row
-            self._list_layout.addWidget(row)
+            layout.addWidget(row)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
 
     # ── Slot handlers ─────────────────────────────────────────────────────
 

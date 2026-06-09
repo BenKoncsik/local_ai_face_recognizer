@@ -33,18 +33,37 @@ log = logging.getLogger(__name__)
 _SETTINGS_NS = "shortcuts"
 
 
+# ── Contexts (pages) ────────────────────────────────────────────────────────
+#
+# A shortcut belongs to exactly one *context* (a page / functional namespace).
+# The same key combination may be reused freely across different contexts —
+# conflicts are only checked within the same context.  Contexts listed in
+# ``_GLOBAL_CONTEXTS`` are active on every page, so their keys must stay unique
+# against *all* other contexts (they would otherwise shadow a page binding).
+_GLOBAL_CONTEXTS = frozenset({"general"})
+
+
 @dataclass
 class ShortcutDef:
     id: str
     name_key: str       # i18n key
-    category_key: str   # i18n key
+    category_key: str   # i18n key — also used as the page/context label
     default_key: str    # canonical portable string, e.g. "Ctrl+,"
     current_key: str = ""
     deletable: bool = True  # False → key field shown but cannot be cleared
+    context: str = ""   # page / functional namespace; derived from category if empty
 
     def __post_init__(self) -> None:
         if not self.current_key:
             self.current_key = self.default_key
+        if not self.context:
+            # Derive the context from the category (e.g. "sc_cat_image" → "image").
+            self.context = self.category_key.replace("sc_cat_", "") or "general"
+
+    @property
+    def is_global(self) -> bool:
+        """True if this shortcut is active on every page."""
+        return self.context in _GLOBAL_CONTEXTS
 
 
 _DEFAULTS: List[ShortcutDef] = [
@@ -124,6 +143,11 @@ class ShortcutService:
         self._host = None  # QWidget that owns the QShortcut objects
         self._enabled: bool = True
         self._capturing: bool = False   # True while settings capture mode is active
+        # The currently active page/context. ``None`` means "no scoping" — every
+        # shortcut fires (backward-compatible fallback used before any page is
+        # selected). Once set, only global shortcuts and those belonging to the
+        # active context are live.
+        self._active_context: Optional[str] = None
         self._init_defaults()
         self._load()
 
@@ -183,12 +207,37 @@ class ShortcutService:
         self.save()
         self._sync_shortcut(sc_id)
 
-    def find_conflict(self, key: str, exclude_id: str = "") -> Optional[ShortcutDef]:
-        """Return the first shortcut already mapped to *key*, or None."""
+    @staticmethod
+    def _contexts_overlap(a: str, b: str) -> bool:
+        """True if two contexts can be active at the same time.
+
+        Same context → overlap. A global context (active on every page) overlaps
+        with every other context, so its keys must stay unique everywhere.
+        """
+        if a == b:
+            return True
+        return a in _GLOBAL_CONTEXTS or b in _GLOBAL_CONTEXTS
+
+    def find_conflict(
+        self, key: str, exclude_id: str = "", context: Optional[str] = None
+    ) -> Optional[ShortcutDef]:
+        """Return a conflicting shortcut for *key*, scoped to its context.
+
+        A conflict only exists between shortcuts whose contexts overlap (same
+        page, or one of them is global). The same key on two different pages is
+        therefore allowed. ``context`` defaults to the context of *exclude_id*
+        (the shortcut being edited); when neither is known the check falls back
+        to a global, context-agnostic search.
+        """
         if not key:
             return None
+        if context is None:
+            editing = self._shortcuts.get(exclude_id)
+            context = editing.context if editing else None
         for sc in self._shortcuts.values():
-            if sc.id != exclude_id and sc.current_key == key:
+            if sc.id == exclude_id or sc.current_key != key:
+                continue
+            if context is None or self._contexts_overlap(context, sc.context):
                 return sc
         return None
 
@@ -202,6 +251,21 @@ class ShortcutService:
 
     def is_capturing(self) -> bool:
         return self._capturing
+
+    # ── Active context (page) ─────────────────────────────────────────────
+
+    def set_active_context(self, context: Optional[str]) -> None:
+        """Select the active page. Only its shortcuts (plus global ones) fire.
+
+        Passing ``None`` disables context scoping (every shortcut is live).
+        """
+        if context == self._active_context:
+            return
+        self._active_context = context
+        self._refresh_enabled()
+
+    def active_context(self) -> Optional[str]:
+        return self._active_context
 
     # ── Host / QShortcut wiring ───────────────────────────────────────────
 
@@ -254,18 +318,31 @@ class ShortcutService:
             self._qshortcuts[sc_id] = qsc
         else:
             qsc.setKey(seq)
-        qsc.setEnabled(self._active())
+        qsc.setEnabled(self._shortcut_active(sc_id))
 
     def _active(self) -> bool:
+        """Global gate: shortcuts are enabled and not in settings-capture mode."""
         return self._enabled and not self._capturing
 
+    def _context_active(self, context: str) -> bool:
+        """True if *context* is live under the current active page."""
+        if self._active_context is None:
+            return True  # no scoping selected yet → everything is live
+        return context in _GLOBAL_CONTEXTS or context == self._active_context
+
+    def _shortcut_active(self, sc_id: str) -> bool:
+        """True if the shortcut may fire right now (gate + context)."""
+        if not self._active():
+            return False
+        sc = self._shortcuts.get(sc_id)
+        return sc is not None and self._context_active(sc.context)
+
     def _refresh_enabled(self) -> None:
-        active = self._active()
-        for qsc in self._qshortcuts.values():
-            qsc.setEnabled(active)
+        for sc_id, qsc in self._qshortcuts.items():
+            qsc.setEnabled(self._shortcut_active(sc_id))
 
     def _fire(self, sc_id: str) -> None:
-        if not self._active():
+        if not self._shortcut_active(sc_id):
             return
         handler = self._handlers.get(sc_id)
         if handler is None:
@@ -283,6 +360,8 @@ class ShortcutService:
             return False
         for sc in self._shortcuts.values():
             if sc.current_key != key_str:
+                continue
+            if not self._context_active(sc.context):
                 continue
             handler = self._handlers.get(sc.id)
             if handler is None:

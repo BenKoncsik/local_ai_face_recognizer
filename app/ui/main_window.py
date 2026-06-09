@@ -161,6 +161,26 @@ class MainWindow(QMainWindow):
         svc.register("general.settings",  self._on_settings)
         svc.register("general.log_panel", self._toggle_log_panel)
         svc.set_host(self)
+        # Scope shortcuts to the active page: switching tabs swaps which
+        # page-specific shortcuts are live, so the same key can mean different
+        # things on different pages. Global ("general") shortcuts stay active
+        # everywhere.
+        self._tabs.currentChanged.connect(self._on_tab_context_changed)
+        self._on_tab_context_changed(self._tabs.currentIndex())
+
+    # Maps each outer tab to the shortcut context (page) it activates. Tabs not
+    # listed here fall back to "other" — only global shortcuts stay live there.
+    _TAB_CONTEXT = {
+        0: "faces",    # Arcfelismerés
+        1: "image",    # Képböngésző
+        4: "faces",    # Személyek
+        6: "collage",  # Kollázs
+    }
+
+    def _on_tab_context_changed(self, index: int) -> None:
+        from app.services.shortcut_service import get_shortcut_service
+        context = self._TAB_CONTEXT.get(index, "other")
+        get_shortcut_service().set_active_context(context)
 
     def _toggle_log_panel(self) -> None:
         if hasattr(self, "_log_dock"):
