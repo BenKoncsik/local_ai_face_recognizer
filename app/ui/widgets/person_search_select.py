@@ -195,9 +195,20 @@ class PersonSearchSelect(QWidget):
         return int(data) if data is not None else None
 
     def set_current_by_id(self, person_id: Optional[int]) -> None:
-        """Highlight the list row whose person_id matches *person_id*."""
+        """Highlight the list row whose person_id matches *person_id* and
+        scroll it into view.
+
+        Scrolling is deterministic so a freshly populated selector never
+        inherits the previous target's scroll position: if the row is found it
+        is revealed (centred); otherwise the list snaps back to the top.
+        """
         self._selected_id = person_id
         self._sync_selection()
+        item = self._list.currentItem()
+        if item is not None:
+            self._list.scrollToItem(item, QListWidget.PositionAtCenter)
+        else:
+            self._list.scrollToTop()
 
     def clear_selection(self) -> None:
         """Deselect all rows and forget the stored selection."""

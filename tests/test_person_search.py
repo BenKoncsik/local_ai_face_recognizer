@@ -248,3 +248,32 @@ class TestPersonSearchSelectReset:
         # A subsequent rebuild must not resurrect the stale selection.
         widget.set_persons(persons)
         assert widget.current_person_id() is None
+
+    def test_set_current_by_id_scrolls_selection_into_view(self, qtbot):
+        # A long list so the target row would otherwise sit below the fold.
+        from app.ui.widgets.person_search_select import PersonSearchSelect
+
+        widget = PersonSearchSelect()
+        qtbot.addWidget(widget)
+        widget.resize(220, 200)
+        widget.show()
+        qtbot.waitExposed(widget)
+        many = [_FakePerson(i, f"P{i:03d}") for i in range(1, 41)]
+        widget.set_persons(many)
+
+        # Selecting a row far down the list must reveal it, not keep the old
+        # scroll position — the row's visual rect lands inside the viewport.
+        widget.set_current_by_id(40)
+        assert widget.current_person_id() == 40
+        item = widget._list.currentItem()
+        rect = widget._list.visualItemRect(item)
+        viewport = widget._list.viewport().rect()
+        assert viewport.intersects(rect)
+
+    def test_set_current_by_id_missing_target_scrolls_to_top(self, qtbot):
+        widget, persons = self._make(qtbot)
+        widget.set_persons(persons)
+        # An id not present in the list clears the selection and resets scroll;
+        # no exception, current selection is None.
+        widget.set_current_by_id(999)
+        assert widget.current_person_id() is None
