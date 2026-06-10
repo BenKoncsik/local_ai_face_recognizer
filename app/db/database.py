@@ -153,6 +153,92 @@ def _migrate_add_columns(engine: Engine) -> None:
     _migrate_geocoding_tables(engine)
     _migrate_place_display_name(engine)
     _migrate_object_tagging(engine)
+    _migrate_deep_recognition_tables(engine)
+
+
+def _migrate_deep_recognition_tables(engine: Engine) -> None:
+    """Create the deep-recognition tables if missing (idempotent).
+
+    training_runs records each training + recognition run of the deep engine;
+    auto_assignments is the per-face review log behind the "automatic
+    groupings" tab (confirm / correct / revert decisions feed back into
+    training).
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS training_runs (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mode                VARCHAR(16) NOT NULL DEFAULT 'rescan',
+                    started_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    finished_at         DATETIME,
+                    n_persons           INTEGER NOT NULL DEFAULT 0,
+                    n_examples          INTEGER NOT NULL DEFAULT 0,
+                    n_augmented         INTEGER NOT NULL DEFAULT 0,
+                    validation_accuracy FLOAT,
+                    data_fingerprint    VARCHAR(64),
+                    model_path          TEXT,
+                    notes               TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS auto_assignments (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    training_run_id     INTEGER NOT NULL
+                        REFERENCES training_runs(id) ON DELETE CASCADE,
+                    face_id             INTEGER NOT NULL
+                        REFERENCES faces(id) ON DELETE CASCADE,
+                    person_id           INTEGER NOT NULL
+                        REFERENCES persons(id) ON DELETE CASCADE,
+                    previous_person_id  INTEGER
+                        REFERENCES persons(id) ON DELETE SET NULL,
+                    previous_person_name VARCHAR(255),
+                    corrected_person_id INTEGER
+                        REFERENCES persons(id) ON DELETE SET NULL,
+                    score               FLOAT NOT NULL DEFAULT 0.0,
+                    status              VARCHAR(16) NOT NULL DEFAULT 'auto',
+                    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    decided_at          DATETIME
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_assignments_training_run_id "
+                "ON auto_assignments(training_run_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_assignments_face_id "
+                "ON auto_assignments(face_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_assignments_person_id "
+                "ON auto_assignments(person_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_assignments_status "
+                "ON auto_assignments(status)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_assign_run_status "
+                "ON auto_assignments(training_run_id, status)"
+            )
+        )
+    log.debug("Migration: deep recognition tables ensured")
 
 
 def _migrate_object_tagging(engine: Engine) -> None:

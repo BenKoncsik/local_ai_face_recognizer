@@ -261,6 +261,91 @@ class RecognitionConfig:
 
 
 @dataclass
+class DeepRecognitionConfig:
+    """Parameters for the deep-learning recognition engine (the "new" path).
+
+    A neural-network (MLP) ensemble is trained on the embeddings of every
+    trusted labeled face on each run, with cross-validated per-person
+    thresholds and open-set rejection.  Accuracy is preferred over speed:
+    training may take minutes and saturate the CPU by design.
+    """
+
+    enabled: bool = True
+
+    # Directory (relative to base_dir) where the trained model is persisted.
+    model_dir: str = "data/deep_model"
+
+    # --- Training ---
+    # Number of independently seeded networks in the ensemble.
+    ensemble_size: int = 5
+    # Hidden layer sizes of each member network.
+    hidden_layers: tuple = (256, 128)
+    # Maximum optimiser iterations per network.
+    max_iter: int = 600
+    # Small classes are augmented (jitter + interpolation) up to this size.
+    min_class_size: int = 8
+    # Gaussian noise applied to synthetic samples (on unit-norm embeddings).
+    augment_noise_sigma: float = 0.03
+    # Cross-validation folds used to calibrate per-person thresholds.
+    calibration_folds: int = 3
+    # Skip retraining when the labeled data did not change since the last run.
+    skip_unchanged: bool = True
+
+    # --- Open-set / assignment gates ---
+    # Fallback ensemble-probability threshold (per-person calibration may lower it).
+    base_prob_threshold: float = 0.60
+    # Hard floor for calibrated per-person probability thresholds.
+    min_prob_threshold: float = 0.35
+    # Required probability gap between the best and second-best person.
+    min_margin: float = 0.10
+    # Minimum cosine similarity to a real training example of the winner.
+    min_prototype_similarity: float = 0.55
+    # Below this best-similarity to *anyone* known, the face is treated as an
+    # outlier (stranger or non-face) and never auto-assigned.
+    outlier_similarity: float = 0.42
+
+    # --- Candidate filtering ("never recognise non-faces") ---
+    # Faces below this detector confidence are never auto-assigned.
+    min_face_confidence: float = 0.60
+    # Skip low-quality faces (blurry / tiny / sideways) during auto-assignment.
+    strict_quality_filter: bool = True
+
+    # --- Continual learning from automatic assignments ---
+    # Reuse very confident automatic assignments as extra training data.
+    use_auto_assignments_for_training: bool = True
+    # Confidence floor for an automatic assignment to count as training data.
+    auto_training_min_confidence: float = 0.92
+
+    # Use the slower high-accuracy detector pass in the deep pipeline.
+    high_accuracy_detection: bool = False
+
+
+@dataclass
+class OverlapResolutionConfig:
+    """Parameters for the same-image overlapping-box resolution pass.
+
+    When the detector produced several boxes over the same physical face, only
+    one survives: a manually drawn or person-assigned box always wins over an
+    unknown one; between two unknown boxes the better-quality one is kept.
+    """
+
+    enabled: bool = True
+    # Boxes overlapping at or above this IoU are considered the same face.
+    iou_threshold: float = 0.35
+    # A small box nested inside a larger one has low IoU but high containment
+    # (intersection / smaller-box area); this catches that case.
+    containment_threshold: float = 0.80
+    # When both faces have embeddings, require at least this cosine similarity
+    # before deleting — protects two genuinely different, tightly cropped faces.
+    embedding_guard_similarity: float = 0.80
+    # Above this IoU the boxes are geometrically the same spot, so the pair is
+    # resolved even when embeddings disagree (e.g. one crop is corrupt).
+    hard_iou_threshold: float = 0.65
+    # Skip pathological images with more boxes than this.
+    max_faces_per_image: int = 120
+
+
+@dataclass
 class IgnoredFaceConfig:
     """Parameters for the permanently-ignored faces filter.
 
@@ -426,6 +511,12 @@ class AppConfig:
     )
     identity_repair: IdentityRepairConfig = field(default_factory=IdentityRepairConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
+    deep_recognition: DeepRecognitionConfig = field(
+        default_factory=DeepRecognitionConfig
+    )
+    overlap_resolution: OverlapResolutionConfig = field(
+        default_factory=OverlapResolutionConfig
+    )
     ignored_faces: IgnoredFaceConfig = field(default_factory=IgnoredFaceConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
@@ -643,6 +734,85 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             same_image_assist_margin=rec.get(
                 "same_image_assist_margin",
                 cfg.recognition.same_image_assist_margin,
+            ),
+        )
+
+        deep = raw.get("deep_recognition", {})
+        cfg.deep_recognition = DeepRecognitionConfig(
+            enabled=deep.get("enabled", cfg.deep_recognition.enabled),
+            model_dir=deep.get("model_dir", cfg.deep_recognition.model_dir),
+            ensemble_size=deep.get(
+                "ensemble_size", cfg.deep_recognition.ensemble_size
+            ),
+            hidden_layers=tuple(
+                deep.get("hidden_layers", list(cfg.deep_recognition.hidden_layers))
+            ),
+            max_iter=deep.get("max_iter", cfg.deep_recognition.max_iter),
+            min_class_size=deep.get(
+                "min_class_size", cfg.deep_recognition.min_class_size
+            ),
+            augment_noise_sigma=deep.get(
+                "augment_noise_sigma", cfg.deep_recognition.augment_noise_sigma
+            ),
+            calibration_folds=deep.get(
+                "calibration_folds", cfg.deep_recognition.calibration_folds
+            ),
+            skip_unchanged=deep.get(
+                "skip_unchanged", cfg.deep_recognition.skip_unchanged
+            ),
+            base_prob_threshold=deep.get(
+                "base_prob_threshold", cfg.deep_recognition.base_prob_threshold
+            ),
+            min_prob_threshold=deep.get(
+                "min_prob_threshold", cfg.deep_recognition.min_prob_threshold
+            ),
+            min_margin=deep.get("min_margin", cfg.deep_recognition.min_margin),
+            min_prototype_similarity=deep.get(
+                "min_prototype_similarity",
+                cfg.deep_recognition.min_prototype_similarity,
+            ),
+            outlier_similarity=deep.get(
+                "outlier_similarity", cfg.deep_recognition.outlier_similarity
+            ),
+            min_face_confidence=deep.get(
+                "min_face_confidence", cfg.deep_recognition.min_face_confidence
+            ),
+            strict_quality_filter=deep.get(
+                "strict_quality_filter", cfg.deep_recognition.strict_quality_filter
+            ),
+            use_auto_assignments_for_training=deep.get(
+                "use_auto_assignments_for_training",
+                cfg.deep_recognition.use_auto_assignments_for_training,
+            ),
+            auto_training_min_confidence=deep.get(
+                "auto_training_min_confidence",
+                cfg.deep_recognition.auto_training_min_confidence,
+            ),
+            high_accuracy_detection=deep.get(
+                "high_accuracy_detection",
+                cfg.deep_recognition.high_accuracy_detection,
+            ),
+        )
+
+        ovr = raw.get("overlap_resolution", {})
+        cfg.overlap_resolution = OverlapResolutionConfig(
+            enabled=ovr.get("enabled", cfg.overlap_resolution.enabled),
+            iou_threshold=ovr.get(
+                "iou_threshold", cfg.overlap_resolution.iou_threshold
+            ),
+            containment_threshold=ovr.get(
+                "containment_threshold",
+                cfg.overlap_resolution.containment_threshold,
+            ),
+            embedding_guard_similarity=ovr.get(
+                "embedding_guard_similarity",
+                cfg.overlap_resolution.embedding_guard_similarity,
+            ),
+            hard_iou_threshold=ovr.get(
+                "hard_iou_threshold", cfg.overlap_resolution.hard_iou_threshold
+            ),
+            max_faces_per_image=ovr.get(
+                "max_faces_per_image", cfg.overlap_resolution.max_faces_per_image
             ),
         )
 

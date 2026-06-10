@@ -67,6 +67,11 @@ from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
 from app.ui.widgets.flow_layout import FlowContainer
 from app.workers.match_job_worker import MatchJobWorker
+from app.workers.deep_pipeline_worker import (
+    MODE_REBUILD,
+    MODE_RESCAN,
+    DeepPipelineWorker,
+)
 from app.workers.pipeline_worker import PipelineWorker
 
 log = logging.getLogger(__name__)
@@ -110,6 +115,7 @@ class MainWindow(QMainWindow):
         self._load_recording_prefs()
         self._connect_display_events()
         self._pending_suggestion_count: int = 0
+        self._pending_auto_assignment_count: int = 0
         self._open_suggestion_count: int = 0
         self._match_active: bool = False
         self._match_paused: bool = False
@@ -919,9 +925,92 @@ class MainWindow(QMainWindow):
             on_identity_repair_scan=self._on_identity_repair_scan,
             on_cleanup_empty_unknown_persons=self._on_cleanup_empty_unknown_persons,
             on_manage_ignored_faces=self._on_manage_ignored_faces,
+            on_deep_rescan=self._on_deep_rescan,
+            on_deep_rebuild=self._on_deep_rebuild,
             parent=self,
         )
         dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Deep-learning (AI) pipeline
+    # ------------------------------------------------------------------
+
+    def _deep_pipeline_guard(self) -> bool:
+        """Shared pre-flight checks for the deep pipeline modes."""
+        from app.gdrive import preferences as _gprefs
+
+        prefs = _gprefs.load()
+        if prefs.enabled and self._gdrive_session is None:
+            QMessageBox.information(
+                self, t("gdrive_chip_opening"), t("gdrive_scan_no_session")
+            )
+            return False
+        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
+            QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
+            return False
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return False
+        return True
+
+    @Slot()
+    def _on_deep_rescan(self) -> None:
+        if not self._deep_pipeline_guard():
+            return
+        self._start_deep_pipeline(MODE_RESCAN)
+
+    @Slot()
+    def _on_deep_rebuild(self) -> None:
+        if not self._deep_pipeline_guard():
+            return
+        reply = QMessageBox.question(
+            self,
+            t("deep_rebuild_confirm_title"),
+            t("deep_rebuild_confirm_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._start_deep_pipeline(MODE_REBUILD)
+
+    def _start_deep_pipeline(self, mode: str) -> None:
+        """Launch the deep-learning pipeline worker in the given mode."""
+        drive_active = self._gdrive_session is not None
+        if not drive_active and not hasattr(self, "_root_folder"):
+            return
+        self._set_scanning_state(True)
+
+        if drive_active and self._gdrive_session is not None:
+            from app.paths import drive_mirror_dir
+            folders = self._gdrive_session.folders
+            root_id = folders.root_id if folders else ""
+            self._worker = DeepPipelineWorker(
+                root_folder="",          # unused in Drive mode
+                config=self._config,
+                mode=mode,
+                parent=self,
+                db_path_override=self._db_path,
+                drive_client=self._gdrive_session._client,
+                drive_root_folder_id=root_id,
+                drive_mirror_dir=drive_mirror_dir(root_id),
+            )
+        else:
+            self._worker = DeepPipelineWorker(
+                root_folder=self._root_folder,
+                config=self._config,
+                mode=mode,
+                parent=self,
+                db_path_override=self._db_path,
+            )
+        self._pending_suggestion_count = 0
+        self._pending_auto_assignment_count = 0
+        self._worker.progress.connect(self._on_progress)
+        self._worker.log_message.connect(self._log_panel.append_plain)
+        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
+        self._worker.auto_assignments_ready.connect(self._on_auto_assignments_ready)
+        self._worker.finished.connect(self._on_pipeline_finished)
+        self._worker.error.connect(self._on_pipeline_error)
+        self._worker.start()
 
     @Slot()
     def _on_reset_unknown_persons(self) -> None:
@@ -1054,10 +1143,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     @Slot()
-    def _on_show_suggestions(self) -> None:
+    def _on_show_suggestions(self, open_auto_tab: bool = False) -> None:
         dlg = SuggestionDialog(self._config, parent=self)
         dlg.data_changed.connect(self._refresh_persons)
         dlg.data_changed.connect(self._image_browser._reload_current_face_data)
+        if open_auto_tab:
+            dlg.show_auto_assignments_tab()
         dlg.exec()
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
@@ -2098,6 +2189,10 @@ class MainWindow(QMainWindow):
     def _on_suggestions_ready(self, count: int) -> None:
         self._pending_suggestion_count = count
 
+    @Slot(int)
+    def _on_auto_assignments_ready(self, count: int) -> None:
+        self._pending_auto_assignment_count = count
+
     @Slot(bool, str)
     def _on_pipeline_finished(self, success: bool, summary: str) -> None:
         self._set_scanning_state(False)
@@ -2116,7 +2211,19 @@ class MainWindow(QMainWindow):
         # incrementally without blocking the UI.
         self._enqueue_full_match()
 
-        if self._pending_suggestion_count > 0:
+        if self._pending_auto_assignment_count > 0:
+            reply = QMessageBox.question(
+                self,
+                t("auto_assignments_found_title"),
+                t(
+                    "auto_assignments_found_msg",
+                    n=self._pending_auto_assignment_count,
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._on_show_suggestions(open_auto_tab=True)
+        elif self._pending_suggestion_count > 0:
             reply = QMessageBox.question(
                 self,
                 t("suggestions_found_title"),
@@ -2126,6 +2233,7 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.Yes:
                 self._on_show_suggestions()
         self._pending_suggestion_count = 0
+        self._pending_auto_assignment_count = 0
 
     @Slot(str)
     def _on_pipeline_error(self, message: str) -> None:

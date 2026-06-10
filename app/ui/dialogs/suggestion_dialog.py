@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -457,7 +458,14 @@ class SuggestionDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        dialog_root = QVBoxLayout(self)
+
+        self._tabs = QTabWidget()
+        dialog_root.addWidget(self._tabs, stretch=1)
+
+        # ── Tab 1: Unknown → Known merge suggestions (the original UI) ────
+        suggestions_tab = QWidget()
+        root = QVBoxLayout(suggestions_tab)
 
         intro = QLabel(t("suggestions_intro"))
         intro.setWordWrap(True)
@@ -534,9 +542,45 @@ class SuggestionDialog(QDialog):
         kb_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(kb_hint)
 
+        self._tabs.addTab(suggestions_tab, t("suggestions_tab_matches"))
+
+        # ── Tab 2: automatic groupings of the last AI run ─────────────────
+        from app.ui.dialogs.auto_assignments_tab import AutoAssignmentsTab
+
+        deep_config = (
+            self._app_config.deep_recognition
+            if self._app_config is not None
+            else None
+        )
+        self._auto_tab = AutoAssignmentsTab(deep_config, parent=self)
+        self._auto_tab.data_changed.connect(self.data_changed)
+        self._auto_tab.count_changed.connect(self._on_auto_count_changed)
+        self._tabs.addTab(self._auto_tab, t("suggestions_tab_auto"))
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        dialog_root.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    # Tabs
+    # ------------------------------------------------------------------
+
+    def show_auto_assignments_tab(self) -> None:
+        """Open the dialog focused on the automatic-groupings review tab."""
+        self._tabs.setCurrentWidget(self._auto_tab)
+
+    @Slot(int)
+    def _on_tab_changed(self, index: int) -> None:
+        if self._tabs.widget(index) is self._auto_tab:
+            self._auto_tab.ensure_loaded()
+
+    @Slot(int)
+    def _on_auto_count_changed(self, count: int) -> None:
+        label = t("suggestions_tab_auto")
+        if count > 0:
+            label = f"{label} ({count})"
+        self._tabs.setTabText(self._tabs.indexOf(self._auto_tab), label)
 
     # ------------------------------------------------------------------
     # Data
@@ -627,6 +671,11 @@ class SuggestionDialog(QDialog):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event) -> None:
+        # Row navigation shortcuts only apply on the suggestions tab.
+        if self._tabs.currentWidget() is self._auto_tab:
+            super().keyPressEvent(event)
+            return
+
         key = event.key()
         n = len(self._rows)
 

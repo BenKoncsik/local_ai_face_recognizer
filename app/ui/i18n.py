@@ -1394,6 +1394,146 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.title":
         {"en": "Scan & Maintenance",
          "hu": "Beolvasás és karbantartás"},
+    "scanModes.tab.deep":
+        {"en": "AI Recognition (new)",
+         "hu": "AI felismerés (új)"},
+    "scanModes.tab.classic":
+        {"en": "Classic",
+         "hu": "Klasszikus"},
+
+    # ── Deep-learning (AI) tab ────────────────────────────────────────────
+    "scanModes.deep.intro":
+        {"en": "The new deep-learning engine trains a neural network from the people "
+               "you have already categorized, then places unknown faces with them. "
+               "The more faces a person has, the more accurate it gets — it learns "
+               "from every run and from every correction you make. Training favours "
+               "accuracy over speed and may fully load the CPU for a while.",
+         "hu": "Az új mélytanulásos motor a már kategorizált személyekből neurális "
+               "hálót tanít, majd az ismeretlen arcokat próbálja hozzájuk rendelni. "
+               "Minél több arc tartozik egy személyhez, annál pontosabb — minden "
+               "futtatásból és minden javításodból tanul. A tanítás a pontosságot "
+               "részesíti előnyben a sebességgel szemben, és egy ideig teljesen "
+               "leterhelheti a processzort."},
+    "scanModes.deepRescan.title":
+        {"en": "AI Re-scan",
+         "hu": "AI újra beolvasás"},
+    "scanModes.deepRescan.description":
+        {"en": "Scans for new images, then retrains the neural network from your "
+               "categorized faces and tries to place every uncategorized, unknown "
+               "face with a known person. Overlapping duplicate boxes of the same "
+               "face are cleaned up: a box already assigned to a person always "
+               "survives; between two unknown boxes one is kept. Faces already "
+               "recognized are never touched — the earlier recognition wins.",
+         "hu": "Beolvassa az új képeket, majd a kategorizált arcokból újratanítja a "
+               "neurális hálót, és minden nem kategorizált, ismeretlen arcot "
+               "megpróbál egy ismert személyhez rendelni. Az ugyanarra az arcra "
+               "rajzolt átfedő, dupla kereteket kitisztítja: a már személyhez "
+               "rendelt keret mindig megmarad; két ismeretlen keretből egy marad. "
+               "A már felismert arcokhoz nem nyúl — a korábbi felismerés marad."},
+    "scanModes.deepRescan.startButton":
+        {"en": "Start AI Re-scan",
+         "hu": "AI újra beolvasás indítása"},
+    "scanModes.deepRescan.warning":
+        {"en": "Safe — existing assignments are never changed; training can take a while",
+         "hu": "Biztonságos — a meglévő hozzárendelések nem változnak; a tanítás eltarthat egy ideig"},
+    "scanModes.deepRebuild.title":
+        {"en": "AI Rebuild from Scratch",
+         "hu": "AI újraépítés nulláról"},
+    "scanModes.deepRebuild.description":
+        {"en": "Rebuilds the face database from zero: every automatically detected "
+               "face box is deleted, all images are re-detected and re-embedded, "
+               "then the neural network is trained and recognition runs on the "
+               "fresh data. Manually drawn boxes and the faces you confirmed on "
+               "people are kept — they are the training data the network learns "
+               "from. Slow on large libraries, but gives the cleanest result.",
+         "hu": "Nulláról újraépíti az arc-adatbázist: minden automatikusan felismert "
+               "arckeretet töröl, minden képet újra feldolgoz (detektálás + "
+               "embedding), majd a friss adatokon tanítja a neurális hálót és "
+               "futtatja a felismerést. A kézzel rajzolt keretek és a személyeknél "
+               "megerősített arcok megmaradnak — ezekből tanul a háló. Nagy "
+               "könyvtárnál lassú, de ez adja a legtisztább eredményt."},
+    "scanModes.deepRebuild.startButton":
+        {"en": "Rebuild from Scratch",
+         "hu": "Újraépítés nulláról"},
+    "scanModes.deepRebuild.warning":
+        {"en": "Destructive — automatic face boxes and Unknown groups are rebuilt; "
+               "human-confirmed faces survive",
+         "hu": "Romboló — az automatikus arckeretek és Unknown csoportok újraépülnek; "
+               "az ember által megerősített arcok megmaradnak"},
+    "deep_rebuild_confirm_title":
+        {"en": "AI Rebuild from Scratch",
+         "hu": "AI újraépítés nulláról"},
+    "deep_rebuild_confirm_msg":
+        {"en": "Rebuild the face database from zero?\n\n"
+               "All automatically detected face boxes and Unknown groups will be "
+               "deleted and recreated. Manually drawn boxes and human-confirmed "
+               "person assignments are kept as training data.\n\n"
+               "This can take a long time on a large library.",
+         "hu": "Nulláról újraépíti az arc-adatbázist?\n\n"
+               "Minden automatikusan felismert arckeret és Unknown csoport törlődik, "
+               "majd újraépül. A kézzel rajzolt keretek és az ember által "
+               "megerősített személy-hozzárendelések tanítóadatként megmaradnak.\n\n"
+               "Nagy képkönyvtárnál ez sokáig tarthat."},
+
+    # ── Automatic groupings (deep recognition review) ─────────────────────
+    "auto_assignments_found_title":
+        {"en": "AI Groupings Ready",
+         "hu": "AI csoportosítások elkészültek"},
+    "auto_assignments_found_msg":
+        {"en": "The AI placed {n} face(s) with known people in this run.\n\n"
+               "Would you like to review them now? You can confirm, correct or "
+               "undo each grouping — the AI learns from your corrections.",
+         "hu": "Az AI ebben a futásban {n} arcot rendelt ismert személyekhez.\n\n"
+               "Átnézed most? Mindegyik csoportosítást megerősítheted, javíthatod "
+               "vagy visszavonhatod — az AI tanul a javításaidból."},
+    "suggestions_tab_matches":
+        {"en": "Name Suggestions",
+         "hu": "Névjavaslatok"},
+    "suggestions_tab_auto":
+        {"en": "Automatic Groupings",
+         "hu": "Automatikus csoportosítás"},
+    "autoAssign.intro":
+        {"en": "Faces the last AI run placed with known people. Confirm the good "
+               "ones, fix the wrong ones — the network learns from every decision "
+               "you make here.",
+         "hu": "Arcok, amelyeket a legutóbbi AI futás ismert személyekhez rendelt. "
+               "Erősítsd meg a jókat, javítsd a rosszakat — a háló minden itteni "
+               "döntésedből tanul."},
+    "autoAssign.empty":
+        {"en": "No automatic groupings to review. Run an AI re-scan from "
+               "Scan & Maintenance to get new ones.",
+         "hu": "Nincs átnézendő automatikus csoportosítás. Futtass AI újra "
+               "beolvasást a Beolvasás és karbantartás ablakból."},
+    "autoAssign.run_info":
+        {"en": "Last AI run: {date}",
+         "hu": "Utolsó AI futás: {date}"},
+    "autoAssign.count":
+        {"en": "{n} grouping(s) to review",
+         "hu": "{n} átnézendő csoportosítás"},
+    "autoAssign.from_group":
+        {"en": "previously: {name}",
+         "hu": "korábban: {name}"},
+    "autoAssign.from_unassigned":
+        {"en": "previously: unassigned",
+         "hu": "korábban: hozzárendelés nélkül"},
+    "autoAssign.confirm":
+        {"en": "Correct",
+         "hu": "Jó"},
+    "autoAssign.confirm_tooltip":
+        {"en": "Confirm the grouping — the face becomes a trusted training example",
+         "hu": "Megerősítés — az arc megbízható tanítópéldává válik"},
+    "autoAssign.correct":
+        {"en": "Change Person…",
+         "hu": "Másik személy…"},
+    "autoAssign.correct_tooltip":
+        {"en": "Move the face to the right person — the AI learns from the correction",
+         "hu": "Az arc áthelyezése a helyes személyhez — az AI tanul a javításból"},
+    "autoAssign.revert":
+        {"en": "Undo",
+         "hu": "Visszavonás"},
+    "autoAssign.revert_tooltip":
+        {"en": "Send the face back to where it was before the run",
+         "hu": "Az arc visszakerül oda, ahol a futás előtt volt"},
     "scanModes.openButton":
         {"en": "Scan & Maintenance …",
          "hu": "Beolvasás és karbantartás …"},
