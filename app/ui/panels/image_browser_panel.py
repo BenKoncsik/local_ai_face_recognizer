@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -1442,6 +1443,9 @@ class ImageBrowserPanel(QWidget):
             "  background: #22223a;"
             "}"
         )
+        self._file_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._file_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._file_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._file_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self._file_tree.itemClicked.connect(self._on_tree_item_clicked)
         self._file_tree.go_prev.connect(self._navigate_prev)
@@ -2557,6 +2561,248 @@ class ImageBrowserPanel(QWidget):
         if item.data(0, _ROLE_TYPE) != "image":
             return
         self._select_tree_item(item)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Re-recognition (context menu → background worker)
+    # ──────────────────────────────────────────────────────────────────
+
+    def _selected_image_ids(self, fallback_pos: Optional[QPoint] = None) -> List[int]:
+        """Collect image ids from the tree selection (or the item under cursor)."""
+        ids: List[int] = []
+        for item in self._file_tree.selectedItems():
+            if item.data(0, _ROLE_TYPE) == "image":
+                pid = item.data(0, _ROLE_PAYLOAD)
+                if isinstance(pid, int):
+                    ids.append(pid)
+        if not ids and fallback_pos is not None:
+            item = self._file_tree.itemAt(fallback_pos)
+            if item is not None and item.data(0, _ROLE_TYPE) == "image":
+                pid = item.data(0, _ROLE_PAYLOAD)
+                if isinstance(pid, int):
+                    ids.append(pid)
+        # Preserve order, drop duplicates.
+        seen: set = set()
+        return [i for i in ids if not (i in seen or seen.add(i))]
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        image_ids = self._selected_image_ids(fallback_pos=pos)
+        menu = QMenu(self)
+
+        if image_ids:
+            if len(image_ids) == 1:
+                rerec_action = menu.addAction(t("rerec_ctx_one"))
+            else:
+                rerec_action = menu.addAction(
+                    t("rerec_ctx_many", n=len(image_ids))
+                )
+            rerec_action.triggered.connect(
+                lambda: self._start_rerecognition(image_ids)
+            )
+            menu.addSeparator()
+
+        undo_action = menu.addAction(t("rerec_ctx_undo_last"))
+        undo_action.setEnabled(self._latest_undoable_batch() is not None)
+        undo_action.triggered.connect(self._undo_last_rerecognition)
+
+        history_action = menu.addAction(t("rerec_ctx_history"))
+        history_action.triggered.connect(self._open_rerecognition_history)
+
+        menu.exec(self._file_tree.viewport().mapToGlobal(pos))
+
+    def _rerecognition_thresholds(self) -> "tuple[float, float]":
+        """Read (auto, suggest) thresholds from QSettings, config as fallback."""
+        from app.app_settings import app_qsettings
+
+        rec = getattr(self._config, "recognition", None)
+        auto_default = rec.rerecognition_auto_threshold if rec else 0.72
+        suggest_default = rec.rerecognition_suggest_threshold if rec else 0.55
+        qs = app_qsettings()
+        auto = float(qs.value("rerecognition/auto_threshold", auto_default, type=float))
+        suggest = float(
+            qs.value("rerecognition/suggest_threshold", suggest_default, type=float)
+        )
+        return auto, suggest
+
+    def _rerecognition_enabled(self) -> bool:
+        from app.app_settings import app_qsettings
+
+        rec = getattr(self._config, "recognition", None)
+        default = rec.rerecognition_enabled if rec else True
+        return bool(
+            app_qsettings().value("rerecognition/enabled", default, type=bool)
+        )
+
+    def _start_rerecognition(self, image_ids: List[int]) -> None:
+        if not image_ids or self._config is None:
+            return
+        if not self._rerecognition_enabled():
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_disabled")
+            )
+            return
+        if getattr(self, "_rerec_worker", None) is not None:
+            return  # a run is already in flight
+
+        auto_thr, suggest_thr = self._rerecognition_thresholds()
+
+        from app.workers.rerecognition_worker import ReRecognitionWorker
+
+        progress = QProgressDialog(
+            t("rerec_progress_body", done=0, total=0, auto=0, suggest=0),
+            t("rerec_cancel"),
+            0, 0, self,
+        )
+        progress.setWindowTitle(t("rerec_progress_title"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumWidth(360)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        self._rerec_progress = progress
+
+        worker = ReRecognitionWorker(
+            image_ids,
+            self._config,
+            auto_threshold=auto_thr,
+            suggest_threshold=suggest_thr,
+        )
+        self._rerec_worker = worker
+
+        def _on_progress(done: int, total: int, auto: int, suggest: int) -> None:
+            progress.setMaximum(max(total, 1))
+            progress.setValue(done)
+            progress.setLabelText(
+                t("rerec_progress_body", done=done, total=total,
+                  auto=auto, suggest=suggest)
+            )
+
+        worker.progress.connect(_on_progress)
+        worker.finished_result.connect(self._on_rerecognition_finished)
+        worker.failed.connect(self._on_rerecognition_failed)
+        progress.canceled.connect(worker.cancel)
+        worker.start()
+        progress.show()
+
+    def _cleanup_rerec_worker(self) -> None:
+        progress = getattr(self, "_rerec_progress", None)
+        if progress is not None:
+            progress.close()
+        self._rerec_progress = None
+        worker = getattr(self, "_rerec_worker", None)
+        if worker is not None:
+            worker.wait(50)
+        self._rerec_worker = None
+
+    def _on_rerecognition_failed(self, message: str) -> None:
+        self._cleanup_rerec_worker()
+        QMessageBox.critical(
+            self, t("rerec_error_title"), t("rerec_error_body", error=message)
+        )
+
+    def _on_rerecognition_finished(self, result) -> None:
+        self._cleanup_rerec_worker()
+
+        if getattr(result, "cancelled", False):
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_cancelled")
+            )
+            self._refresh_after_rerecognition()
+            return
+
+        if result.n_examined == 0 and result.n_auto == 0:
+            QMessageBox.information(
+                self, t("rerec_summary_title"), t("rerec_no_profiles")
+            )
+            return
+
+        self._refresh_after_rerecognition()
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(t("rerec_summary_title"))
+        box.setText(
+            t(
+                "rerec_summary_body",
+                examined=result.n_examined,
+                auto=result.n_auto,
+                suggest=result.n_suggest,
+                none=result.n_none,
+            )
+        )
+        review_btn = None
+        if result.suggest_items:
+            review_btn = box.addButton(
+                t("rerec_summary_review"), QMessageBox.AcceptRole
+            )
+        box.addButton(t("rerec_summary_close"), QMessageBox.RejectRole)
+        box.exec()
+
+        if review_btn is not None and box.clickedButton() is review_btn:
+            self._open_rerecognition_review(result)
+
+    def _open_rerecognition_review(self, result) -> None:
+        from app.ui.dialogs.rerecognition_review_dialog import (
+            ReRecognitionReviewDialog,
+        )
+
+        rec_cfg = getattr(self._config, "recognition", None)
+        dialog = ReRecognitionReviewDialog(
+            result.suggest_items,
+            result.batch_id or "",
+            self._all_persons,
+            recognition_config=rec_cfg,
+            parent=self,
+        )
+        dialog.applied.connect(self._refresh_after_rerecognition)
+        dialog.exec()
+
+    def _latest_undoable_batch(self) -> Optional[str]:
+        try:
+            from app.services.rerecognition_service import ReRecognitionService
+
+            with session_scope() as session:
+                return ReRecognitionService(session).latest_undoable_batch()
+        except Exception:  # noqa: BLE001
+            log.exception("Could not query re-recognition history")
+            return None
+
+    def _undo_last_rerecognition(self) -> None:
+        from app.services.rerecognition_service import ReRecognitionService
+
+        batch_id = self._latest_undoable_batch()
+        if batch_id is None:
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_nothing_to_undo")
+            )
+            return
+        try:
+            with session_scope() as session:
+                n = ReRecognitionService(session).undo_batch(batch_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Undo of last re-recognition failed")
+            QMessageBox.critical(
+                self, t("rerec_error_title"), t("rerec_undo_error", error=str(exc))
+            )
+            return
+        self._refresh_after_rerecognition()
+        QMessageBox.information(
+            self, t("rerec_summary_title"), t("rerec_undo_done", n=n)
+        )
+
+    def _open_rerecognition_history(self) -> None:
+        from app.ui.dialogs.rerecognition_history_dialog import (
+            ReRecognitionHistoryDialog,
+        )
+
+        dialog = ReRecognitionHistoryDialog(self)
+        dialog.changed.connect(self._refresh_after_rerecognition)
+        dialog.exec()
+
+    def _refresh_after_rerecognition(self) -> None:
+        """Refresh person list + current image overlay after a merge/undo."""
+        self._reload_persons_combo()
+        if self._current_image_id is not None:
+            self._reload_current_face_data()
+        self.person_data_changed.emit()
 
     def _load_folder_children(self, folder_item: QTreeWidgetItem) -> None:
         """Replace dummy child with real image child items and start thumbnail workers."""

@@ -1206,3 +1206,80 @@ class RemoteImage(Base):
             f"<RemoteImage id={self.id} image_id={self.image_id} "
             f"provider={self.provider!r} file_id={self.drive_file_id!r}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# RecognitionMergeLog
+# ---------------------------------------------------------------------------
+
+
+class RecognitionMergeLog(Base):
+    """Audit + undo record for one automatic re-recognition merge.
+
+    Each row captures a single face that the "re-recognize faces" workflow moved
+    from an ``Unknown N`` cluster (or no person) onto a named identity, together
+    with the *previous* assignment state so the merge can be undone later.  Rows
+    sharing a ``batch_id`` belong to one re-recognition run; undoing a batch
+    restores every face in it (and re-creates any Unknown cluster that the merge
+    emptied and the cleanup pass removed).
+
+    This table is the single schema addition for the feature.  It is created
+    automatically by ``Base.metadata.create_all`` — no separate migration.
+    """
+
+    __tablename__ = "recognition_merge_log"
+    __table_args__ = (
+        Index("ix_recmerge_batch", "batch_id"),
+        Index("ix_recmerge_face", "face_id"),
+        Index("ix_recmerge_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Groups all rows produced by one re-recognition run.
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # The moved face and the image it lives in (image_id kept even if the face
+    # row is later deleted, so the audit log stays readable).
+    face_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("faces.id", ondelete="SET NULL"), nullable=True
+    )
+    image_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # --- Previous assignment state (for undo) ---
+    prev_person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    prev_person_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    prev_assignment_source: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    prev_assignment_confidence: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    prev_assigned_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    # True when the source person was an auto-named Unknown cluster that may have
+    # been deleted by the empty-cluster cleanup; lets undo recreate it.
+    prev_person_was_auto: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # --- Match result ---
+    matched_person_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="SET NULL"), nullable=True
+    )
+    matched_person_name: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True
+    )
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # How the merge was decided: "auto" (threshold) or "manual" (review dialog).
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, default="auto")
+
+    # Set when the batch this row belongs to has been undone.
+    undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<RecognitionMergeLog batch={self.batch_id!r} face={self.face_id} "
+            f"{self.prev_person_name!r}→{self.matched_person_name!r} "
+            f"score={self.score:.3f}>"
+        )

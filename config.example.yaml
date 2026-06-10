@@ -141,6 +141,17 @@ recognition:
   # Margin for the assisted pass (looser — candidate pool is already restricted).
   same_image_assist_margin: 0.05
 
+  # --- Image-browser "re-recognize faces" workflow ---
+  # Master switch for the user-triggered re-recognition of Unknown faces from
+  # the image browser context menu. Can also be toggled in Settings → Face Quality.
+  rerecognition_enabled: true
+  # Score at/above which an Unknown face is auto-merged into the matched person
+  # without asking (same cosine scale as auto_assign_threshold).
+  rerecognition_auto_threshold: 0.72
+  # Score at/above which a match is *suggested* for review. Below this nothing is
+  # proposed. Must be < rerecognition_auto_threshold.
+  rerecognition_suggest_threshold: 0.55
+
 ignored_faces:
   # Permanent face ignore list ("Ignore Forever" on Unknown persons).
   # Faces matching a stored ignored embedding are suppressed in the pipeline

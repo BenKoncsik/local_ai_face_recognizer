@@ -259,6 +259,17 @@ class RecognitionConfig:
     # the candidate set is already restricted by image context).
     same_image_assist_margin: float = 0.05
 
+    # --- Image-browser "re-recognize faces" workflow ---
+    # Master switch for the user-triggered re-recognition of Unknown faces in
+    # the image browser context menu.
+    rerecognition_enabled: bool = True
+    # Score at/above which an Unknown face is auto-merged into the matched
+    # person without asking (same cosine scale as auto_assign_threshold).
+    rerecognition_auto_threshold: float = 0.72
+    # Score at/above which a match is *suggested* for user review.  Below this
+    # nothing is proposed.  Must be < rerecognition_auto_threshold.
+    rerecognition_suggest_threshold: float = 0.55
+
 
 @dataclass
 class IgnoredFaceConfig:
@@ -643,6 +654,18 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             same_image_assist_margin=rec.get(
                 "same_image_assist_margin",
                 cfg.recognition.same_image_assist_margin,
+            ),
+            rerecognition_enabled=rec.get(
+                "rerecognition_enabled",
+                cfg.recognition.rerecognition_enabled,
+            ),
+            rerecognition_auto_threshold=rec.get(
+                "rerecognition_auto_threshold",
+                cfg.recognition.rerecognition_auto_threshold,
+            ),
+            rerecognition_suggest_threshold=rec.get(
+                "rerecognition_suggest_threshold",
+                cfg.recognition.rerecognition_suggest_threshold,
             ),
         )
 
