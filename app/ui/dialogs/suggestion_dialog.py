@@ -33,13 +33,20 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from app.config import AppConfig
 from app.db.database import session_scope
+from app.db.models import (
+    MERGE_DECISION_ACCEPTED,
+    MERGE_DECISION_REJECTED,
+    MERGE_DECISION_SOURCE_AUTO,
+)
 from app.services.merge_suggestion_service import (
+    MergeDecisionDTO,
     MergeSuggestionDTO,
     MergeSuggestionService,
 )
@@ -410,6 +417,71 @@ class _SuggestionRow(QFrame):
 
 
 # ---------------------------------------------------------------------------
+# Decided-suggestion row (read-only history)
+# ---------------------------------------------------------------------------
+
+_DECISION_STYLES = {
+    MERGE_DECISION_ACCEPTED: ("suggestions_decision_accepted", "#88ee88"),
+    MERGE_DECISION_REJECTED: ("suggestions_decision_rejected", "#ff8888"),
+}
+_DECISION_DEFAULT_STYLE = ("suggestions_decision_dismissed", "#aaaaaa")
+
+
+class _DecidedSuggestionRow(QFrame):
+    """One already-decided suggestion — display only, nothing to act on."""
+
+    def __init__(
+        self, decision: MergeDecisionDTO, parent: Optional[QWidget] = None
+    ) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet(
+            "QFrame { background: #1d1d1d; border-radius: 6px; }"
+        )
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
+
+        for crop_path in (decision.candidate_crop_path, decision.target_crop_path):
+            crop = QLabel()
+            crop.setFixedSize(36, 36)
+            crop.setAlignment(Qt.AlignCenter)
+            pixmap = _crop_pixmap(crop_path)
+            if pixmap is not None:
+                crop.setPixmap(
+                    pixmap.scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                crop.setStyleSheet("border: 1px solid #444; border-radius: 4px;")
+            else:
+                crop.setText("?")
+                crop.setStyleSheet(
+                    "border: 1px solid #444; border-radius: 4px; color: #666;"
+                )
+            row.addWidget(crop)
+
+        names = QLabel(f"{decision.candidate_name} → {decision.target_name}")
+        names.setStyleSheet("color: #ccc; border: none;")
+        names.setWordWrap(True)
+        row.addWidget(names, stretch=1)
+
+        key, color = _DECISION_STYLES.get(decision.decision, _DECISION_DEFAULT_STYLE)
+        status_text = t(key)
+        if decision.source == MERGE_DECISION_SOURCE_AUTO:
+            status_text = f"{status_text} ({t('suggestions_decision_auto')})"
+        status = QLabel(status_text)
+        status.setStyleSheet(
+            f"color: {color}; font-weight: bold; border: none; font-size: 11px;"
+        )
+        row.addWidget(status)
+
+        if decision.decided_at is not None:
+            when = QLabel(decision.decided_at.strftime("%Y-%m-%d %H:%M"))
+            when.setStyleSheet("color: #666; border: none; font-size: 10px;")
+            row.addWidget(when)
+
+
+# ---------------------------------------------------------------------------
 # Main dialog
 # ---------------------------------------------------------------------------
 
@@ -457,7 +529,14 @@ class SuggestionDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        dialog_root = QVBoxLayout(self)
+
+        self._tabs = QTabWidget()
+        dialog_root.addWidget(self._tabs, stretch=1)
+
+        # ── Tab 1: Unknown → Known merge suggestions (the original UI) ────
+        suggestions_tab = QWidget()
+        root = QVBoxLayout(suggestions_tab)
 
         intro = QLabel(t("suggestions_intro"))
         intro.setWordWrap(True)
@@ -528,15 +607,70 @@ class SuggestionDialog(QDialog):
         )
         root.addWidget(self._empty_label)
 
+        # ── "Already decided" history (collapsed by default) ──────────────
+        from app.ui.widgets.collapsible_section import CollapsibleSection
+
+        decided_scroll = QScrollArea()
+        decided_scroll.setWidgetResizable(True)
+        decided_scroll.setMaximumHeight(240)
+        self._decided_widget = QWidget()
+        self._decided_layout = QVBoxLayout(self._decided_widget)
+        self._decided_layout.setSpacing(4)
+        self._decided_layout.addStretch()
+        decided_scroll.setWidget(self._decided_widget)
+
+        self._decided_section = CollapsibleSection(
+            t("suggestions_decided_header", n=0), decided_scroll
+        )
+        self._decided_section.toggled.connect(self._on_decided_toggled)
+        self._decided_loaded = False
+        root.addWidget(self._decided_section)
+
         # keyboard hint
         kb_hint = QLabel(t("suggestions_keyboard_hint"))
         kb_hint.setStyleSheet("color: #666; font-size: 10px;")
         kb_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(kb_hint)
 
+        self._tabs.addTab(suggestions_tab, t("suggestions_tab_matches"))
+
+        # ── Tab 2: automatic groupings of the last AI run ─────────────────
+        from app.ui.dialogs.auto_assignments_tab import AutoAssignmentsTab
+
+        deep_config = (
+            self._app_config.deep_recognition
+            if self._app_config is not None
+            else None
+        )
+        self._auto_tab = AutoAssignmentsTab(deep_config, parent=self)
+        self._auto_tab.data_changed.connect(self.data_changed)
+        self._auto_tab.count_changed.connect(self._on_auto_count_changed)
+        self._tabs.addTab(self._auto_tab, t("suggestions_tab_auto"))
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        dialog_root.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    # Tabs
+    # ------------------------------------------------------------------
+
+    def show_auto_assignments_tab(self) -> None:
+        """Open the dialog focused on the automatic-groupings review tab."""
+        self._tabs.setCurrentWidget(self._auto_tab)
+
+    @Slot(int)
+    def _on_tab_changed(self, index: int) -> None:
+        if self._tabs.widget(index) is self._auto_tab:
+            self._auto_tab.ensure_loaded()
+
+    @Slot(int)
+    def _on_auto_count_changed(self, count: int) -> None:
+        label = t("suggestions_tab_auto")
+        if count > 0:
+            label = f"{label} ({count})"
+        self._tabs.setTabText(self._tabs.indexOf(self._auto_tab), label)
 
     # ------------------------------------------------------------------
     # Data
@@ -569,6 +703,44 @@ class SuggestionDialog(QDialog):
             self._suggestions.append(self._to_display(dto))
             self._suggestion_ids.append(dto.suggestion_id)
         self._rebuild_rows()
+        self._refresh_decided()
+
+    def _refresh_decided(self) -> None:
+        """Update the "already decided" header count; reload rows if open."""
+        try:
+            with session_scope() as session:
+                svc = MergeSuggestionService(session, self._matching)
+                count = svc.count_decided()
+                decisions = (
+                    svc.list_decided() if self._decided_section.is_expanded() else None
+                )
+        except Exception:  # noqa: BLE001 — history must never break the dialog
+            log.exception("Failed to load decided suggestions")
+            return
+
+        self._decided_section.set_title(t("suggestions_decided_header", n=count))
+        if decisions is None:
+            self._decided_loaded = False
+            return
+        self._decided_loaded = True
+
+        while self._decided_layout.count() > 1:
+            item = self._decided_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        if not decisions:
+            empty = QLabel(t("suggestions_decided_empty"))
+            empty.setStyleSheet("color: #666; font-style: italic; border: none;")
+            empty.setAlignment(Qt.AlignCenter)
+            self._decided_layout.insertWidget(0, empty)
+        for i, decision in enumerate(decisions):
+            self._decided_layout.insertWidget(i, _DecidedSuggestionRow(decision))
+
+    @Slot(bool)
+    def _on_decided_toggled(self, expanded: bool) -> None:
+        if expanded and not self._decided_loaded:
+            self._refresh_decided()
 
     @staticmethod
     def _to_display(dto: MergeSuggestionDTO) -> Suggestion:
@@ -627,6 +799,11 @@ class SuggestionDialog(QDialog):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event) -> None:
+        # Row navigation shortcuts only apply on the suggestions tab.
+        if self._tabs.currentWidget() is self._auto_tab:
+            super().keyPressEvent(event)
+            return
+
         key = event.key()
         n = len(self._rows)
 
@@ -797,6 +974,10 @@ class SuggestionDialog(QDialog):
         log.info("Merge suggestion %s completed for %d", label, suggestion_id)
         if label == "approval":
             self.data_changed.emit()
+        if label != "defer":
+            # Accepted / rejected suggestions land in the "already decided"
+            # history list — refresh it so the user sees it is handled.
+            self._refresh_decided()
 
         # Try to remove the specific row from the list without a full reload.
         try:

@@ -932,6 +932,190 @@ class MergeSuggestion(Base):
         )
 
 
+# Decision kinds recorded in the merge-decision history.
+MERGE_DECISION_ACCEPTED = "accepted"
+MERGE_DECISION_REJECTED = "rejected"
+MERGE_DECISION_DISMISSED = "dismissed"
+
+# Who made the decision.
+MERGE_DECISION_SOURCE_MANUAL = "manual"
+MERGE_DECISION_SOURCE_AUTO = "auto"
+
+
+class MergeDecision(Base):
+    """History of decided merge suggestions ("already handled" list).
+
+    A *snapshot* on purpose: accepting a suggestion merges the candidate
+    person away, which CASCADE-deletes the :class:`MergeSuggestion` row, so
+    the decided list cannot be derived from live suggestions.  Names and crop
+    paths are copied at decision time and stay displayable even after the
+    persons were merged or renamed.
+    """
+
+    __tablename__ = "merge_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # The suggestion this decision came from (plain int — the row may be gone).
+    suggestion_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Person ids at decision time (not FKs — they may no longer exist).
+    candidate_person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Display snapshots.
+    candidate_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    candidate_crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    target_crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    # "accepted" | "rejected" | "dismissed"
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # "manual" | "auto" (auto-merge)
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=MERGE_DECISION_SOURCE_MANUAL
+    )
+
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<MergeDecision id={self.id} {self.candidate_name!r}→"
+            f"{self.target_name!r} {self.decision!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Deep recognition — training runs and the automatic-assignment review log
+# ---------------------------------------------------------------------------
+
+# Lifecycle states of an automatic deep-recognition assignment.
+AUTO_ASSIGN_STATUS_AUTO = "auto"            # made by the engine, awaiting review
+AUTO_ASSIGN_STATUS_CONFIRMED = "confirmed"  # user approved → trusted training data
+AUTO_ASSIGN_STATUS_CORRECTED = "corrected"  # user moved the face to someone else
+AUTO_ASSIGN_STATUS_REVERTED = "reverted"    # user sent the face back to unknown
+
+
+class TrainingRun(Base):
+    """One training + recognition run of the deep-learning engine.
+
+    Stores diagnostics about the model that was trained (how many people /
+    examples, validation accuracy) so runs are comparable over time, and acts
+    as the parent of the :class:`AutoAssignment` rows produced by the run.
+    """
+
+    __tablename__ = "training_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # "rescan" | "rebuild" — which pipeline mode produced this run.
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="rescan")
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Training-set statistics.
+    n_persons: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_examples: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_augmented: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Cross-validated top-1 accuracy on held-out labeled faces (NULL when the
+    # dataset was too small to cross-validate).
+    validation_accuracy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Hash of the labeled training data — identical hash ⇒ identical model.
+    data_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Where the trained model file was persisted.
+    model_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    assignments: Mapped[List["AutoAssignment"]] = relationship(
+        "AutoAssignment", back_populates="training_run", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<TrainingRun id={self.id} mode={self.mode!r} "
+            f"persons={self.n_persons} examples={self.n_examples}>"
+        )
+
+
+class AutoAssignment(Base):
+    """One automatic face → person assignment made by the deep engine.
+
+    These rows power the "automatic groupings" review tab: the user sees what
+    the last run grouped, and can confirm, correct (move to the right person)
+    or revert each decision.  Corrections are recorded as
+    :class:`FaceCorrection` rows so the engine learns from them.
+    """
+
+    __tablename__ = "auto_assignments"
+    __table_args__ = (
+        Index("ix_auto_assign_run_status", "training_run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    training_run_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("training_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    face_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("faces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The person the engine assigned the face to.
+    person_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Where the face lived before the run (usually an "Unknown N" or nothing).
+    previous_person_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="SET NULL"), nullable=True
+    )
+    # Display snapshot of the previous person's name: the "Unknown N" group is
+    # often deleted right after it loses its last face, which SET-NULLs the FK.
+    previous_person_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    # The person the user moved the face to when status == "corrected".
+    corrected_person_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Blended engine confidence [0, 1] for the assignment.
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=AUTO_ASSIGN_STATUS_AUTO, index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    training_run: Mapped["TrainingRun"] = relationship(
+        "TrainingRun", back_populates="assignments"
+    )
+    face: Mapped["Face"] = relationship("Face")
+    person: Mapped["Person"] = relationship("Person", foreign_keys=[person_id])
+    previous_person: Mapped[Optional["Person"]] = relationship(
+        "Person", foreign_keys=[previous_person_id]
+    )
+    corrected_person: Mapped[Optional["Person"]] = relationship(
+        "Person", foreign_keys=[corrected_person_id]
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AutoAssignment id={self.id} face={self.face_id} "
+            f"person={self.person_id} score={self.score:.2f} status={self.status!r}>"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Object tagging  (a domain entirely separate from face recognition)
 # ---------------------------------------------------------------------------

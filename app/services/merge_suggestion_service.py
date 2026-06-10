@@ -31,6 +31,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import MatchingConfig
 from app.db.models import (
+    MERGE_DECISION_ACCEPTED,
+    MERGE_DECISION_DISMISSED,
+    MERGE_DECISION_REJECTED,
+    MERGE_DECISION_SOURCE_AUTO,
+    MERGE_DECISION_SOURCE_MANUAL,
     MERGE_OPEN_STATUSES,
     MERGE_STATUS_ACCEPTED,
     MERGE_STATUS_DEFERRED,
@@ -40,6 +45,7 @@ from app.db.models import (
     MERGE_SUPPRESSED_STATUSES,
     Face,
     FaceCorrection,
+    MergeDecision,
     MergeSuggestion,
     Person,
 )
@@ -115,6 +121,21 @@ class MergeCandidateResult:
     confidence: float
     face_similarity: Optional[float]
     name_similarity: Optional[float]
+
+
+@dataclass
+class MergeDecisionDTO:
+    """Render-ready row of the "already decided" history list."""
+
+    decision_id: int
+    candidate_name: str
+    target_name: str
+    candidate_crop_path: Optional[str]
+    target_crop_path: Optional[str]
+    confidence: float
+    decision: str        # "accepted" | "rejected" | "dismissed"
+    source: str          # "manual" | "auto"
+    decided_at: Optional[datetime]
 
 
 @dataclass
@@ -594,11 +615,14 @@ class MergeSuggestionService:
 
         Merging deletes the candidate person, which CASCADE-deletes this (and
         any other) suggestion referencing it.  The row is expunged first so the
-        cascade can't trigger a stale UPDATE on flush.
+        cascade can't trigger a stale UPDATE on flush.  The decision is
+        snapshotted into :class:`MergeDecision` *before* the merge so the
+        "already decided" list survives the cascade.
         """
         row = self._require(suggestion_id)
         cand_id, tgt_id = self._orient(row)
         log.info("Accepting merge suggestion %d: %d → %d", suggestion_id, cand_id, tgt_id)
+        self._log_decision(row, MERGE_DECISION_ACCEPTED)
         self._session.expunge(row)
         survivor = IdentityService(self._session).merge_persons(
             source_id=cand_id, target_id=tgt_id, respect_merge_exclusions=True
@@ -617,6 +641,8 @@ class MergeSuggestionService:
 
     def reject(self, suggestion_id: int) -> None:
         """Reject this specific suggestion (records a 'different' correction)."""
+        row = self._require(suggestion_id)
+        self._log_decision(row, MERGE_DECISION_REJECTED)
         self._decide(suggestion_id, MERGE_STATUS_REJECTED)
         row = self._session.get(MergeSuggestion, suggestion_id)
         if row is not None:
@@ -628,6 +654,8 @@ class MergeSuggestionService:
 
     def dismiss(self, suggestion_id: int) -> None:
         """'Never suggest this pair again' — permanently suppressed."""
+        row = self._require(suggestion_id)
+        self._log_decision(row, MERGE_DECISION_DISMISSED)
         self._decide(suggestion_id, MERGE_STATUS_DISMISSED)
         row = self._session.get(MergeSuggestion, suggestion_id)
         if row is not None:
@@ -694,6 +722,9 @@ class MergeSuggestionService:
                     row.confidence,
                 )
                 suggestion_id = row.id
+                self._log_decision(
+                    row, MERGE_DECISION_ACCEPTED, source=MERGE_DECISION_SOURCE_AUTO
+                )
                 # The row will be cascade-deleted when the candidate person is
                 # deleted; expunge first so the cascade can't trigger a stale
                 # UPDATE on flush.
@@ -729,6 +760,79 @@ class MergeSuggestionService:
         row.decided_at = _utcnow_naive()
         self._session.commit()
         log.info("Merge suggestion %d → %s", suggestion_id, status)
+
+    # ------------------------------------------------------------------
+    # Decision history ("already handled" list)
+    # ------------------------------------------------------------------
+
+    def _log_decision(
+        self,
+        row: MergeSuggestion,
+        decision: str,
+        source: str = MERGE_DECISION_SOURCE_MANUAL,
+    ) -> None:
+        """Snapshot a decided suggestion into the history (no commit).
+
+        Called *before* the decision is applied so accept-merges (which
+        CASCADE-delete the suggestion and the candidate person) still leave a
+        displayable record.  The caller's subsequent commit persists it.
+        """
+        cand_id, tgt_id = self._orient(row)
+        reps = self._representatives({cand_id, tgt_id})
+        cand_rep = reps.get(cand_id)
+        tgt_rep = reps.get(tgt_id)
+
+        def _name(person_id: int, rep) -> str:
+            if rep is not None:
+                return rep.name
+            person = self._session.get(Person, person_id)
+            return person.name if person is not None else "?"
+
+        self._session.add(
+            MergeDecision(
+                suggestion_id=row.id,
+                candidate_person_id=cand_id,
+                target_person_id=tgt_id,
+                candidate_name=_name(cand_id, cand_rep),
+                target_name=_name(tgt_id, tgt_rep),
+                candidate_crop_path=(
+                    cand_rep.rep_crop_path if cand_rep is not None else None
+                ),
+                target_crop_path=(
+                    tgt_rep.rep_crop_path if tgt_rep is not None else None
+                ),
+                confidence=row.confidence,
+                decision=decision,
+                source=source,
+                decided_at=_utcnow_naive(),
+            )
+        )
+
+    def count_decided(self) -> int:
+        return self._session.query(MergeDecision).count()
+
+    def list_decided(self, limit: int = 100) -> List[MergeDecisionDTO]:
+        """Most recent decisions first — the "already handled" list."""
+        rows = (
+            self._session.query(MergeDecision)
+            .order_by(MergeDecision.decided_at.desc(), MergeDecision.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            MergeDecisionDTO(
+                decision_id=row.id,
+                candidate_name=row.candidate_name,
+                target_name=row.target_name,
+                candidate_crop_path=row.candidate_crop_path,
+                target_crop_path=row.target_crop_path,
+                confidence=row.confidence,
+                decision=row.decision,
+                source=row.source,
+                decided_at=row.decided_at,
+            )
+            for row in rows
+        ]
 
     def _record_different(self, person_a: int, person_b: int) -> None:
         """Persist a few 'different person' face corrections to back a rejection."""

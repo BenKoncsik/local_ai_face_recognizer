@@ -1,8 +1,13 @@
 """Scan and maintenance chooser dialog.
 
-Opens from the toolbar and presents scan/re-detection operations plus related
-database cleanup actions. The dialog is scrollable so it works on small
-screens too.
+Opens from the toolbar.  Two tabs:
+
+* **AI recognition (new)** — the simplified deep-learning path with exactly
+  two operations: *Re-scan* (place unknown faces with known people, clean up
+  overlapping boxes) and *Rebuild from scratch*.
+* **Classic** — every legacy scan / re-detection / cleanup operation.
+
+The dialog is scrollable so it works on small screens too.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +44,9 @@ class ScanModesDialog(QDialog):
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
         on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
         on_manage_ignored_faces: Optional[Callable[[], None]] = None,
+        on_deep_rescan: Optional[Callable[[], None]] = None,
+        on_deep_rebuild: Optional[Callable[[], None]] = None,
+        on_deep_train: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -50,6 +59,9 @@ class ScanModesDialog(QDialog):
         self._on_identity_repair_scan = on_identity_repair_scan
         self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
         self._on_manage_ignored_faces = on_manage_ignored_faces
+        self._on_deep_rescan = on_deep_rescan
+        self._on_deep_rebuild = on_deep_rebuild
+        self._on_deep_train = on_deep_train
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -64,7 +76,20 @@ class ScanModesDialog(QDialog):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        # ── Scrollable card area ─────────────────────────────────────────
+        tabs = QTabWidget()
+        tabs.addTab(self._build_deep_tab(), t("scanModes.tab.deep"))
+        tabs.addTab(self._build_classic_tab(), t("scanModes.tab.classic"))
+        outer.addWidget(tabs)
+
+        # ── Sticky close button ──────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton(t("scanModes.close"))
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(close_btn)
+        outer.addLayout(btn_row)
+
+    def _make_scroll_container(self) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -74,6 +99,54 @@ class ScanModesDialog(QDialog):
         cards_layout = QVBoxLayout(container)
         cards_layout.setContentsMargins(4, 4, 4, 4)
         cards_layout.setSpacing(10)
+        scroll.setWidget(container)
+        return scroll, cards_layout
+
+    # ------------------------------------------------------------------
+    # AI (deep learning) tab — three operations, kept simple.
+    # ------------------------------------------------------------------
+
+    def _build_deep_tab(self) -> QWidget:
+        scroll, cards_layout = self._make_scroll_container()
+
+        intro = QLabel(t("scanModes.deep.intro"))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #A6ADC8; font-style: italic;")
+        cards_layout.addWidget(intro)
+
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.deepRescan.title"),
+            description=t("scanModes.deepRescan.description"),
+            button_label=t("scanModes.deepRescan.startButton"),
+            warning=t("scanModes.deepRescan.warning"),
+            callback=self._launch_deep_rescan,
+            danger=False,
+        ))
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.deepTrain.title"),
+            description=t("scanModes.deepTrain.description"),
+            button_label=t("scanModes.deepTrain.startButton"),
+            warning=t("scanModes.deepTrain.warning"),
+            callback=self._launch_deep_train,
+            danger=False,
+        ))
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.deepRebuild.title"),
+            description=t("scanModes.deepRebuild.description"),
+            button_label=t("scanModes.deepRebuild.startButton"),
+            warning=t("scanModes.deepRebuild.warning"),
+            callback=self._launch_deep_rebuild,
+            danger=True,
+        ))
+        cards_layout.addStretch()
+        return scroll
+
+    # ------------------------------------------------------------------
+    # Classic tab — the legacy operations, unchanged.
+    # ------------------------------------------------------------------
+
+    def _build_classic_tab(self) -> QWidget:
+        scroll, cards_layout = self._make_scroll_container()
 
         cards_layout.addWidget(self._make_card(
             title=t("scanModes.incremental.title"),
@@ -151,17 +224,7 @@ class ScanModesDialog(QDialog):
             danger=True,
         ))
         cards_layout.addStretch()
-
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
-
-        # ── Sticky close button ──────────────────────────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        close_btn = QPushButton(t("scanModes.close"))
-        close_btn.clicked.connect(self.reject)
-        btn_row.addWidget(close_btn)
-        outer.addLayout(btn_row)
+        return scroll
 
     # ------------------------------------------------------------------
 
@@ -225,6 +288,21 @@ class ScanModesDialog(QDialog):
     # ------------------------------------------------------------------
     # Callbacks — close dialog then trigger the action so the main window
     # guard checks (busy, no folder) can still run normally.
+
+    def _launch_deep_rescan(self) -> None:
+        self.accept()
+        if self._on_deep_rescan is not None:
+            self._on_deep_rescan()
+
+    def _launch_deep_rebuild(self) -> None:
+        self.accept()
+        if self._on_deep_rebuild is not None:
+            self._on_deep_rebuild()
+
+    def _launch_deep_train(self) -> None:
+        self.accept()
+        if self._on_deep_train is not None:
+            self._on_deep_train()
 
     def _launch_incremental(self) -> None:
         self.accept()

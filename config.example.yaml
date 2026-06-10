@@ -152,6 +152,83 @@ recognition:
   # proposed. Must be < rerecognition_auto_threshold.
   rerecognition_suggest_threshold: 0.55
 
+deep_recognition:
+  # The new deep-learning recognition engine (Scan & Maintenance → AI tab).
+  # A neural-network (MLP) ensemble is retrained from every trusted labeled
+  # face on each run, with cross-validated per-person thresholds and open-set
+  # rejection. Accuracy is preferred over speed: training may take minutes
+  # and saturate every CPU core.
+  enabled: true
+
+  # Directory (relative to this file) where the trained model is persisted.
+  model_dir: data/deep_model
+
+  # --- Training ---
+  # Independently seeded networks in the ensemble (more → steadier, slower).
+  ensemble_size: 5
+  # Hidden layer sizes of each member network.
+  hidden_layers: [256, 128]
+  # Maximum optimiser iterations per network.
+  max_iter: 600
+  # People with fewer faces are augmented (jitter + interpolation) up to this.
+  min_class_size: 8
+  augment_noise_sigma: 0.03
+  # Cross-validation folds used to calibrate per-person thresholds.
+  calibration_folds: 3
+  # Skip retraining when the labeled data did not change since the last run.
+  skip_unchanged: true
+  # The neural-network ensemble only activates with at least this many labeled
+  # people AND examples; below that the engine uses pure prototype matching
+  # (a tiny discriminative network is overconfident and over-assigns).
+  min_persons_for_ensemble: 4
+  min_examples_for_ensemble: 30
+
+  # --- Open-set / assignment gates ---
+  # Fallback ensemble-probability threshold (per-person calibration may lower it).
+  base_prob_threshold: 0.60
+  # Hard floor for calibrated per-person thresholds.
+  min_prob_threshold: 0.35
+  # Required probability gap between the best and second-best person.
+  min_margin: 0.10
+  # Minimum cosine similarity to a real training example of the winner.
+  # HARD floor: per-person calibration may only raise it, never lower it.
+  min_prototype_similarity: 0.55
+  # Required cosine-similarity gap between the winner and the most similar
+  # training example of any OTHER person (ambiguous faces stay unknown).
+  min_sim_margin: 0.05
+  # Below this best-similarity to anyone known the face is an outlier
+  # (stranger or non-face) and is never auto-assigned.
+  outlier_similarity: 0.42
+
+  # --- "Never recognise non-faces" ---
+  # Boxes below this detector confidence are never auto-assigned.
+  min_face_confidence: 0.60
+  # Skip low-quality faces (blurry / tiny / sideways) during auto-assignment.
+  strict_quality_filter: true
+
+  # --- Continual learning from automatic assignments ---
+  use_auto_assignments_for_training: true
+  auto_training_min_confidence: 0.92
+
+  # Use the slower high-accuracy detector pass in the AI pipeline.
+  high_accuracy_detection: false
+
+overlap_resolution:
+  # Same-image overlapping-box cleanup in the AI pipeline. When the same
+  # physical face carries several boxes, one survives: an assigned/manual box
+  # always wins over an unknown one; between two unknown boxes the better one
+  # is kept. Two different named persons are never touched.
+  enabled: true
+  # Boxes overlapping at or above this IoU count as the same face.
+  iou_threshold: 0.35
+  # A small box nested in a big one: intersection / smaller-box area.
+  containment_threshold: 0.80
+  # Required embedding similarity before deleting (protects close faces).
+  embedding_guard_similarity: 0.80
+  # Above this IoU the pair is resolved even when embeddings disagree.
+  hard_iou_threshold: 0.65
+  max_faces_per_image: 120
+
 ignored_faces:
   # Permanent face ignore list ("Ignore Forever" on Unknown persons).
   # Faces matching a stored ignored embedding are suppressed in the pipeline
