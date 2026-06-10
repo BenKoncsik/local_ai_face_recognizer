@@ -28,6 +28,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QThreadPoo
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QCursor,
     QIcon,
     QImage,
     QPainter,
@@ -35,7 +36,9 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDockWidget,
     QFrame,
@@ -46,6 +49,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -68,6 +72,7 @@ from app.db.database import session_scope
 from app.db.models import Face, Image, Person, Place
 from app.services.family_service import FamilyImageSearchCriteria, FamilyService
 from app.services.identity_service import IdentityService
+from app.services.unknown_merge_service import UnknownMergeService
 from app.services.image_browser_service import (
     FolderSummary,
     ImageBrowserService,
@@ -231,6 +236,11 @@ def _get_pil_font(size: int):
     return ImageFont.load_default()
 
 
+# Amber highlight for faces auto-merged from an Unknown cluster, awaiting
+# review.  RGB for PIL labels; the BGR sibling is derived where boxes are drawn.
+_PENDING_RGB = (255, 176, 32)
+
+
 def _draw_faces(
     img_bgr: np.ndarray,
     faces: List[_FaceData],
@@ -239,11 +249,13 @@ def _draw_faces(
     bbox_opacity: float = 1.0,
     show_labels: bool = True,
     label_opacity: float = 1.0,
+    pending_ids: Optional[set] = None,
 ) -> np.ndarray:
     from PIL import Image as PILImage, ImageDraw
 
     from app.ui.helpers.label_placement import FaceLabel, place_labels
 
+    pending_ids = pending_ids or set()
     img = img_bgr.copy()
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     pil_img = PILImage.fromarray(img_rgb)
@@ -256,8 +268,13 @@ def _draw_faces(
     face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
     for face_id, x, y, w, h, person_name, _ in faces:
         selected = face_id == selected_id
-        color_rgb = (50, 220, 50) if selected else (180, 180, 180)
-        name = person_name or "?"
+        if selected:
+            color_rgb = (50, 220, 50)
+        elif face_id in pending_ids:
+            color_rgb = _PENDING_RGB
+        else:
+            color_rgb = (180, 180, 180)
+        name = ("⚠ " + person_name) if (face_id in pending_ids and person_name) else (person_name or "?")
         label_font_size = font_size
         font = _get_pil_font(label_font_size)
 
@@ -325,20 +342,47 @@ def _draw_faces(
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     # --- Phase 4: render bounding boxes ---
+    # BGR amber for pending boxes (reversed _PENDING_RGB).
+    pending_bgr = (_PENDING_RGB[2], _PENDING_RGB[1], _PENDING_RGB[0])
+
+    def _box_color(face_id: int, selected: bool):
+        if selected:
+            return (50, 220, 50)
+        if face_id in pending_ids:
+            return pending_bgr
+        return (180, 180, 180)
+
+    def _draw_pending_badge(canvas, x, y):
+        """Small '?' marker at the top-left corner of a pending face box."""
+        r = max(10, int(min(image_w, image_h) * 0.012))
+        cx, cy = x + r, y + r
+        cv2.circle(canvas, (cx, cy), r, pending_bgr, -1)
+        cv2.circle(canvas, (cx, cy), r, (30, 30, 30), 1)
+        scale = r / 11.0
+        cv2.putText(
+            canvas, "?", (cx - int(5 * scale), cy + int(6 * scale)),
+            cv2.FONT_HERSHEY_SIMPLEX, scale, (30, 30, 30), max(1, int(scale * 2)),
+            cv2.LINE_AA,
+        )
+
     if show_bboxes and bbox_opacity > 0.0:
         if bbox_opacity >= 0.99:
             for face_id, x, y, w, h, _, _ in faces:
                 selected = face_id == selected_id
-                color = (50, 220, 50) if selected else (180, 180, 180)
+                color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
                 cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
+                if face_id in pending_ids and not selected:
+                    _draw_pending_badge(img, x, y)
         else:
             overlay_cv = img.copy()
             for face_id, x, y, w, h, _, _ in faces:
                 selected = face_id == selected_id
-                color = (50, 220, 50) if selected else (180, 180, 180)
+                color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
                 cv2.rectangle(overlay_cv, (x, y), (x + w, y + h), color, thickness)
+                if face_id in pending_ids and not selected:
+                    _draw_pending_badge(overlay_cv, x, y)
             cv2.addWeighted(overlay_cv, bbox_opacity, img, 1.0 - bbox_opacity, 0, img)
 
     return img
@@ -368,6 +412,53 @@ class _FocusLineEdit(QLineEdit):
             self.escape_pressed.emit()
         else:
             super().keyPressEvent(event)
+
+
+class _PendingActionBar(QFrame):
+    """Floating quick-action bar shown over an auto-merged (pending) face box.
+
+    Three actions, mirroring the review dialog: confirm (✓), move to another
+    person (⤴) and delete the face + its box (🗑).
+    """
+
+    accept_requested = Signal()
+    move_requested = Signal()
+    delete_requested = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet(
+            "_PendingActionBar { background: #2a2118; border: 1px solid #ffb020;"
+            " border-radius: 4px; }"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(4)
+
+        def _btn(text: str, tip: str, color: str) -> QPushButton:
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setFixedHeight(24)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{ color: {color}; font-size: 13px; font-weight: bold;"
+                " background: #3a3127; border: 1px solid #5a4a30; border-radius: 3px;"
+                " padding: 1px 8px; }"
+                "QPushButton:hover { background: #4a3d2a; }"
+            )
+            return b
+
+        self._accept_btn = _btn("✓", t("amerge_accept"), "#7CFC7C")
+        self._move_btn = _btn("⤴", t("amerge_move"), "#FFD27A")
+        self._delete_btn = _btn("🗑", t("amerge_delete"), "#FF8A8A")
+        self._accept_btn.clicked.connect(self.accept_requested)
+        self._move_btn.clicked.connect(self.move_requested)
+        self._delete_btn.clicked.connect(self.delete_requested)
+        layout.addWidget(self._accept_btn)
+        layout.addWidget(self._move_btn)
+        layout.addWidget(self._delete_btn)
+        self.adjustSize()
 
 
 class _InlineFaceEditor(QFrame):
@@ -705,6 +796,10 @@ class _DrawableImageLabel(QLabel):
         self._start = None
         self._end = None
         self.setStyleSheet(self._BORDER_EDIT)
+        # Show the correct cursor for the current pointer position right away
+        # (over a handle → resize/move, otherwise cross) instead of waiting for
+        # the next move event.
+        self._refresh_hover_cursor()
         self.update()
 
     def cancel_interactive_edit(self) -> None:
@@ -737,8 +832,10 @@ class _DrawableImageLabel(QLabel):
         self._imode_drag_start_bbox = None
         self.setStyleSheet(self._BORDER_NORMAL)
         # Reset the cursor: during edit mode it may have been changed to a
-        # resize/move shape by _update_edit_cursor(); restore the panel default.
-        self.setCursor(Qt.CrossCursor)
+        # resize/move shape by _update_edit_cursor(); restore the panel default
+        # and drain any override cursor. _imode is already False above so this
+        # lands on the plain cross.
+        self._reset_cursor_state()
         self.update()
         if not silent:
             if commit and bbox is not None:
@@ -967,7 +1064,7 @@ class _DrawableImageLabel(QLabel):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MiddleButton:
             self._mid_start = None
-            self.setCursor(Qt.CrossCursor if not self._imode else Qt.ArrowCursor)
+            self._reset_cursor_state()
             return
         if event.button() != Qt.LeftButton:
             return
@@ -990,6 +1087,9 @@ class _DrawableImageLabel(QLabel):
                 nw, nh = new_bbox[2], new_bbox[3]
                 self._last_op_type = "move" if (ow == nw and oh == nh) else "resize"
                 self.bbox_edit_committed.emit(*new_bbox)
+            # Drag finished: the resize/move cursor set during the drag must
+            # not stay frozen. Re-evaluate hover for the (possibly moved) box.
+            self._reset_cursor_state()
             self.update()
             return
 
@@ -1025,6 +1125,69 @@ class _DrawableImageLabel(QLabel):
             self.setCursor(cursors[handle])
         else:
             self.setCursor(Qt.CrossCursor)
+
+    # ── Cursor reset ────────────────────────────────────────────────────
+
+    def _refresh_hover_cursor(self) -> None:
+        """Set the widget cursor based on what is under the pointer *now*.
+
+        After a drag/move/resize ends the active interaction cursor (e.g. a
+        diagonal resize arrow) must not stay frozen on screen. This recomputes
+        the correct cursor for the current mouse position and mode instead of
+        waiting for the next ``mouseMoveEvent``.
+        """
+        # While in interactive-edit mode, show a handle cursor if the pointer
+        # is over a handle, otherwise the plain cross.
+        if self._imode and self._imode_handle is None:
+            local = self.mapFromGlobal(QCursor.pos())
+            handle = self._hit_test_handle(local.x(), local.y())
+            self._update_edit_cursor(handle)
+            return
+        if self._imode:
+            # An active drag is in progress — leave the drag cursor as-is.
+            return
+        # Compare-divider hover is handled live in mouseMoveEvent; fall back
+        # to the panel default cross cursor everywhere else.
+        self.setCursor(Qt.CrossCursor)
+
+    def _reset_cursor_state(self) -> None:
+        """Robustly restore the cursor after any interaction finishes.
+
+        Clears stale drag/move/resize handle state, drains any application
+        override cursors that may have been left active, and re-evaluates the
+        widget cursor for the current pointer position. Safe to call from any
+        exit path (release, commit, cancel, ESC, leave, view refresh).
+        """
+        # Clear interaction flags so nothing stays "grabbed".
+        self._imode_handle = None
+        self._imode_drag_start = None
+        self._imode_drag_start_bbox = None
+        self._mid_start = None
+        self._compare_dragging = False
+
+        # Balance any QApplication.setOverrideCursor() calls (e.g. a busy
+        # cursor pushed during a long save). Drain until the stack is empty so
+        # a missed restore elsewhere cannot leave the cursor stuck.
+        app = QApplication.instance()
+        if app is not None:
+            guard = 0
+            while app.overrideCursor() is not None and guard < 16:
+                QApplication.restoreOverrideCursor()
+                guard += 1
+
+        self._refresh_hover_cursor()
+
+    def leaveEvent(self, event) -> None:
+        """Reset the cursor when the pointer leaves the image view.
+
+        Without this a resize/move cursor set mid-drag could remain visible if
+        the pointer slipped out of the widget. Skips reset while a drag is
+        genuinely in progress so the active gesture is not disturbed.
+        """
+        if self._imode_handle is None and not self._compare_dragging \
+                and self._mid_start is None:
+            self._reset_cursor_state()
+        super().leaveEvent(event)
 
     # ── Key events ──────────────────────────────────────────────────────
 
@@ -1280,6 +1443,9 @@ class ImageBrowserPanel(QWidget):
         self._current_path: str = ""
         self._detection_done: bool = False
         self._face_data: List[_FaceData] = []
+        # Face ids on the current image that are auto-merged-from-Unknown and
+        # awaiting review (drives the amber overlay + the floating action bar).
+        self._pending_face_ids: set[int] = set()
         # Object occurrence markers for the current image, with object_id:
         # (occ_id, object_id, x, y, name, bbox_or_None)
         self._object_marker_data: List[tuple] = []
@@ -1350,8 +1516,13 @@ class ImageBrowserPanel(QWidget):
         self._deol_compare: bool = False               # True = compare divider active now
         self._deol_mode: Optional[str] = None          # remembered choice: 'bw'|'color'|'compare'
         self._deol_split: int = 50                     # remembered split position (percent)
-        self._deol_bw_bgr: Optional[np.ndarray] = None     # cached B&W pixels for compare
-        self._deol_color_bgr: Optional[np.ndarray] = None  # cached colorized pixels for compare
+        # Comparison group: B&W original first, then colorized variants. The
+        # compare view composes any two of them, chosen by left/right index.
+        self._deol_group: list = []                    # list[ComparisonMember]
+        self._deol_left_idx: int = 0                   # group index shown on the left (B&W by default)
+        self._deol_right_idx: int = 1                  # group index shown on the right (1st colorized)
+        self._deol_left_bgr: Optional[np.ndarray] = None   # cached left-side pixels for compare
+        self._deol_right_bgr: Optional[np.ndarray] = None  # cached right-side pixels (resized to left)
 
         self._build_ui()
         self._setup_shortcuts()
@@ -1442,6 +1613,9 @@ class ImageBrowserPanel(QWidget):
             "  background: #22223a;"
             "}"
         )
+        self._file_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._file_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._file_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._file_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self._file_tree.itemClicked.connect(self._on_tree_item_clicked)
         self._file_tree.go_prev.connect(self._navigate_prev)
@@ -1651,6 +1825,20 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_compare.setStyleSheet(_nav_style)
         self._btn_view_compare.clicked.connect(self._on_deol_compare_toggle)
         _deol_row.addWidget(self._btn_view_compare)
+        # Left/right pickers for the comparison group — only shown in compare
+        # mode when 3+ related images exist (B&W original + 2+ colorized).
+        self._deol_left_lbl = QLabel()
+        self._deol_left_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        _deol_row.addWidget(self._deol_left_lbl)
+        self._deol_left_combo = QComboBox()
+        self._deol_left_combo.currentIndexChanged.connect(self._on_deol_left_changed)
+        _deol_row.addWidget(self._deol_left_combo)
+        self._deol_right_lbl = QLabel()
+        self._deol_right_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        _deol_row.addWidget(self._deol_right_lbl)
+        self._deol_right_combo = QComboBox()
+        self._deol_right_combo.currentIndexChanged.connect(self._on_deol_right_changed)
+        _deol_row.addWidget(self._deol_right_combo)
         _deol_row.addStretch()
         self._btn_deol_sync = QPushButton()
         self._btn_deol_sync.setStyleSheet(_nav_style)
@@ -1692,6 +1880,13 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.assign_requested.connect(self._on_inline_assign)
         self._inline_editor.create_requested.connect(self._on_inline_create)
         self._inline_editor.closed.connect(self._hide_inline_editor)
+
+        # Floating quick-action bar for pending (auto-merged) faces.
+        self._pending_bar = _PendingActionBar(self._image_label)
+        self._pending_bar.hide()
+        self._pending_bar.accept_requested.connect(self._on_pending_accept)
+        self._pending_bar.move_requested.connect(self._on_pending_move)
+        self._pending_bar.delete_requested.connect(self._on_pending_delete)
 
         preview_splitter.addWidget(image_widget)
 
@@ -2049,6 +2244,10 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_color.setText(t("ibp_view_colorized"))
         self._btn_view_compare.setText(t("ibp_view_compare"))
         self._btn_view_compare.setToolTip(t("ibp_view_compare_tip"))
+        self._deol_left_lbl.setText(t("ibp_deol_left"))
+        self._deol_right_lbl.setText(t("ibp_deol_right"))
+        if self._deol_group:
+            self._populate_deol_combos()  # refresh translated member labels
         self._btn_deol_sync.setText(t("ibp_deol_sync"))
         self._btn_deol_sync.setToolTip(t("ibp_deol_sync_tip"))
 
@@ -2170,7 +2369,12 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _setup_deoldified_pair(self, image_id: int, image_path: str) -> None:
-        """Detect deoldified pairing and configure the toggle bar."""
+        """Detect the comparison group and configure the toggle bar.
+
+        A group is the B&W original plus every colorized variant that shares its
+        filename (folder-independent).  Two members behave exactly like the old
+        single pair; three or more enable the left/right pickers in compare mode.
+        """
         from app.app_settings import app_qsettings
         settings = app_qsettings()
         if not settings.value("deoldified/auto_pair", False, type=bool):
@@ -2180,58 +2384,130 @@ class ImageBrowserPanel(QWidget):
             is_deoldified_path,
             DeoldifiedPairingService,
         )
-        from app.services.image_library_service import resolve_image_path
 
-        if is_deoldified_path(image_path):
-            # Current image IS the colorized one → find its original
-            with session_scope() as session:
-                img = session.get(Image, image_id)
-                if img is None:
-                    return
-                svc = DeoldifiedPairingService(session)
-                orig = svc.find_original_for_deoldified(img)
-                if orig is None:
-                    return
-                self._deol_pair_orig_id = orig.id
-                self._deol_pair_partner_id = orig.id
+        with session_scope() as session:
+            img = session.get(Image, image_id)
+            if img is None:
+                return
+            group = DeoldifiedPairingService(session).get_comparison_group(img)
+        if len(group) < 2:
+            return
 
-            self._deol_pair_color_path = image_path
+        self._deol_group = group
+        bw_member = group[0]  # is_bw=True by construction
+        current_is_color = is_deoldified_path(image_path)
+
+        # Default selection: left = B&W original, right = colorized. When the
+        # tree image is itself a colorized variant, prefer it on the right so the
+        # opened image stays visible.
+        self._deol_left_idx = 0
+        self._deol_right_idx = 1
+        if current_is_color:
+            for i, m in enumerate(group):
+                if m.image_id == image_id and not m.is_bw:
+                    self._deol_right_idx = i
+                    break
+            self._deol_pair_orig_id = bw_member.image_id
             self._deol_viewing_color = True
             self._btn_view_bw.setChecked(False)
             self._btn_view_color.setChecked(True)
-            self._deoldified_bar.setVisible(True)
-            log.debug(
-                "Deoldified pair: color=%s → orig_id=%d",
-                image_path, self._deol_pair_orig_id,
-            )
         else:
-            # Current image is the original → look for a colorized variant
-            with session_scope() as session:
-                img = session.get(Image, image_id)
-                if img is None:
-                    return
-                svc = DeoldifiedPairingService(session)
-                color_img = svc.find_deoldified_for_original(img)
-                if color_img is None:
-                    return
-                self._deol_pair_partner_id = color_img.id
-                color_resolved = resolve_image_path(color_img)
-                self._deol_pair_color_path = (
-                    str(color_resolved) if color_resolved else color_img.file_path
-                )
-
+            self._deol_pair_orig_id = None  # current IS the B&W original
             self._deol_viewing_color = False
             self._btn_view_bw.setChecked(True)
             self._btn_view_color.setChecked(False)
-            self._deoldified_bar.setVisible(True)
-            log.debug(
-                "Deoldified pair: orig=%s → color=%s",
-                image_path, self._deol_pair_color_path,
-            )
+
+        self._deol_pair_color_path = group[self._deol_right_idx].file_path
+        self._update_deol_sync_partner(image_id)
+        self._populate_deol_combos()
+        self._deoldified_bar.setVisible(True)
+        log.debug(
+            "Comparison group of %d image(s): %s",
+            len(group), [m.label or "bw" for m in group],
+        )
 
         # Auto-sync annotations from the filled side into the empty side.
         if settings.value("deoldified/auto_sync", True, type=bool):
             self._run_deoldified_sync(image_id, announce=False)
+
+    def _update_deol_sync_partner(self, image_id: int) -> None:
+        """Point the sync partner at the other side of the active comparison.
+
+        When the tree image is the B&W original, the partner is the selected
+        colorized variant; when it is colorized, the partner is the original.
+        """
+        if not self._deol_group:
+            self._deol_pair_partner_id = None
+            return
+        if self._deol_pair_orig_id is not None:
+            self._deol_pair_partner_id = self._deol_pair_orig_id
+        else:
+            self._deol_pair_partner_id = self._deol_group[self._deol_right_idx].image_id
+
+    def _deol_member_text(self, member) -> str:
+        """Combo label for one comparison member."""
+        if member.is_bw:
+            return t("ibp_deol_bw_label")
+        if member.label and member.label != "deoldified":
+            return f"{t('ibp_view_colorized')} {member.label}"
+        return t("ibp_view_colorized")
+
+    def _populate_deol_combos(self) -> None:
+        """Fill the left/right pickers from the current group (signals blocked)."""
+        for combo, idx in (
+            (self._deol_left_combo, self._deol_left_idx),
+            (self._deol_right_combo, self._deol_right_idx),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            for m in self._deol_group:
+                combo.addItem(self._deol_member_text(m))
+            if 0 <= idx < combo.count():
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+        self._deol_update_combo_visibility()
+
+    def _deol_update_combo_visibility(self) -> None:
+        """Show the left/right pickers only in compare mode with 3+ members."""
+        show = self._deol_compare and len(self._deol_group) >= 3
+        for w in (
+            self._deol_left_lbl, self._deol_left_combo,
+            self._deol_right_lbl, self._deol_right_combo,
+        ):
+            w.setVisible(show)
+
+    def _on_deol_left_changed(self, idx: int) -> None:
+        """Left picker changed → reload both cached sides and recompose."""
+        if idx < 0 or idx >= len(self._deol_group) or idx == self._deol_left_idx:
+            return
+        self._deol_left_idx = idx
+        # Right pixels are resized to the left shape, so invalidate both.
+        self._deol_left_bgr = None
+        self._deol_right_bgr = None
+        self._deol_recompose_compare()
+
+    def _on_deol_right_changed(self, idx: int) -> None:
+        """Right picker changed → update single-view color path and recompose."""
+        if idx < 0 or idx >= len(self._deol_group) or idx == self._deol_right_idx:
+            return
+        self._deol_right_idx = idx
+        self._deol_right_bgr = None
+        member = self._deol_group[idx]
+        if not member.is_bw:
+            self._deol_pair_color_path = member.file_path
+        self._update_deol_sync_partner(self._current_image_id)
+        self._deol_recompose_compare()
+
+    def _deol_recompose_compare(self) -> None:
+        """Re-render the compare composite after a picker change."""
+        if not self._deol_compare:
+            return
+        if not self._deol_ensure_compare_bgr():
+            return
+        comp = self._deol_composite()
+        if comp is not None:
+            self._orig_img_bgr = comp
+            self._redraw_faces()
 
     def _on_deol_view_toggle(self, show_colorized: bool) -> None:
         """User picked the single B&W or colorized view (remembered choice)."""
@@ -2266,6 +2542,7 @@ class ImageBrowserPanel(QWidget):
         self._deol_compare = False
         self._image_label.set_compare_mode(False)
         self._btn_view_compare.setChecked(False)
+        self._deol_update_combo_visibility()
         self._deol_viewing_color = show_colorized
         self._btn_view_bw.setChecked(not show_colorized)
         self._btn_view_color.setChecked(show_colorized)
@@ -2274,48 +2551,38 @@ class ImageBrowserPanel(QWidget):
             self._reset_zoom()
         self._redraw_faces()
 
-    def _deol_bw_path(self) -> Optional[str]:
-        """Resolve the on-disk path of the B&W side of the current pair."""
-        from app.services.image_library_service import resolve_image_path
-
-        if self._deol_pair_orig_id is not None:
-            with session_scope() as session:
-                orig = session.get(Image, self._deol_pair_orig_id)
-                if orig is None:
-                    return None
-                resolved = resolve_image_path(orig)
-                return str(resolved) if resolved else orig.file_path
-        return self._current_path  # current IS the B&W original
-
-    def _deol_ensure_pair_bgr(self) -> bool:
-        """Load and cache both sides of the pair, color resized to B&W shape."""
-        if self._deol_bw_bgr is not None and self._deol_color_bgr is not None:
+    def _deol_ensure_compare_bgr(self) -> bool:
+        """Load and cache the two selected sides, right resized to left shape."""
+        if self._deol_left_bgr is not None and self._deol_right_bgr is not None:
             return True
+        if not self._deol_group:
+            return False
         from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr
 
-        bw_path = self._deol_bw_path()
-        bw = load_image_bgr(bw_path) if bw_path else None
-        color = load_image_bgr(self._deol_pair_color_path)
-        if bw is None or color is None:
+        left_m = self._deol_group[self._deol_left_idx]
+        right_m = self._deol_group[self._deol_right_idx]
+        left = load_image_bgr(left_m.file_path)
+        right = load_image_bgr(right_m.file_path)
+        if left is None or right is None:
             return False
-        if color.shape[:2] != bw.shape[:2]:
-            color = cv2.resize(
-                color, (bw.shape[1], bw.shape[0]), interpolation=cv2.INTER_AREA
+        if right.shape[:2] != left.shape[:2]:
+            right = cv2.resize(
+                right, (left.shape[1], left.shape[0]), interpolation=cv2.INTER_AREA
             )
-        self._deol_bw_bgr = bw
-        self._deol_color_bgr = color
+        self._deol_left_bgr = left
+        self._deol_right_bgr = right
         return True
 
     def _deol_composite(self) -> Optional[np.ndarray]:
-        """Compose left=B&W, right=color split at the current slider position."""
-        bw = self._deol_bw_bgr
-        color = self._deol_color_bgr
-        if bw is None or color is None:
+        """Compose left side and right side split at the current slider position."""
+        left = self._deol_left_bgr
+        right = self._deol_right_bgr
+        if left is None or right is None:
             return None
-        h, w = bw.shape[:2]
+        h, w = left.shape[:2]
         split = max(0, min(w, int(round(w * self._deol_split / 100.0))))
-        out = color.copy()
-        out[:, :split] = bw[:, :split]
+        out = right.copy()
+        out[:, :split] = left[:, :split]
         return out
 
     def _on_deol_compare_toggle(self) -> None:
@@ -2328,7 +2595,7 @@ class ImageBrowserPanel(QWidget):
 
     def _enter_compare(self, *, reset_zoom: bool) -> bool:
         """Activate the on-image compare divider; False if pixels unavailable."""
-        if not self._deol_ensure_pair_bgr():
+        if not self._deol_ensure_compare_bgr():
             return False
         comp = self._deol_composite()
         if comp is None:
@@ -2343,6 +2610,7 @@ class ImageBrowserPanel(QWidget):
             self._reset_zoom()
         self._redraw_faces()
         self._image_label.set_compare_mode(True, self._deol_split)
+        self._deol_update_combo_visibility()
         return True
 
     def _on_compare_dragged(self, percent: int) -> None:
@@ -2373,12 +2641,17 @@ class ImageBrowserPanel(QWidget):
         Keeps the remembered mode/split so the choice persists across images.
         """
         self._deol_compare = False
-        self._deol_bw_bgr = None
-        self._deol_color_bgr = None
+        self._deol_left_bgr = None
+        self._deol_right_bgr = None
+        self._deol_group = []
+        self._deol_left_idx = 0
+        self._deol_right_idx = 1
         if hasattr(self, "_image_label"):
             self._image_label.set_compare_mode(False)
         if hasattr(self, "_btn_view_compare"):
             self._btn_view_compare.setChecked(False)
+        if hasattr(self, "_deol_left_combo"):
+            self._deol_update_combo_visibility()
 
     def _run_deoldified_sync(self, image_id: int, *, announce: bool) -> Optional[dict]:
         """Copy annotations between the current image and its deoldified pair.
@@ -2468,6 +2741,10 @@ class ImageBrowserPanel(QWidget):
                     )
             svc = ImageBrowserService(session)
             self._face_data = svc.get_image_faces(source_id)
+            from app.services.unknown_merge_service import UnknownMergeService
+            self._pending_face_ids = set(
+                UnknownMergeService(session).pending_face_ids(source_id)
+            )
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image and refresh the UI."""
@@ -2557,6 +2834,248 @@ class ImageBrowserPanel(QWidget):
         if item.data(0, _ROLE_TYPE) != "image":
             return
         self._select_tree_item(item)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Re-recognition (context menu → background worker)
+    # ──────────────────────────────────────────────────────────────────
+
+    def _selected_image_ids(self, fallback_pos: Optional[QPoint] = None) -> List[int]:
+        """Collect image ids from the tree selection (or the item under cursor)."""
+        ids: List[int] = []
+        for item in self._file_tree.selectedItems():
+            if item.data(0, _ROLE_TYPE) == "image":
+                pid = item.data(0, _ROLE_PAYLOAD)
+                if isinstance(pid, int):
+                    ids.append(pid)
+        if not ids and fallback_pos is not None:
+            item = self._file_tree.itemAt(fallback_pos)
+            if item is not None and item.data(0, _ROLE_TYPE) == "image":
+                pid = item.data(0, _ROLE_PAYLOAD)
+                if isinstance(pid, int):
+                    ids.append(pid)
+        # Preserve order, drop duplicates.
+        seen: set = set()
+        return [i for i in ids if not (i in seen or seen.add(i))]
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        image_ids = self._selected_image_ids(fallback_pos=pos)
+        menu = QMenu(self)
+
+        if image_ids:
+            if len(image_ids) == 1:
+                rerec_action = menu.addAction(t("rerec_ctx_one"))
+            else:
+                rerec_action = menu.addAction(
+                    t("rerec_ctx_many", n=len(image_ids))
+                )
+            rerec_action.triggered.connect(
+                lambda: self._start_rerecognition(image_ids)
+            )
+            menu.addSeparator()
+
+        undo_action = menu.addAction(t("rerec_ctx_undo_last"))
+        undo_action.setEnabled(self._latest_undoable_batch() is not None)
+        undo_action.triggered.connect(self._undo_last_rerecognition)
+
+        history_action = menu.addAction(t("rerec_ctx_history"))
+        history_action.triggered.connect(self._open_rerecognition_history)
+
+        menu.exec(self._file_tree.viewport().mapToGlobal(pos))
+
+    def _rerecognition_thresholds(self) -> "tuple[float, float]":
+        """Read (auto, suggest) thresholds from QSettings, config as fallback."""
+        from app.app_settings import app_qsettings
+
+        rec = getattr(self._config, "recognition", None)
+        auto_default = rec.rerecognition_auto_threshold if rec else 0.72
+        suggest_default = rec.rerecognition_suggest_threshold if rec else 0.55
+        qs = app_qsettings()
+        auto = float(qs.value("rerecognition/auto_threshold", auto_default, type=float))
+        suggest = float(
+            qs.value("rerecognition/suggest_threshold", suggest_default, type=float)
+        )
+        return auto, suggest
+
+    def _rerecognition_enabled(self) -> bool:
+        from app.app_settings import app_qsettings
+
+        rec = getattr(self._config, "recognition", None)
+        default = rec.rerecognition_enabled if rec else True
+        return bool(
+            app_qsettings().value("rerecognition/enabled", default, type=bool)
+        )
+
+    def _start_rerecognition(self, image_ids: List[int]) -> None:
+        if not image_ids or self._config is None:
+            return
+        if not self._rerecognition_enabled():
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_disabled")
+            )
+            return
+        if getattr(self, "_rerec_worker", None) is not None:
+            return  # a run is already in flight
+
+        auto_thr, suggest_thr = self._rerecognition_thresholds()
+
+        from app.workers.rerecognition_worker import ReRecognitionWorker
+
+        progress = QProgressDialog(
+            t("rerec_progress_body", done=0, total=0, auto=0, suggest=0),
+            t("rerec_cancel"),
+            0, 0, self,
+        )
+        progress.setWindowTitle(t("rerec_progress_title"))
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumWidth(360)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        self._rerec_progress = progress
+
+        worker = ReRecognitionWorker(
+            image_ids,
+            self._config,
+            auto_threshold=auto_thr,
+            suggest_threshold=suggest_thr,
+        )
+        self._rerec_worker = worker
+
+        def _on_progress(done: int, total: int, auto: int, suggest: int) -> None:
+            progress.setMaximum(max(total, 1))
+            progress.setValue(done)
+            progress.setLabelText(
+                t("rerec_progress_body", done=done, total=total,
+                  auto=auto, suggest=suggest)
+            )
+
+        worker.progress.connect(_on_progress)
+        worker.finished_result.connect(self._on_rerecognition_finished)
+        worker.failed.connect(self._on_rerecognition_failed)
+        progress.canceled.connect(worker.cancel)
+        worker.start()
+        progress.show()
+
+    def _cleanup_rerec_worker(self) -> None:
+        progress = getattr(self, "_rerec_progress", None)
+        if progress is not None:
+            progress.close()
+        self._rerec_progress = None
+        worker = getattr(self, "_rerec_worker", None)
+        if worker is not None:
+            worker.wait(50)
+        self._rerec_worker = None
+
+    def _on_rerecognition_failed(self, message: str) -> None:
+        self._cleanup_rerec_worker()
+        QMessageBox.critical(
+            self, t("rerec_error_title"), t("rerec_error_body", error=message)
+        )
+
+    def _on_rerecognition_finished(self, result) -> None:
+        self._cleanup_rerec_worker()
+
+        if getattr(result, "cancelled", False):
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_cancelled")
+            )
+            self._refresh_after_rerecognition()
+            return
+
+        if result.n_examined == 0 and result.n_auto == 0:
+            QMessageBox.information(
+                self, t("rerec_summary_title"), t("rerec_no_profiles")
+            )
+            return
+
+        self._refresh_after_rerecognition()
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(t("rerec_summary_title"))
+        box.setText(
+            t(
+                "rerec_summary_body",
+                examined=result.n_examined,
+                auto=result.n_auto,
+                suggest=result.n_suggest,
+                none=result.n_none,
+            )
+        )
+        review_btn = None
+        if result.suggest_items:
+            review_btn = box.addButton(
+                t("rerec_summary_review"), QMessageBox.AcceptRole
+            )
+        box.addButton(t("rerec_summary_close"), QMessageBox.RejectRole)
+        box.exec()
+
+        if review_btn is not None and box.clickedButton() is review_btn:
+            self._open_rerecognition_review(result)
+
+    def _open_rerecognition_review(self, result) -> None:
+        from app.ui.dialogs.rerecognition_review_dialog import (
+            ReRecognitionReviewDialog,
+        )
+
+        rec_cfg = getattr(self._config, "recognition", None)
+        dialog = ReRecognitionReviewDialog(
+            result.suggest_items,
+            result.batch_id or "",
+            self._all_persons,
+            recognition_config=rec_cfg,
+            parent=self,
+        )
+        dialog.applied.connect(self._refresh_after_rerecognition)
+        dialog.exec()
+
+    def _latest_undoable_batch(self) -> Optional[str]:
+        try:
+            from app.services.rerecognition_service import ReRecognitionService
+
+            with session_scope() as session:
+                return ReRecognitionService(session).latest_undoable_batch()
+        except Exception:  # noqa: BLE001
+            log.exception("Could not query re-recognition history")
+            return None
+
+    def _undo_last_rerecognition(self) -> None:
+        from app.services.rerecognition_service import ReRecognitionService
+
+        batch_id = self._latest_undoable_batch()
+        if batch_id is None:
+            QMessageBox.information(
+                self, t("rerec_progress_title"), t("rerec_nothing_to_undo")
+            )
+            return
+        try:
+            with session_scope() as session:
+                n = ReRecognitionService(session).undo_batch(batch_id)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Undo of last re-recognition failed")
+            QMessageBox.critical(
+                self, t("rerec_error_title"), t("rerec_undo_error", error=str(exc))
+            )
+            return
+        self._refresh_after_rerecognition()
+        QMessageBox.information(
+            self, t("rerec_summary_title"), t("rerec_undo_done", n=n)
+        )
+
+    def _open_rerecognition_history(self) -> None:
+        from app.ui.dialogs.rerecognition_history_dialog import (
+            ReRecognitionHistoryDialog,
+        )
+
+        dialog = ReRecognitionHistoryDialog(self)
+        dialog.changed.connect(self._refresh_after_rerecognition)
+        dialog.exec()
+
+    def _refresh_after_rerecognition(self) -> None:
+        """Refresh person list + current image overlay after a merge/undo."""
+        self._reload_persons_combo()
+        if self._current_image_id is not None:
+            self._reload_current_face_data()
+        self.person_data_changed.emit()
 
     def _load_folder_children(self, folder_item: QTreeWidgetItem) -> None:
         """Replace dummy child with real image child items and start thumbnail workers."""
@@ -4195,9 +4714,11 @@ class ImageBrowserPanel(QWidget):
             bbox_opacity=self._bbox_opacity if self._show_bboxes else 0.0,
             show_labels=self._show_labels,
             label_opacity=self._label_opacity if self._show_labels else 0.0,
+            pending_ids=self._pending_face_ids,
         )
         self._full_pixmap = _bgr_to_qpixmap(annotated)
         self._image_label.set_source_pixmap(self._full_pixmap)
+        self._position_pending_action_bar()
 
     # ──────────────────────────────────────────────────────────────────
     # Zoom / pan
@@ -4225,6 +4746,7 @@ class ImageBrowserPanel(QWidget):
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
         self._hide_inline_editor()
+        self._position_pending_action_bar()
 
     def _on_pan_moved(self, dx: int, dy: int) -> None:
         self._pan_x += dx
@@ -4232,6 +4754,7 @@ class ImageBrowserPanel(QWidget):
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
         self._hide_inline_editor()
+        self._position_pending_action_bar()
 
     def _clamp_pan(self) -> None:
         if self._full_pixmap is None:
@@ -4260,40 +4783,26 @@ class ImageBrowserPanel(QWidget):
     def _compute_match_scores(self, face_id: int) -> dict[int, float]:
         """Score *face_id*'s embedding against known people for match ordering.
 
-        Returns an empty mapping (default ordering, no checkbox) when the face
-        has no embedding or scoring fails — a missing embedding must never break
-        the assign panel.
+        Thin wrapper over the shared :mod:`app.services.match_scoring` helper so
+        every person-selector popup ranks candidates the same way.  Returns an
+        empty mapping (default ordering, no checkbox) when the face has no
+        embedding or scoring fails.
         """
-        from app.services.recognition_service import RecognitionService
+        from app.services.match_scoring import match_scores_for_face
 
         recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-        try:
-            with session_scope() as session:
-                face = session.get(Face, face_id)
-                if face is None:
-                    return {}
-                embedding = face.get_embedding()
-                # Fallback for faces saved without a vector (e.g. older manual
-                # marks, or a marking where the model was unavailable): try to
-                # compute the embedding now so match-ordering becomes available
-                # instead of silently dropping the option.
-                if embedding is None and self._config is not None and face.crop_path:
-                    from app.services.embedding_service import embed_manual_face
-
-                    if embed_manual_face(session, face, self._config):
-                        embedding = face.get_embedding()
-                return RecognitionService(session, recognition_cfg).score_persons(
-                    embedding
-                )
-        except Exception:  # noqa: BLE001 — ordering is best-effort, never fatal
-            log.exception("Face-match scoring failed; using default order")
-            return {}
+        with session_scope() as session:
+            return match_scores_for_face(
+                session, face_id, recognition_cfg, config=self._config
+            )
 
     def _show_inline_editor(self, face_id: int) -> None:
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         if entry is None:
             log.debug("_show_inline_editor: face_id=%d not found in face_data", face_id)
             return
+        # The inline person picker and the pending action bar must not overlap.
+        self._pending_bar.hide()
         _, bx, by, bw, bh, person_name, person_id = entry
 
         self._inline_editor.populate(
@@ -4353,6 +4862,96 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.hide()
         self._inline_editor_face_id = None
 
+    # ──────────────────────────────────────────────────────────────────
+    # Pending (auto-merged-from-Unknown) review actions
+    # ──────────────────────────────────────────────────────────────────
+
+    def _position_pending_action_bar(self) -> None:
+        """Show the quick-action bar over the selected pending face, else hide it."""
+        fid = self._selected_face_id
+        if (
+            fid is None
+            or fid not in self._pending_face_ids
+            or self._full_pixmap is None
+        ):
+            self._pending_bar.hide()
+            return
+        entry = next((f for f in self._face_data if f[0] == fid), None)
+        if entry is None:
+            self._pending_bar.hide()
+            return
+        _, bx, by, bw, bh, _, _ = entry
+        self._pending_bar.adjustSize()
+        bar_w = self._pending_bar.width()
+        bar_h = self._pending_bar.height()
+        cr = self._image_label.contentsRect()
+
+        lx, ly_top = self._image_to_label(bx, by)
+        _, ly_bot = self._image_to_label(bx, by + bh)
+        # Prefer just above the box; fall back to just below, then clamp.
+        if ly_top - bar_h - 6 >= 0:
+            pos_y = ly_top - bar_h - 6
+        elif ly_bot + bar_h + 6 <= cr.height():
+            pos_y = ly_bot + 6
+        else:
+            pos_y = max(2, ly_top + 2)
+        pos_x = max(2, min(lx, cr.width() - bar_w - 2))
+        self._pending_bar.move(pos_x, pos_y)
+        self._pending_bar.show()
+        self._pending_bar.raise_()
+
+    def _notify_unknown_merge(self, result) -> None:
+        """Inform the user when an assignment scattered an Unknown cluster."""
+        if result is None or not getattr(result, "was_unknown_cluster", False):
+            return
+        moved = result.n_pending + result.n_auto_confirmed
+        if moved <= 0:
+            return
+        QMessageBox.information(
+            self,
+            t("amerge_notice_title"),
+            t(
+                "amerge_notice_msg",
+                source=result.source_person_name or "?",
+                target=result.target_name,
+                pending=result.n_pending,
+                auto=result.n_auto_confirmed,
+            ),
+        )
+
+    def _on_pending_accept(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        with session_scope() as session:
+            UnknownMergeService(session).confirm_auto_merge(fid)
+        self._reload_current_face_data()
+        self.person_data_changed.emit()
+
+    def _on_pending_move(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        # Reuse the inline editor: the face is already on a named person, so
+        # picking a target goes through reassign_face, which clears the markers.
+        self._show_inline_editor(fid)
+
+    def _on_pending_delete(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            t("remove_face_title"),
+            t("remove_face_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._pending_bar.hide()
+        self._delete_face(fid)
+        self.person_data_changed.emit()
+
     def _on_inline_assign(self, person_id: int) -> None:
         face_id = self._inline_editor_face_id
         if face_id is None:
@@ -4364,12 +4963,15 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.reset_search()
         self._hide_inline_editor()
         with session_scope() as session:
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
         self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
 
     def _on_inline_create(self, name: str) -> None:
         face_id = self._inline_editor_face_id
@@ -4400,7 +5002,9 @@ class ImageBrowserPanel(QWidget):
                 "New person creation: face_id=%d new_person='%s' person_id=%d",
                 face_id, name, person_id,
             )
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
             log.info(
                 "Face assignment: face_id=%d → person_id=%d (new person via inline)",
                 face_id, person_id,
@@ -4410,6 +5014,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
         self._open_person_info_dialog(person_id)
 
     # ──────────────────────────────────────────────────────────────────
@@ -5044,12 +5649,15 @@ class ImageBrowserPanel(QWidget):
             self._selected_face_id, person_id,
         )
         with session_scope() as session:
-            IdentityService(session).reassign_face(self._selected_face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(self._selected_face_id, person_id)
         self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
 
     def _on_create_and_assign(self) -> None:
         if self._selected_face_id is None:
@@ -5089,7 +5697,9 @@ class ImageBrowserPanel(QWidget):
                 "New person creation: face_id=%d new_person='%s' person_id=%d",
                 face_id, name, person_id,
             )
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
             log.info(
                 "Face assignment: face_id=%d → person_id=%d (new person via panel)",
                 face_id, person_id,
@@ -5100,6 +5710,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
         self._open_person_info_dialog(person_id)
 
     def _open_person_info_dialog(self, person_id: int) -> None:

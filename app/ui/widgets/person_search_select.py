@@ -33,7 +33,12 @@ from PySide6.QtWidgets import (
 
 from app.db.models import Person
 from app.ui.i18n import t
-from app.utils.person_search import PersonEntry, filter_entries, search_persons
+from app.utils.person_search import (
+    PersonEntry,
+    filter_entries,
+    person_is_unknown,
+    search_persons,
+)
 
 _ROLE_ID = Qt.UserRole
 _MAX_VISIBLE_ITEMS = 8
@@ -65,6 +70,11 @@ class PersonSearchSelect(QWidget):
         self._entries: List[PersonEntry] = []
         self._selected_id: Optional[int] = None
         self._match_scores: Dict[int, float] = {}
+        # Hide placeholder/unknown identities from the base (empty-query) list.
+        # On by default so every selector follows the shared rule; navigation
+        # surfaces that must list unknown clusters (e.g. the persons sidebar)
+        # opt out via :meth:`set_hide_unknown_in_base`.
+        self._hide_unknown_in_base: bool = True
 
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -161,12 +171,27 @@ class PersonSearchSelect(QWidget):
             return (idx, p.name.casefold())
 
         sorted_persons = sorted(persons, key=_rank)
-        self._entries = [PersonEntry(p.id, p.name) for p in sorted_persons]
+        self._entries = [
+            PersonEntry(p.id, p.name, is_unknown=person_is_unknown(p))
+            for p in sorted_persons
+        ]
         self._refresh_list()
 
     def set_entries(self, entries: List[PersonEntry]) -> None:
         """Populate with pre-built :class:`PersonEntry` objects (e.g. with custom display_text)."""
         self._entries = list(entries)
+        self._refresh_list()
+
+    def set_hide_unknown_in_base(self, hide: bool) -> None:
+        """Toggle hiding of unknown/placeholder persons in the base list.
+
+        When ``True`` (the default) entries flagged
+        :attr:`~app.utils.person_search.PersonEntry.is_unknown` are absent from
+        the unfiltered list but still appear when the user searches.  Set
+        ``False`` for navigation surfaces that must always show every person
+        (e.g. the persons sidebar, where unknown clusters need to be clickable).
+        """
+        self._hide_unknown_in_base = bool(hide)
         self._refresh_list()
 
     def set_match_scores(
@@ -294,9 +319,13 @@ class PersonSearchSelect(QWidget):
     def _refresh_list(self) -> None:
         query = self._search.text()
         if self._match_active():
+            # Match-sorting is itself a relevance ranking, so unknown clusters
+            # stay visible (the "search logic justifies it" case).
             visible = filter_entries(query, self._entries_by_match())
         else:
-            visible = search_persons(query, self._entries)
+            visible = search_persons(
+                query, self._entries, hide_unknown=self._hide_unknown_in_base
+            )
         self._list.blockSignals(True)
         self._list.clear()
         for entry in visible:

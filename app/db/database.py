@@ -131,6 +131,11 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("is_low_quality", "BOOLEAN"),
             ("landmarks", "BLOB"),
             ("is_merge_excluded", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("auto_merged_from_unknown", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("auto_merge_review_status", "VARCHAR(16)"),
+            ("auto_merge_source_person_id", "INTEGER"),
+            ("auto_merge_confirmed_at", "DATETIME"),
+            ("auto_merge_confirmed_by_user", "BOOLEAN NOT NULL DEFAULT 0"),
         ],
     }
     with engine.connect() as conn:
@@ -563,6 +568,10 @@ def _migrate_add_indexes(engine: Engine) -> None:
         ),
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_faces_auto_merge_review "
+            "ON faces(auto_merge_review_status)"
+        ),
         "CREATE INDEX IF NOT EXISTS ix_places_type ON places(place_type)",
         "CREATE INDEX IF NOT EXISTS ix_places_parent ON places(parent_id)",
         (

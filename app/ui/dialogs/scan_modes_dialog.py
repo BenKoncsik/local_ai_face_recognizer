@@ -46,6 +46,7 @@ class ScanModesDialog(QDialog):
         on_manage_ignored_faces: Optional[Callable[[], None]] = None,
         on_deep_rescan: Optional[Callable[[], None]] = None,
         on_deep_rebuild: Optional[Callable[[], None]] = None,
+        on_deep_train: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -60,6 +61,7 @@ class ScanModesDialog(QDialog):
         self._on_manage_ignored_faces = on_manage_ignored_faces
         self._on_deep_rescan = on_deep_rescan
         self._on_deep_rebuild = on_deep_rebuild
+        self._on_deep_train = on_deep_train
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -101,7 +103,7 @@ class ScanModesDialog(QDialog):
         return scroll, cards_layout
 
     # ------------------------------------------------------------------
-    # AI (deep learning) tab — exactly two operations, kept simple.
+    # AI (deep learning) tab — three operations, kept simple.
     # ------------------------------------------------------------------
 
     def _build_deep_tab(self) -> QWidget:
@@ -118,6 +120,14 @@ class ScanModesDialog(QDialog):
             button_label=t("scanModes.deepRescan.startButton"),
             warning=t("scanModes.deepRescan.warning"),
             callback=self._launch_deep_rescan,
+            danger=False,
+        ))
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.deepTrain.title"),
+            description=t("scanModes.deepTrain.description"),
+            button_label=t("scanModes.deepTrain.startButton"),
+            warning=t("scanModes.deepTrain.warning"),
+            callback=self._launch_deep_train,
             danger=False,
         ))
         cards_layout.addWidget(self._make_card(
@@ -288,6 +298,11 @@ class ScanModesDialog(QDialog):
         self.accept()
         if self._on_deep_rebuild is not None:
             self._on_deep_rebuild()
+
+    def _launch_deep_train(self) -> None:
+        self.accept()
+        if self._on_deep_train is not None:
+            self._on_deep_train()
 
     def _launch_incremental(self) -> None:
         self.accept()

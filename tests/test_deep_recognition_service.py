@@ -332,6 +332,41 @@ class TestReviewActions:
             # Reverting also vetoes the bad person for future runs.
             assert s.query(FaceCorrection).filter_by(same_person=False).count() == 1
 
+    def test_revert_all_open_spares_reviewed_rows(self, tmp_db, tmp_path):
+        """Bulk undo reverts every open assignment but not the reviewed ones."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            anna, _ = _seed_two_persons(s, img)
+            candidates = [
+                _add_face(s, img, None, _vec(0, seed=900 + i), source=None)
+                for i in range(3)
+            ]
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+        with session_scope() as s:
+            rows = s.query(AutoAssignment).order_by(AutoAssignment.id).all()
+            assert len(rows) == 3
+            confirmed_id, confirmed_face = rows[0].id, rows[0].face_id
+            DeepRecognitionService(s, cfg).confirm_assignment(confirmed_id)
+
+        with session_scope() as s:
+            n = DeepRecognitionService(s, cfg).revert_all_open()
+            assert n == 2
+
+        with session_scope() as s:
+            confirmed = s.get(AutoAssignment, confirmed_id)
+            assert confirmed.status == AUTO_ASSIGN_STATUS_CONFIRMED
+            assert s.get(Face, confirmed_face).person_id == anna
+            for row in s.query(AutoAssignment).filter(
+                AutoAssignment.id != confirmed_id
+            ):
+                assert row.status == AUTO_ASSIGN_STATUS_REVERTED
+                assert s.get(Face, row.face_id).person_id is None
+            # Each bulk revert is recorded as a mistake the engine learns from.
+            assert s.query(FaceCorrection).filter_by(same_person=False).count() == 2
+            assert DeepRecognitionService(s, cfg).count_open_assignments() == 0
+
     def test_list_auto_assignments_returns_dto(self, tmp_db, tmp_path):
         cfg, assignment_id, face_id, anna, _ = self._setup_with_assignment(tmp_path)
 
@@ -345,6 +380,45 @@ class TestReviewActions:
             assert dto.person_name == "Nagy Anna"
             assert dto.status == AUTO_ASSIGN_STATUS_AUTO
             assert svc.count_open_assignments() == 1
+
+    def test_force_retrains_even_when_data_unchanged(self, tmp_db, tmp_path):
+        """The explicit "train the model" action must never be skipped."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+        with session_scope() as s:
+            _, first, _ = DeepRecognitionService(s, cfg).train()
+            assert not first.reused_existing_model
+        with session_scope() as s:
+            _, again, _ = DeepRecognitionService(s, cfg).train()
+            assert again.reused_existing_model  # skip_unchanged still works
+        with session_scope() as s:
+            _, forced, _ = DeepRecognitionService(s, cfg).train(
+                mode="train", force=True
+            )
+            assert not forced.reused_existing_model
+
+    def test_review_list_survives_train_only_run(self, tmp_db, tmp_path):
+        """A newer train-only run must not hide the open review items."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+            _add_face(s, img, None, _vec(0, seed=999), source=None)
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+        with session_scope() as s:
+            assert DeepRecognitionService(s, cfg).count_open_assignments() == 1
+
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train(mode="train", force=True)
+
+        with session_scope() as s:
+            svc = DeepRecognitionService(s, cfg)
+            assert svc.count_open_assignments() == 1
+            assert len(svc.list_auto_assignments()) == 1
+            assert svc.revert_all_open() == 1
 
     def test_stale_assignment_is_hidden(self, tmp_db, tmp_path):
         """Manually moving the face elsewhere hides the stale review row."""

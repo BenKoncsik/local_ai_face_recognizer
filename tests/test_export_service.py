@@ -183,6 +183,62 @@ def test_export_astro_bundle_structure(db, tmp_path):
     assert photo["width"] == 2000  # original dimensions preserved in metadata
 
 
+def test_export_astro_compare_group_with_multiple_variants(db, tmp_path):
+    """A B&W original with two colorized variants exports a 3-member group."""
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    bw = photos / "family.jpg"
+    artistic = photos / "family-deoldified (artistic).jpg"
+    stable = photos / "family-deoldified (stable).jpg"
+    img = np.zeros((600, 900, 3), dtype=np.uint8)
+    for p, colr in ((bw, (10, 10, 10)), (artistic, (40, 80, 120)), (stable, (90, 60, 30))):
+        frame = img.copy()
+        frame[:, :] = colr
+        assert save_image_bgr(p, frame)
+
+    with session_scope() as session:
+        for p in (bw, artistic, stable):
+            session.add(Image(file_path=str(p), file_hash=p.name, file_mtime=0.0,
+                              width=900, height=600, detection_done=True))
+
+    with session_scope() as session:
+        data_dir, project = _run_astro(session, tmp_path)
+
+    photos_json = _read_bundle(data_dir, "photos.json")
+    by_name = {Path(p["fileName"]).name: p for p in photos_json}
+
+    bw_photo = by_name["family.jpg"]
+    members = bw_photo["compare"]
+    assert members is not None and len(members) == 3
+    # B&W original first, then colorized variants by label.
+    assert members[0]["isBw"] is True
+    assert [m["label"] for m in members[1:]] == ["(artistic)", "(stable)"]
+    assert all(m["src"].startswith("/assets/images/medium/") for m in members)
+    # Legacy pair still derived (B&W + first colorized) for the slideshow slider.
+    assert bw_photo["pair"]["bw"] == members[0]["src"]
+    assert bw_photo["pair"]["color"] == members[1]["src"]
+
+    # Each colorized variant resolves to the same 3-member group.
+    assert len(by_name["family-deoldified (artistic).jpg"]["compare"]) == 3
+    assert len(by_name["family-deoldified (stable).jpg"]["compare"]) == 3
+
+
+def test_export_astro_no_compare_group_for_lone_image(db, tmp_path):
+    """An image without colorized siblings has compare=None (simple view)."""
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    lone = photos / "solo.jpg"
+    assert save_image_bgr(lone, np.full((400, 600, 3), 50, dtype=np.uint8))
+    with session_scope() as session:
+        session.add(Image(file_path=str(lone), file_hash="solo", file_mtime=0.0,
+                          width=600, height=400, detection_done=True))
+    with session_scope() as session:
+        data_dir, _ = _run_astro(session, tmp_path)
+    photo = _read_bundle(data_dir, "photos.json")[0]
+    assert photo["compare"] is None
+    assert photo["pair"] is None
+
+
 def test_export_astro_faces_use_percentage_boxes(db, tmp_path):
     photos = tmp_path / "photos"
     photos.mkdir()

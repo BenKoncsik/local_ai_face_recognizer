@@ -216,6 +216,11 @@ class AutoAssignmentsTab(QWidget):
         self._count_label = QLabel("")
         self._count_label.setStyleSheet("color: #88aaff; font-weight: bold;")
         header.addWidget(self._count_label)
+        self._revert_all_btn = QPushButton(t("autoAssign.revert_all"))
+        self._revert_all_btn.setToolTip(t("autoAssign.revert_all_tooltip"))
+        self._revert_all_btn.clicked.connect(self._on_revert_all)
+        self._revert_all_btn.setVisible(False)
+        header.addWidget(self._revert_all_btn)
         root.addLayout(header)
 
         scroll = QScrollArea()
@@ -295,6 +300,7 @@ class AutoAssignmentsTab(QWidget):
 
         self._count_label.setText(t("autoAssign.count", n=len(dtos)))
         self._empty_label.setVisible(not dtos)
+        self._revert_all_btn.setVisible(bool(dtos))
         self.count_changed.emit(len(dtos))
         self._refresh_decided()
 
@@ -388,6 +394,19 @@ class AutoAssignmentsTab(QWidget):
         self._run_action(
             lambda svc: svc.revert_assignment(assignment_id), "revert"
         )
+
+    def _on_revert_all(self) -> None:
+        n_open = self._list_layout.count() - 1
+        answer = QMessageBox.question(
+            self,
+            t("autoAssign.revert_all_confirm_title"),
+            t("autoAssign.revert_all_confirm_msg", n=n_open),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._run_action(lambda svc: svc.revert_all_open(), "revert_all")
 
     def _run_action(self, action, label: str) -> None:
         try:

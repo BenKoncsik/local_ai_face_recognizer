@@ -391,10 +391,21 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     # ── Dialogs — delete person ───────────────────────────────────────────────
     "delete_person_title":   {"en": "Delete Person",
                               "hu": "Személy törlése"},
-    "delete_person_confirm": {"en": "Delete '{name}' and unassign all their faces?\n"
-                                    "This cannot be undone.",
-                              "hu": "Törlöd '{name}' személyt és feloldod az összes arcát?\n"
+    "delete_person_confirm": {"en": "Delete '{name}' and all {n} of their faces?\n"
+                                    "Every face, bounding box, thumbnail and embedding is "
+                                    "permanently removed.\nThis cannot be undone.",
+                              "hu": "Biztosan törlöd ezt a személyt ('{name}') és az összes "
+                                    "hozzá tartozó arcot ({n} db)?\nMinden arckeret, előnézet "
+                                    "és felismerési adat véglegesen törlődik.\n"
                                     "Ez a művelet nem vonható vissza."},
+    "delete_person_ignore_check": {
+        "en": "Also exclude these faces from recognition forever",
+        "hu": "Az arcok végleges kizárása a felismerésből is"},
+    "delete_person_status": {"en": "Deleted '{name}': {n} face(s) removed.",
+                             "hu": "'{name}' törölve: {n} arc eltávolítva."},
+    "delete_person_status_ignored": {
+        "en": "Deleted '{name}': {n} face(s) removed, {k} excluded forever.",
+        "hu": "'{name}' törölve: {n} arc eltávolítva, {k} véglegesen kizárva."},
 
     # ── Dialogs — scan ────────────────────────────────────────────────────────
     "no_folder_title":   {"en": "No Folder", "hu": "Nincs mappa"},
@@ -921,6 +932,139 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_ctx_edit_frame":     {"en": "Edit bounding box", "hu": "Keret szerkesztése"},
     "ibp_ctx_delete":         {"en": "Delete",           "hu": "Törlés"},
     "ibp_ctx_ignore_forever": {"en": "Ignore forever",   "hu": "Kizárás végleg"},
+
+    # ── Re-recognition (image-browser context menu + dialogs) ───────────────
+    # --- Reviewable auto-merge from Unknown ---
+    "amerge_accept":          {"en": "Accept", "hu": "Elfogadás"},
+    "amerge_move":            {"en": "Move to another person", "hu": "Áthelyezés más személyhez"},
+    "amerge_delete":          {"en": "Delete face", "hu": "Arc törlése"},
+    "amerge_pending_badge":   {"en": "Auto-merged — needs review",
+                               "hu": "Automatikus összevonás — ellenőrizendő"},
+    "amerge_notice_title":    {"en": "Faces moved for review",
+                               "hu": "Arcok áthelyezve ellenőrzésre"},
+    "amerge_notice_msg":      {"en": "The other faces of {source} were moved to "
+                                     "{target}.\nAuto-confirmed: {auto}\n"
+                                     "Awaiting review: {pending}\n\n"
+                                     "Review them on the face boxes or in "
+                                     "“Auto-merges to review”.",
+                               "hu": "A(z) {source} többi arca áthelyezve ide: "
+                                     "{target}.\nAutomatikusan elfogadva: {auto}\n"
+                                     "Ellenőrizendő: {pending}\n\n"
+                                     "Ellenőrizd a kereteken vagy az "
+                                     "„Ellenőrizendő összevonások” ablakban."},
+    "amerge_review_menu":     {"en": "Auto-merges to review…",
+                               "hu": "Ellenőrizendő összevonások…"},
+    "amerge_review_title":    {"en": "Auto-merges to review",
+                               "hu": "Ellenőrizendő automatikus összevonások"},
+    "amerge_review_empty":    {"en": "No auto-merged faces are awaiting review.",
+                               "hu": "Nincs ellenőrizendő automatikusan összevont arc."},
+    "amerge_review_count":    {"en": "{n} face(s) awaiting review",
+                               "hu": "{n} ellenőrizendő arc"},
+    "amerge_accept_all":      {"en": "Accept all", "hu": "Mind elfogadása"},
+    "amerge_col_source":      {"en": "From: {name}", "hu": "Eredeti: {name}"},
+    "amerge_close":           {"en": "Close", "hu": "Bezárás"},
+    "amerge_ctx_accept":      {"en": "Accept auto-merge", "hu": "Összevonás elfogadása"},
+    "amerge_ctx_move":        {"en": "Move auto-merged face…", "hu": "Összevont arc áthelyezése…"},
+    "rerec_ctx_one":          {"en": "Re-recognize faces",
+                               "hu": "Arcok újrafelismerése"},
+    "rerec_ctx_many":         {"en": "Re-recognize selected images ({n})",
+                               "hu": "Kijelölt képek újrafelismerése ({n})"},
+    "rerec_ctx_undo_last":    {"en": "Undo last re-recognition",
+                               "hu": "Utolsó újrafelismerés visszavonása"},
+    "rerec_ctx_history":      {"en": "Merge history…",
+                               "hu": "Összevonási előzmények…"},
+    "rerec_disabled":         {"en": "Re-recognition is turned off in Settings.",
+                               "hu": "Az újrafelismerés ki van kapcsolva a Beállításokban."},
+    "rerec_progress_title":   {"en": "Re-recognizing faces",
+                               "hu": "Arcok újrafelismerése"},
+    "rerec_progress_body":    {"en": "Processed: {done} / {total} face(s)\n"
+                                     "Automatic merges: {auto}\n"
+                                     "To review: {suggest}",
+                               "hu": "Feldolgozva: {done} / {total} arc\n"
+                                     "Automatikus összevonások: {auto}\n"
+                                     "Jóváhagyásra: {suggest}"},
+    "rerec_cancel":           {"en": "Cancel", "hu": "Mégse"},
+    "rerec_cancelled":        {"en": "Re-recognition cancelled.",
+                               "hu": "Újrafelismerés megszakítva."},
+    "rerec_error_title":      {"en": "Re-recognition error",
+                               "hu": "Újrafelismerési hiba"},
+    "rerec_error_body":       {"en": "Re-recognition failed: {error}",
+                               "hu": "Az újrafelismerés sikertelen: {error}"},
+    "rerec_summary_title":    {"en": "Re-recognition complete",
+                               "hu": "Újrafelismerés kész"},
+    "rerec_summary_body":     {"en": "Examined Unknown faces: {examined}\n"
+                                     "Automatic matches: {auto}\n"
+                                     "Needs your approval: {suggest}\n"
+                                     "Unidentifiable: {none}",
+                               "hu": "Vizsgált Unknown arcok: {examined}\n"
+                                     "Automatikus találatok: {auto}\n"
+                                     "Felhasználói jóváhagyást igényel: {suggest}\n"
+                                     "Nem azonosítható: {none}"},
+    "rerec_summary_review":   {"en": "Review uncertain matches…",
+                               "hu": "Bizonytalan találatok áttekintése…"},
+    "rerec_summary_close":    {"en": "Close", "hu": "Bezárás"},
+    "rerec_no_profiles":      {"en": "No named people to match against yet.",
+                               "hu": "Még nincs nevesített személy az összevetéshez."},
+    "rerec_undo_bar":         {"en": "Re-recognition done — {auto} merge(s).",
+                               "hu": "Újrafelismerés kész — {auto} összevonás."},
+    "rerec_undo_btn":         {"en": "Undo", "hu": "Visszavonás"},
+    "rerec_undo_done":        {"en": "Re-recognition undone ({n} face(s)).",
+                               "hu": "Újrafelismerés visszavonva ({n} arc)."},
+    "rerec_undo_error":       {"en": "Could not undo: {error}",
+                               "hu": "Nem sikerült visszavonni: {error}"},
+    "rerec_nothing_to_undo":  {"en": "Nothing to undo.",
+                               "hu": "Nincs mit visszavonni."},
+
+    # ── Re-recognition review dialog ────────────────────────────────────────
+    "rerec_review_title":     {"en": "Review uncertain matches",
+                               "hu": "Bizonytalan találatok áttekintése"},
+    "rerec_review_intro":     {"en": "{n} face(s) need a decision.",
+                               "hu": "{n} arc döntést igényel."},
+    "rerec_review_unknown":   {"en": "Unknown", "hu": "Ismeretlen"},
+    "rerec_review_candidates": {"en": "Possible matches:",
+                               "hu": "Lehetséges találatok:"},
+    "rerec_review_merge":     {"en": "Merge", "hu": "Összevonás"},
+    "rerec_review_skip":      {"en": "Skip", "hu": "Kihagyás"},
+    "rerec_review_other":     {"en": "Choose another person…",
+                               "hu": "Másik személy kiválasztása…"},
+    "rerec_review_done":      {"en": "Done", "hu": "Kész"},
+    "rerec_review_remaining": {"en": "{n} remaining", "hu": "{n} maradt"},
+    "rerec_review_all_done":  {"en": "All matches reviewed.",
+                               "hu": "Minden találat áttekintve."},
+    "rerec_pick_person_title": {"en": "Choose a person",
+                               "hu": "Válassz személyt"},
+
+    # ── Re-recognition history dialog ───────────────────────────────────────
+    "rerec_hist_title":       {"en": "Re-recognition merge history",
+                               "hu": "Újrafelismerési összevonási előzmények"},
+    "rerec_hist_empty":       {"en": "No re-recognition runs yet.",
+                               "hu": "Még nincs újrafelismerési futtatás."},
+    "rerec_hist_col_when":    {"en": "When", "hu": "Mikor"},
+    "rerec_hist_col_faces":   {"en": "Faces", "hu": "Arcok"},
+    "rerec_hist_col_people":  {"en": "People", "hu": "Személyek"},
+    "rerec_hist_col_status":  {"en": "Status", "hu": "Állapot"},
+    "rerec_hist_status_active": {"en": "Active", "hu": "Aktív"},
+    "rerec_hist_status_undone": {"en": "Undone", "hu": "Visszavonva"},
+    "rerec_hist_undo":        {"en": "Undo this batch", "hu": "Batch visszavonása"},
+    "rerec_hist_detail":      {"en": "Image {image} · {prev} → {matched} · {score}%",
+                               "hu": "Kép {image} · {prev} → {matched} · {score}%"},
+    "rerec_hist_close":       {"en": "Close", "hu": "Bezárás"},
+
+    # ── Re-recognition settings ─────────────────────────────────────────────
+    "rerec_settings_group":   {"en": "Face Re-recognition",
+                               "hu": "Arc-újrafelismerés"},
+    "rerec_settings_enabled": {"en": "Enable re-recognition from the image browser",
+                               "hu": "Újrafelismerés engedélyezése a képböngészőből"},
+    "rerec_settings_auto":    {"en": "Auto-merge threshold (%)",
+                               "hu": "Automatikus összevonás küszöbe (%)"},
+    "rerec_settings_suggest": {"en": "Suggestion threshold (%)",
+                               "hu": "Javaslat küszöbe (%)"},
+    "rerec_settings_note":    {"en": "Matches at or above the auto-merge threshold "
+                                     "are merged without asking; matches between the "
+                                     "two thresholds are offered for review.",
+                               "hu": "Az automatikus küszöb feletti találatok kérdés "
+                                     "nélkül összevonásra kerülnek; a két küszöb közötti "
+                                     "találatok áttekintésre kerülnek felkínálásra."},
     "ibp_ctx_ignore_confirm": {
         "en": "Permanently exclude this face from recognition?\n\n"
               "Its face signature is stored on the persistent ignore list, so it "
@@ -1310,6 +1454,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                        "right and the black-and-white on the left.",
                                  "hu": "Húzd a csúszkát: jobbra a színezett, balra a "
                                        "fekete-fehér változat látszik."},
+    "ibp_deol_left":            {"en": "Left:",                "hu": "Bal:"},
+    "ibp_deol_right":           {"en": "Right:",               "hu": "Jobb:"},
+    "ibp_deol_bw_label":        {"en": "Black & white",        "hu": "Fekete-fehér"},
     "ibp_deol_sync":            {"en": "Copy data from pair",  "hu": "Adatok átvétele a párról"},
     "ibp_deol_sync_tip":        {"en": "Copy faces and image data from the paired image into "
                                        "the empty one. Only runs when exactly one of the two "
@@ -1436,6 +1583,30 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.deepRescan.warning":
         {"en": "Safe — existing assignments are never changed; training can take a while",
          "hu": "Biztonságos — a meglévő hozzárendelések nem változnak; a tanítás eltarthat egy ideig"},
+    "scanModes.deepTrain.title":
+        {"en": "Train the Model",
+         "hu": "Modell tanítása"},
+    "scanModes.deepTrain.description":
+        {"en": "Walks through every face already recognized and assigned to a "
+               "person and retrains the neural network from them. Nothing else "
+               "happens: no new scan, no recognition, not a single face is "
+               "moved or changed. Run it after you have confirmed or corrected "
+               "many faces, so the model catches up with what it learned from "
+               "you before the next re-scan.",
+         "hu": "Végigmegy az összes már felismert és személyhez rendelt arcon, "
+               "és ezekből újratanítja a neurális hálót. Más nem történik: "
+               "nincs új beolvasás, nincs felismerés, egyetlen arc sem mozdul "
+               "vagy változik. Akkor érdemes futtatni, ha sok arcot "
+               "megerősítettél vagy javítottál — így a modell már a következő "
+               "újra beolvasás előtt naprakész lesz a tőled tanultakkal."},
+    "scanModes.deepTrain.startButton":
+        {"en": "Train Model",
+         "hu": "Modell tanítása"},
+    "scanModes.deepTrain.warning":
+        {"en": "Safe — your data is not modified at all; training can take a "
+               "while and may use 100% CPU",
+         "hu": "Biztonságos — az adataid egyáltalán nem módosulnak; a tanítás "
+               "eltarthat egy ideig és 100%-on járathatja a processzort"},
     "scanModes.deepRebuild.title":
         {"en": "AI Rebuild from Scratch",
          "hu": "AI újraépítés nulláról"},
@@ -1534,6 +1705,25 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "autoAssign.revert_tooltip":
         {"en": "Send the face back to where it was before the run",
          "hu": "Az arc visszakerül oda, ahol a futás előtt volt"},
+    "autoAssign.revert_all":
+        {"en": "Undo all",
+         "hu": "Mind visszavonása"},
+    "autoAssign.revert_all_tooltip":
+        {"en": "Send every unreviewed face of this run back to where it was",
+         "hu": "A futás minden még nem ellenőrzött arca visszakerül oda, ahol volt"},
+    "autoAssign.revert_all_confirm_title":
+        {"en": "Undo all groupings?",
+         "hu": "Minden csoportosítás visszavonása?"},
+    "autoAssign.revert_all_confirm_msg":
+        {"en": "All {n} unreviewed automatic groupings of this run will be "
+               "undone — every face returns to where it was before the run. "
+               "The AI records these as mistakes and learns from them. "
+               "Already confirmed or corrected faces are not touched.",
+         "hu": "A futás mind a(z) {n} még nem ellenőrzött automatikus "
+               "csoportosítása visszavonásra kerül — minden arc visszakerül "
+               "oda, ahol a futás előtt volt. Az AI ezeket hibaként jegyzi "
+               "meg és tanul belőlük. A már megerősített vagy javított "
+               "arcokhoz nem nyúl."},
 
     # ── "Already decided" history lists ───────────────────────────────────
     "suggestions_decided_header":

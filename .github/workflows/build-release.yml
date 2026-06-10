@@ -1195,12 +1195,13 @@ jobs:
           mkdir -p release
 
           python3 - <<'PY'
-          import concurrent.futures
           import fnmatch
-          import io
+          import http.client
           import json
           import os
           import sys
+          import time
+          import urllib.error
           import urllib.parse
           import urllib.request
           import zipfile
@@ -1208,6 +1209,8 @@ jobs:
 
           release_dir = Path("release")
           release_dir.mkdir(exist_ok=True)
+          download_dir = release_dir / ".downloads"
+          download_dir.mkdir(exist_ok=True)
 
           repo = os.environ["GITHUB_REPOSITORY"]
           run_id = os.environ["GITHUB_RUN_ID"]
@@ -1243,8 +1246,8 @@ jobs:
             with opener.open(req, timeout=120) as response:
               return json.load(response)
 
-          def download_bytes(url, token, accept="application/octet-stream"):
-            req = urllib.request.Request(
+          def request_download(url, token, accept):
+            return urllib.request.Request(
               url,
               headers={
                 "Accept": accept,
@@ -1252,8 +1255,56 @@ jobs:
                 "X-GitHub-Api-Version": "2022-11-28",
               },
             )
-            with opener.open(req, timeout=600) as response:
-              return response.read()
+
+          def should_retry(exc):
+            if isinstance(exc, http.client.IncompleteRead):
+              return True
+            if isinstance(exc, TimeoutError):
+              return True
+            if isinstance(exc, urllib.error.HTTPError):
+              return exc.code in {408, 429, 500, 502, 503, 504}
+            if isinstance(exc, urllib.error.URLError):
+              return True
+            return False
+
+          def download_file(url, token, target, accept="application/octet-stream", attempts=4):
+            target = Path(target)
+            tmp_target = target.with_suffix(target.suffix + ".part")
+            last_exc = None
+
+            for attempt in range(1, attempts + 1):
+              try:
+                req = request_download(url, token, accept)
+                with opener.open(req, timeout=900) as response, tmp_target.open("wb") as fh:
+                  expected_header = response.headers.get("Content-Length")
+                  expected_size = int(expected_header) if expected_header else None
+                  bytes_written = 0
+                  while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                      break
+                    fh.write(chunk)
+                    bytes_written += len(chunk)
+                  if expected_size is not None and bytes_written != expected_size:
+                    missing = max(0, expected_size - bytes_written)
+                    partial = f"{bytes_written} bytes".encode()
+                    raise http.client.IncompleteRead(partial, missing)
+                tmp_target.replace(target)
+                return
+              except Exception as exc:  # noqa: BLE001 - this is a CI download retry loop
+                last_exc = exc
+                tmp_target.unlink(missing_ok=True)
+                if attempt == attempts or not should_retry(exc):
+                  break
+                wait_seconds = min(60, 5 * attempt)
+                print(
+                  f"Download failed on attempt {attempt}/{attempts}: {exc}; "
+                  f"retrying in {wait_seconds}s",
+                  flush=True,
+                )
+                time.sleep(wait_seconds)
+
+            raise RuntimeError(f"download failed after {attempts} attempt(s): {last_exc}") from last_exc
 
           def download_workflow_artifact(name):
             print(f"Downloading workflow artifact: {name}", flush=True)
@@ -1263,13 +1314,16 @@ jobs:
             if artifact is None:
               raise RuntimeError(f"workflow artifact not found: {name}")
 
-            archive = download_bytes(
+            archive_path = download_dir / f"{name}.zip"
+            download_file(
               artifact["archive_download_url"],
               github_token,
+              archive_path,
               accept="application/vnd.github+json",
             )
-            with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            with zipfile.ZipFile(archive_path) as zf:
               zf.extractall(release_dir)
+            archive_path.unlink(missing_ok=True)
             print(f"{name}: workflow artifact downloaded", flush=True)
 
           def list_release_assets():
@@ -1292,9 +1346,8 @@ jobs:
               return
 
             for asset in matches:
-              data = download_bytes(asset["url"], private_token)
               target = release_dir / asset["name"]
-              target.write_bytes(data)
+              download_file(asset["url"], private_token, target)
               print(f"Downloaded fallback asset: {asset['name']}", flush=True)
 
           def download_platform(label, artifact_name, required_patterns, optional_patterns=()):
@@ -1303,6 +1356,11 @@ jobs:
               return
             except Exception as exc:
               print(f"{label}: workflow artifact download failed: {exc}", flush=True)
+              if not private_token:
+                raise RuntimeError(
+                  "workflow artifact download failed and PRIVATE_ARTIFACT_TOKEN "
+                  "is empty; cannot use private artifact fallback"
+                ) from exc
               print(f"{label}: trying private artifact repo fallback", flush=True)
 
             for pattern in required_patterns:
@@ -1341,17 +1399,11 @@ jobs:
             ))
 
           failures = []
-          with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(platforms))) as executor:
-            future_to_label = {
-              executor.submit(download_platform, label, artifact_name, required, optional): label
-              for label, artifact_name, required, optional in platforms
-            }
-            for future in concurrent.futures.as_completed(future_to_label):
-              label = future_to_label[future]
-              try:
-                future.result()
-              except Exception as exc:
-                failures.append(f"{label}: {exc}")
+          for label, artifact_name, required, optional in platforms:
+            try:
+              download_platform(label, artifact_name, required, optional)
+            except Exception as exc:
+              failures.append(f"{label}: {exc}")
 
           if failures:
             for failure in failures:

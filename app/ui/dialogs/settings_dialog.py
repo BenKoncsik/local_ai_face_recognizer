@@ -577,6 +577,42 @@ class SettingsDialog(QDialog):
         reeval_layout.addLayout(reeval_btn_row)
 
         layout.addWidget(reeval_group)
+
+        # ── Re-recognition (image browser) ────────────────────────────────
+        rerec_group = QGroupBox(t("rerec_settings_group"))
+        rerec_layout = QVBoxLayout(rerec_group)
+
+        self._rerec_enabled_check = QCheckBox(t("rerec_settings_enabled"))
+        self._rerec_enabled_check.setChecked(
+            _qsettings().value("rerecognition/enabled", True, type=bool)
+        )
+        rerec_layout.addWidget(self._rerec_enabled_check)
+
+        rerec_form = QFormLayout()
+        auto_default = int(round(
+            _qsettings().value("rerecognition/auto_threshold", 0.72, type=float) * 100
+        ))
+        suggest_default = int(round(
+            _qsettings().value("rerecognition/suggest_threshold", 0.55, type=float) * 100
+        ))
+        self._rerec_auto_spin = QSpinBox()
+        self._rerec_auto_spin.setRange(1, 100)
+        self._rerec_auto_spin.setSuffix(" %")
+        self._rerec_auto_spin.setValue(auto_default)
+        self._rerec_suggest_spin = QSpinBox()
+        self._rerec_suggest_spin.setRange(1, 100)
+        self._rerec_suggest_spin.setSuffix(" %")
+        self._rerec_suggest_spin.setValue(suggest_default)
+        rerec_form.addRow(t("rerec_settings_auto"), self._rerec_auto_spin)
+        rerec_form.addRow(t("rerec_settings_suggest"), self._rerec_suggest_spin)
+        rerec_layout.addLayout(rerec_form)
+
+        rerec_note = QLabel(t("rerec_settings_note"))
+        rerec_note.setWordWrap(True)
+        rerec_note.setStyleSheet("color: #aaa; font-size: 11px;")
+        rerec_layout.addWidget(rerec_note)
+
+        layout.addWidget(rerec_group)
         layout.addStretch()
         scroll.setWidget(inner)
         return scroll
@@ -860,6 +896,12 @@ class SettingsDialog(QDialog):
         qs.setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
         )
+        qs.setValue("rerecognition/enabled", self._rerec_enabled_check.isChecked())
+        # Keep suggest threshold strictly below the auto-merge threshold.
+        auto_pct = self._rerec_auto_spin.value()
+        suggest_pct = min(self._rerec_suggest_spin.value(), auto_pct - 1)
+        qs.setValue("rerecognition/auto_threshold", auto_pct / 100.0)
+        qs.setValue("rerecognition/suggest_threshold", max(1, suggest_pct) / 100.0)
         qs.setValue("recording/output_dir", self._rec_dir_edit.text().strip())
         qs.setValue("recording/quality", self._rec_quality_combo.currentData())
         qs.setValue("recording/fps", self._rec_fps_spin.value())

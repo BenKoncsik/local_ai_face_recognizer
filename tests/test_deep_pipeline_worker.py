@@ -15,6 +15,7 @@ from app.db.models import Face, Image, Person
 from app.workers.deep_pipeline_worker import (
     MODE_REBUILD,
     MODE_RESCAN,
+    MODE_TRAIN,
     DeepPipelineWorker,
 )
 
@@ -70,7 +71,7 @@ def test_invalid_mode_raises():
 
 
 def test_valid_modes_construct():
-    for mode in (MODE_RESCAN, MODE_REBUILD):
+    for mode in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN):
         worker = DeepPipelineWorker(root_folder="/x", config=AppConfig(), mode=mode)
         assert worker.mode == mode
 

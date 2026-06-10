@@ -40,6 +40,12 @@ from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
 from app.services.identity_service import BulkReassignResult, IdentityService
+from app.services.match_scoring import (
+    match_scores_for_face,
+    match_scores_for_faces,
+    match_scores_for_person,
+)
+from app.services.unknown_merge_service import UnknownMergeService
 from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
@@ -70,6 +76,7 @@ from app.workers.match_job_worker import MatchJobWorker
 from app.workers.deep_pipeline_worker import (
     MODE_REBUILD,
     MODE_RESCAN,
+    MODE_TRAIN,
     DeepPipelineWorker,
 )
 from app.workers.pipeline_worker import PipelineWorker
@@ -252,6 +259,10 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.clicked.connect(self._on_show_suggestions)
         tb.addWidget(self._suggestions_btn)
 
+        self._amerge_btn = QPushButton()
+        self._amerge_btn.clicked.connect(self._on_open_amerge_review)
+        tb.addWidget(self._amerge_btn)
+
         tb.addSeparator()
 
         self._settings_btn = QPushButton()
@@ -338,6 +349,12 @@ class MainWindow(QMainWindow):
         self._preview_panel.face_clear_thumbnail_requested.connect(
             self._on_face_clear_thumbnail
         )
+        self._preview_panel.face_accept_auto_merge.connect(
+            self._on_face_accept_auto_merge
+        )
+        self._preview_panel.face_move_auto_merge.connect(
+            self._on_face_move_auto_merge
+        )
         self._preview_panel.object_create_requested.connect(
             self._on_preview_object_create
         )
@@ -422,16 +439,6 @@ class MainWindow(QMainWindow):
         )
         self._delete_person_btn.clicked.connect(self._on_delete_person)
         layout.addWidget(self._delete_person_btn)
-
-        self._ignore_person_btn = QPushButton()
-        self._ignore_person_btn.setEnabled(False)
-        self._ignore_person_btn.setStyleSheet(
-            "QPushButton { color: #FAB387; border-color: #6B4A30; }"
-            "QPushButton:hover { background-color: #3D3020; border-color: #FAB387; }"
-            "QPushButton:disabled { color: #6C7086; border-color: #313244; }"
-        )
-        self._ignore_person_btn.clicked.connect(self._on_ignore_person)
-        layout.addWidget(self._ignore_person_btn)
 
         self._remove_face_btn = QPushButton()
         self._remove_face_btn.setEnabled(False)
@@ -664,6 +671,7 @@ class MainWindow(QMainWindow):
         self._no_face_btn.setText(t("view_no_face"))
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
+        self._refresh_amerge_btn()
         self._settings_btn.setText(t("settings"))
         if hasattr(self, "_recording_controls"):
             self._recording_controls.retranslate()
@@ -671,8 +679,6 @@ class MainWindow(QMainWindow):
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
         self._delete_person_btn.setText(t("delete_person"))
-        self._ignore_person_btn.setText(t("ignore_person"))
-        self._ignore_person_btn.setToolTip(t("ignore_person_tip"))
         self._remove_face_btn.setText(t("remove_face"))
         self._reassign_btn.setText(t("reassign_face"))
         self._move_faces_btn.setText(t("persons_move_faces_btn"))
@@ -927,6 +933,7 @@ class MainWindow(QMainWindow):
             on_manage_ignored_faces=self._on_manage_ignored_faces,
             on_deep_rescan=self._on_deep_rescan,
             on_deep_rebuild=self._on_deep_rebuild,
+            on_deep_train=self._on_deep_train,
             parent=self,
         )
         dlg.exec()
@@ -958,6 +965,12 @@ class MainWindow(QMainWindow):
         if not self._deep_pipeline_guard():
             return
         self._start_deep_pipeline(MODE_RESCAN)
+
+    @Slot()
+    def _on_deep_train(self) -> None:
+        if not self._deep_pipeline_guard():
+            return
+        self._start_deep_pipeline(MODE_TRAIN)
 
     @Slot()
     def _on_deep_rebuild(self) -> None:
@@ -1162,6 +1175,34 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         self._refresh_match_chip()
+
+    def _refresh_amerge_btn(self) -> None:
+        """Label the auto-merge review button with the pending count; hide if 0."""
+        if not hasattr(self, "_amerge_btn"):
+            return
+        try:
+            with session_scope() as session:
+                n = UnknownMergeService(session).count_pending()
+        except Exception:  # noqa: BLE001
+            n = 0
+        self._amerge_btn.setText(
+            f"{t('amerge_review_menu')} ({n})" if n else t("amerge_review_menu")
+        )
+        self._amerge_btn.setVisible(n > 0)
+
+    @Slot()
+    def _on_open_amerge_review(self) -> None:
+        from app.ui.dialogs.auto_merge_review_dialog import AutoMergeReviewDialog
+
+        dlg = AutoMergeReviewDialog(
+            recognition_config=self._config.recognition, parent=self
+        )
+        dlg.applied.connect(self._refresh_persons)
+        dlg.applied.connect(self._image_browser._reload_current_face_data)
+        dlg.exec()
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+        self._refresh_amerge_btn()
 
     @Slot()
     def _on_find_overlapping_unknown_faces(self) -> None:
@@ -2274,9 +2315,6 @@ class MainWindow(QMainWindow):
         self._rename_btn.setEnabled(not is_protected)
         self._merge_btn.setEnabled(True)
         self._delete_person_btn.setEnabled(not is_protected)
-        # Ignore-forever only applies to auto-named "Unknown N" identities —
-        # named people must never land on the permanent ignore list.
-        self._ignore_person_btn.setEnabled(is_auto_named and not is_protected)
         self._remove_face_btn.setEnabled(False)
         self._reassign_btn.setEnabled(False)
         self._person_info_btn.setEnabled(not is_protected)
@@ -2374,7 +2412,29 @@ class MainWindow(QMainWindow):
         # Ensure the preview panel has the image loaded so "Edit bbox" works.
         self._show_face_in_preview(face_id)
         person_name = self._cluster_panel.get_face_person_name(face_id)
-        self._preview_panel.show_face_context_menu(face_id, gx, gy, person_name=person_name)
+        with session_scope() as session:
+            f = session.get(Face, face_id)
+            is_pending = f is not None and f.auto_merge_review_status == "pending"
+        self._preview_panel.show_face_context_menu(
+            face_id, gx, gy, person_name=person_name, is_pending=is_pending
+        )
+
+    @Slot(int)
+    def _on_face_accept_auto_merge(self, face_id: int) -> None:
+        """Confirm a pending auto-merged face from the face-view context menu."""
+        with session_scope() as session:
+            UnknownMergeService(session).confirm_auto_merge(face_id)
+        if self._current_person_id:
+            self._on_person_selected(self._current_person_id)
+        self._show_face_in_preview(face_id)
+        self._image_browser._reload_current_face_data()
+
+    @Slot(int)
+    def _on_face_move_auto_merge(self, face_id: int) -> None:
+        """Re-assign a pending face to another person (clears the pending flag)."""
+        self._current_face_id = face_id
+        # Reuse the standard reassign flow; reassign_face clears the markers.
+        self._on_reassign_face()
 
     @Slot(int)
     def _on_preview_face_selected(self, face_id: int) -> None:
@@ -2687,67 +2747,9 @@ class MainWindow(QMainWindow):
 
             # Compute face-match scores for the source person so the
             # MergeDialog's person selector can show probabilistic name
-            # suggestions (same behaviour as the image-browser inline editor).
+            # suggestions (same shared logic as every other selector popup).
             recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = {}
-            try:
-                from app.services.recognition_service import RecognitionService
-                svc = RecognitionService(session, recognition_cfg)
-                # First try the normal path: build recognition profiles and use
-                # the source's profile centroid when available.
-                profiles = svc.build_profiles()
-                prof = profiles.get(source.id)
-                if prof is not None:
-                    match_scores = svc.score_persons(prof.centroid)
-
-                # Fallback: if no profile/scores (e.g. source is unknown/auto-named)
-                # compute a centroid from the source person's face embeddings and
-                # score that against per-person centroids built from every
-                # person's available embeddings (includes auto-named/unknown).
-                if not match_scores:
-                    try:
-                        import numpy as np
-
-                        # Build normalized centroid for the source person
-                        src_vecs = []
-                        for f in source.faces:
-                            fv = f.get_embedding()
-                            if fv is None:
-                                continue
-                            fn = float(np.linalg.norm(fv))
-                            if fn > 0:
-                                src_vecs.append(fv / fn)
-                        if src_vecs:
-                            src_centroid = np.mean(src_vecs, axis=0)
-                            scn = float(np.linalg.norm(src_centroid))
-                            if scn > 0:
-                                src_centroid = src_centroid / scn
-
-                                # Score against every person by their centroid
-                                fb: dict[int, float] = {}
-                                for p in persons:
-                                    vecs = []
-                                    for f in p.faces:
-                                        fv = f.get_embedding()
-                                        if fv is None:
-                                            continue
-                                        fn = float(np.linalg.norm(fv))
-                                        if fn > 0:
-                                            vecs.append(fv / fn)
-                                    if not vecs:
-                                        continue
-                                    centroid = np.mean(vecs, axis=0)
-                                    cn = float(np.linalg.norm(centroid))
-                                    if cn <= 0:
-                                        continue
-                                    centroid = centroid / cn
-                                    score = float(np.dot(src_centroid, centroid))
-                                    fb[p.id] = score
-                                match_scores = fb
-                    except Exception:
-                        log.exception("Merge dialog fallback scoring failed; continuing without scores")
-            except Exception:
-                log.exception("Failed to compute match scores for merge dialog; continuing without scores")
+            match_scores = match_scores_for_person(session, source, recognition_cfg)
 
             dlg = MergeDialog(source, persons, parent=self, match_scores=match_scores)
             if dlg.exec() != MergeDialog.Accepted:
@@ -2783,67 +2785,36 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, t("protected_delete_title"), t("protected_delete_msg"))
                 return
             name = person.name
-
-        reply = QMessageBox.question(
-            self,
-            t("delete_person_title"),
-            t("delete_person_confirm", name=name),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        with session_scope() as session:
-            IdentityService(session).delete_person(self._current_person_id)
-
-        self._current_person_id = None
-        self._current_face_id = None
-        self._cluster_panel.clear()
-        self._preview_panel.clear()
-        self._delete_person_btn.setEnabled(False)
-        self._ignore_person_btn.setEnabled(False)
-        self._rename_btn.setEnabled(False)
-        self._merge_btn.setEnabled(False)
-        self._person_info_btn.setEnabled(False)
-        self._refresh_persons()
-        self._image_browser._reload_current_face_data()
-        log.info("Person '%s' deleted.", name)
-
-    @Slot()
-    def _on_ignore_person(self) -> None:
-        """Permanently exclude the selected Unknown person from recognition."""
-        if self._current_person_id is None:
-            return
-
-        with session_scope() as session:
-            person = session.get(Person, self._current_person_id)
-            if person is None:
-                return
-            if person.is_protected or not person.is_auto_named:
-                QMessageBox.warning(
-                    self, t("ignore_person_title"), t("ignore_person_named_msg")
-                )
-                return
-            name = person.name
             n_faces = len(person.faces)
+            # The "exclude forever" option is embedding-based and only meaningful
+            # for auto-named "Unknown N" identities — never offer it for a named
+            # person, whose embeddings must not land on the ignore list.
+            can_ignore = person.is_auto_named
 
-        reply = QMessageBox.question(
-            self,
-            t("ignore_person_title"),
-            t("ignore_person_confirm", name=name, n=n_faces),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(t("delete_person_title"))
+        box.setText(t("delete_person_confirm", name=name, n=n_faces))
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        ignore_check: Optional[QCheckBox] = None
+        if can_ignore:
+            ignore_check = QCheckBox(t("delete_person_ignore_check"))
+            ignore_check.setToolTip(t("ignore_person_tip"))
+            box.setCheckBox(ignore_check)
+        if box.exec() != QMessageBox.Yes:
             return
+        ignore_embeddings = ignore_check is not None and ignore_check.isChecked()
 
         try:
             with session_scope() as session:
-                from app.services.ignored_face_service import IgnoredFaceService
-                n_ignored = IgnoredFaceService(
-                    session, self._config.ignored_faces
-                ).ignore_person_forever(self._current_person_id)
+                result = IdentityService(session).delete_person(
+                    self._current_person_id,
+                    remove_faces=True,
+                    ignore_embeddings=ignore_embeddings,
+                )
         except ValueError as exc:
-            QMessageBox.warning(self, t("ignore_person_title"), str(exc))
+            QMessageBox.warning(self, t("delete_person_title"), str(exc))
             return
 
         self._current_person_id = None
@@ -2851,14 +2822,25 @@ class MainWindow(QMainWindow):
         self._cluster_panel.clear()
         self._preview_panel.clear()
         self._delete_person_btn.setEnabled(False)
-        self._ignore_person_btn.setEnabled(False)
         self._rename_btn.setEnabled(False)
         self._merge_btn.setEnabled(False)
         self._person_info_btn.setEnabled(False)
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
-        self._status_label.setText(t("ignore_person_status", name=name, n=n_ignored))
-        log.info("Person '%s' ignored forever (%d embedding(s) stored).", name, n_ignored)
+        if result.n_ignored:
+            self._status_label.setText(
+                t("delete_person_status_ignored", name=name,
+                  n=result.n_faces, k=result.n_ignored)
+            )
+        else:
+            self._status_label.setText(
+                t("delete_person_status", name=name, n=result.n_faces)
+            )
+        log.info(
+            "Person '%s' deleted: %d face(s) removed, %d crop file(s) unlinked, "
+            "%d embedding(s) ignored.",
+            name, result.n_faces, result.n_crops_removed, result.n_ignored,
+        )
 
     @Slot()
     def _on_manage_ignored_faces(self) -> None:
@@ -2906,54 +2888,13 @@ class MainWindow(QMainWindow):
 
             # Optional face-match ordering: score the face being reassigned
             # against the known people so the user can sort candidates by
-            # similarity.  A missing embedding yields an empty mapping, which
-            # the selector treats as "no match data" (default ordering).
-            match_scores: dict[int, float] = {}
-            face_for_scoring = session.get(Face, self._current_face_id)
-            if face_for_scoring is not None:
-                emb = face_for_scoring.get_embedding()
-                if emb is not None:
-                    try:
-                        match_scores = RecognitionService(
-                            session, self._config.recognition
-                        ).score_persons(emb) or {}
-                    except Exception:  # noqa: BLE001
-                        log.exception("Face-match scoring failed; using default order")
-                        match_scores = {}
-
-                    # Fallback: if no scores were produced (e.g. recognition
-                    # profiles exclude auto-named people), build per-person
-                    # centroids from available face embeddings so unknown/auto
-                    # persons are also considered.
-                    if not match_scores:
-                        try:
-                            import numpy as np
-
-                            norm = float(np.linalg.norm(emb))
-                            if norm > 0:
-                                nemb = emb / norm
-                                fb: dict[int, float] = {}
-                                for p in persons:
-                                    vecs = []
-                                    for f in p.faces:
-                                        fv = f.get_embedding()
-                                        if fv is None:
-                                            continue
-                                        fn = float(np.linalg.norm(fv))
-                                        if fn > 0:
-                                            vecs.append(fv / fn)
-                                    if not vecs:
-                                        continue
-                                    centroid = np.mean(vecs, axis=0)
-                                    cn = float(np.linalg.norm(centroid))
-                                    if cn <= 0:
-                                        continue
-                                    centroid = centroid / cn
-                                    score = float(np.dot(nemb, centroid))
-                                    fb[p.id] = score
-                                match_scores = fb
-                        except Exception:
-                            log.exception("Fallback face-match scoring failed; continuing without scores")
+            # similarity (shared logic with every other selector popup).  A
+            # missing embedding yields an empty mapping, which the selector
+            # treats as "no match data" (default ordering).
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+            match_scores = match_scores_for_face(
+                session, self._current_face_id, recognition_cfg, config=self._config
+            )
 
             dlg = MergeDialog(
                 _FakePerson(), persons, parent=self, match_scores=match_scores
@@ -3009,10 +2950,13 @@ class MainWindow(QMainWindow):
                 src = session.get(Person, self._current_person_id)
                 src_name = src.name if src is not None else ""
             persons = session.query(Person).order_by(Person.name).all()
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+            match_scores = match_scores_for_faces(session, face_ids, recognition_cfg)
             dlg = MoveFacesDialog(
                 face_count=len(face_ids),
                 persons=persons,
                 exclude_person_id=self._current_person_id,
+                match_scores=match_scores,
                 parent=self,
             )
         if dlg.exec() != MoveFacesDialog.Accepted:
@@ -3607,6 +3551,7 @@ class MainWindow(QMainWindow):
         # immediately when visible, otherwise lazily on next show.
         if hasattr(self, "_persons_panel"):
             self._persons_panel.mark_stale()
+        self._refresh_amerge_btn()
         log.debug("Sidebar refreshed: %d person(s)", len(persons))
 
     @Slot(int)

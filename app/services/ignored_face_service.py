@@ -107,6 +107,41 @@ class IgnoredFaceService:
         )
         return n_added
 
+    def snapshot_person_embeddings(
+        self, person_id: int, note: Optional[str] = None
+    ) -> int:
+        """Copy a person's face embeddings onto the ignore list, no commit.
+
+        Unlike :meth:`ignore_person_forever`, this neither deletes the person
+        nor mutates its faces — it only records the embeddings so that the same
+        physical person cannot resurface via re-detection.  The caller owns the
+        transaction (used by :meth:`IdentityService.delete_person` when the user
+        deletes a false person *and* ticks "exclude forever", so the snapshot and
+        the hard delete commit together as one atomic operation).
+
+        Returns:
+            Number of embeddings added to the ignore list.
+
+        Raises:
+            ValueError: when the person is missing or protected.
+        """
+        person = self._session.get(Person, person_id)
+        if person is None:
+            raise ValueError(f"Person id={person_id} not found.")
+        if person.is_protected:
+            raise ValueError(f"'{person.name}' is protected and cannot be ignored.")
+
+        n_added = 0
+        for face in list(person.faces):
+            if face.get_embedding() is not None:
+                self._add_ignored_entry(face, person.name, note)
+                n_added += 1
+        log.info(
+            "Snapshotted %d embedding(s) of person %d (%r) onto the ignore list",
+            n_added, person_id, person.name,
+        )
+        return n_added
+
     def ignore_face_forever(self, face_id: int, note: Optional[str] = None) -> IgnoredFace:
         """Add a single face to the ignore list and exclude it.
 

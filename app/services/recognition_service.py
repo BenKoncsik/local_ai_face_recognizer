@@ -473,6 +473,34 @@ class RecognitionService:
             for person_id, profile in self.build_profiles().items()
         }
 
+    def rank_persons(
+        self,
+        embedding: Optional[np.ndarray],
+        profiles: Optional[Dict[int, PersonRecognitionProfile]] = None,
+    ) -> "List[tuple[int, str, float]]":
+        """Rank known people for *embedding*, best match first.
+
+        Unlike :meth:`score_persons`, the caller may pass a pre-built *profiles*
+        mapping so a batch of faces can be scored without rebuilding profiles for
+        every face (re-recognition scores many faces against the same people).
+        When *profiles* is omitted it is built once via :meth:`build_profiles`.
+
+        Returns a list of ``(person_id, name, score)`` sorted by descending
+        score.  An empty list is returned when *embedding* is missing/unusable or
+        no profiles exist, so callers can treat "no match" uniformly.
+        """
+        normalised = self._normalise(embedding)
+        if normalised is None:
+            return []
+        if profiles is None:
+            profiles = self.build_profiles()
+        ranked = [
+            (profile.person_id, profile.name, self._score(normalised, profile))
+            for profile in profiles.values()
+        ]
+        ranked.sort(key=lambda item: item[2], reverse=True)
+        return ranked
+
     def _score(self, embedding: np.ndarray, profile: PersonRecognitionProfile) -> float:
         centroid_similarity = float(np.dot(embedding, profile.centroid))
         example_similarities = profile.examples @ embedding

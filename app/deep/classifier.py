@@ -156,7 +156,15 @@ class DeepFaceClassifier:
         )
         state.sim_floors = self._calibrate_sim_floors(dataset)
 
-        if dataset.n_persons >= 2:
+        # A discriminative network needs a real cohort to produce meaningful
+        # probabilities: with a handful of people (or examples) the softmax is
+        # grossly overconfident for the dominant person and open-set rejection
+        # degenerates — stay in pure prototype matching until there is data.
+        enough_for_ensemble = (
+            dataset.n_persons >= int(self._cfg("min_persons_for_ensemble", 4))
+            and dataset.n_examples >= int(self._cfg("min_examples_for_ensemble", 30))
+        )
+        if enough_for_ensemble:
             x_aug, y_aug, n_synthetic = self._augment(
                 dataset.embeddings, dataset.labels
             )
@@ -179,8 +187,8 @@ class DeepFaceClassifier:
             report.validation_accuracy = accuracy
             tick("finalising")
         else:
-            # A single labeled person cannot train a discriminative network —
-            # fall back to pure prototype matching until a second person exists.
+            # Too few people/examples for a discriminative network — pure
+            # prototype matching with the hard similarity floor is safer.
             report.mode = "prototype"
             if progress_cb is not None:
                 progress_cb(1, 1, "prototype mode")
@@ -242,14 +250,21 @@ class DeepFaceClassifier:
         person_id, similarity = ranked[0]
         runner_sim = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = similarity - runner_sim
-        floor = state.sim_floors.get(
-            person_id, self._cfg("min_prototype_similarity", 0.55)
-        )
+        # The configured minimum is a hard floor even when a stale persisted
+        # model carries a lower calibrated value.
+        default_floor = self._cfg("min_prototype_similarity", 0.55)
+        floor = max(state.sim_floors.get(person_id, default_floor), default_floor)
         if similarity < floor:
             return DeepPrediction(
                 person_id=None, person_name=None, score=similarity,
                 probability=0.0, similarity=similarity, margin=margin,
                 reason="prototype",
+            )
+        if len(ranked) > 1 and margin < self._cfg("min_sim_margin", 0.05):
+            return DeepPrediction(
+                person_id=None, person_name=None, score=similarity,
+                probability=0.0, similarity=similarity, margin=margin,
+                reason="margin",
             )
         return DeepPrediction(
             person_id=person_id,
@@ -290,14 +305,25 @@ class DeepFaceClassifier:
                 probability=probability, similarity=similarity, margin=margin,
                 reason="margin",
             )
-        floor = state.sim_floors.get(
-            person_id, self._cfg("min_prototype_similarity", 0.55)
-        )
+        # The configured minimum is a hard floor even when a stale persisted
+        # model carries a lower calibrated value.
+        default_floor = self._cfg("min_prototype_similarity", 0.55)
+        floor = max(state.sim_floors.get(person_id, default_floor), default_floor)
         if similarity < floor:
             return DeepPrediction(
                 person_id=None, person_name=name, score=score,
                 probability=probability, similarity=similarity, margin=margin,
                 reason="prototype",
+            )
+        # MLP probabilities are blind to "nobody we know" — require the winner
+        # to also beat every other person on raw embedding similarity.
+        other_mask = state.train_labels != person_id
+        runner_sim = float(np.max(sims[other_mask])) if other_mask.any() else 0.0
+        if other_mask.any() and similarity - runner_sim < self._cfg("min_sim_margin", 0.05):
+            return DeepPrediction(
+                person_id=None, person_name=name, score=score,
+                probability=probability, similarity=similarity, margin=margin,
+                reason="margin",
             )
         return DeepPrediction(
             person_id=person_id, person_name=name, score=score,
@@ -512,9 +538,14 @@ class DeepFaceClassifier:
             if pair_sims.size == 0:
                 continue
             # A new face of this person should look at least as similar as the
-            # person's own weaker pairs (with slack), but never below a hard floor.
+            # person's own weaker pairs (with slack).  Calibration may only
+            # TIGHTEN the gate: a person whose labeled faces are noisy/diverse
+            # must not drag the floor below the configured minimum, or every
+            # vaguely face-like crop ends up assigned to them.  The upper cap
+            # keeps burst-photo training sets (near-duplicate crops, intra-pair
+            # sims ≈ 1.0) from rejecting every genuinely new photo.
             q = float(np.percentile(pair_sims, 10)) - 0.08
-            floors[label] = float(np.clip(q, 0.35, max(default_floor, 0.35)))
+            floors[label] = float(np.clip(q, default_floor, 0.80))
         return floors
 
     # ------------------------------------------------------------------

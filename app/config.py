@@ -259,6 +259,28 @@ class RecognitionConfig:
     # the candidate set is already restricted by image context).
     same_image_assist_margin: float = 0.05
 
+    # --- Image-browser "re-recognize faces" workflow ---
+    # Master switch for the user-triggered re-recognition of Unknown faces in
+    # the image browser context menu.
+    rerecognition_enabled: bool = True
+    # Score at/above which an Unknown face is auto-merged into the matched
+    # person without asking (same cosine scale as auto_assign_threshold).
+    rerecognition_auto_threshold: float = 0.72
+    # Score at/above which a match is *suggested* for user review.  Below this
+    # nothing is proposed.  Must be < rerecognition_auto_threshold.
+    rerecognition_suggest_threshold: float = 0.55
+
+    # --- Auto-merge from Unknown (reviewable) ---
+    # Master switch for the intelligent auto-confirm of faces dragged along when
+    # one face of an "Unknown N" cluster is manually assigned to a named person.
+    # When off, every auto-moved sibling stays "pending" for manual review.
+    unknown_auto_merge_enabled: bool = True
+    # Cosine similarity at/above which an auto-moved sibling face is
+    # automatically confirmed (pending flag removed) — but only when the target
+    # person has at least one manually confirmed reference face and the match is
+    # unambiguous (margin >= min_margin).  Deliberately high.
+    unknown_auto_confirm_threshold: float = 0.80
+
 
 @dataclass
 class DeepRecognitionConfig:
@@ -290,6 +312,11 @@ class DeepRecognitionConfig:
     calibration_folds: int = 3
     # Skip retraining when the labeled data did not change since the last run.
     skip_unchanged: bool = True
+    # The MLP ensemble only activates with at least this many labeled people
+    # AND examples; below that, pure prototype matching is used (a tiny
+    # discriminative network is overconfident and over-assigns).
+    min_persons_for_ensemble: int = 4
+    min_examples_for_ensemble: int = 30
 
     # --- Open-set / assignment gates ---
     # Fallback ensemble-probability threshold (per-person calibration may lower it).
@@ -299,7 +326,11 @@ class DeepRecognitionConfig:
     # Required probability gap between the best and second-best person.
     min_margin: float = 0.10
     # Minimum cosine similarity to a real training example of the winner.
+    # HARD floor: per-person calibration may only raise it, never lower it.
     min_prototype_similarity: float = 0.55
+    # Required cosine-similarity gap between the winner and the most similar
+    # training example of any OTHER person (ambiguous faces stay unknown).
+    min_sim_margin: float = 0.05
     # Below this best-similarity to *anyone* known, the face is treated as an
     # outlier (stranger or non-face) and never auto-assigned.
     outlier_similarity: float = 0.42
@@ -735,6 +766,26 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
                 "same_image_assist_margin",
                 cfg.recognition.same_image_assist_margin,
             ),
+            rerecognition_enabled=rec.get(
+                "rerecognition_enabled",
+                cfg.recognition.rerecognition_enabled,
+            ),
+            rerecognition_auto_threshold=rec.get(
+                "rerecognition_auto_threshold",
+                cfg.recognition.rerecognition_auto_threshold,
+            ),
+            rerecognition_suggest_threshold=rec.get(
+                "rerecognition_suggest_threshold",
+                cfg.recognition.rerecognition_suggest_threshold,
+            ),
+            unknown_auto_merge_enabled=rec.get(
+                "unknown_auto_merge_enabled",
+                cfg.recognition.unknown_auto_merge_enabled,
+            ),
+            unknown_auto_confirm_threshold=rec.get(
+                "unknown_auto_confirm_threshold",
+                cfg.recognition.unknown_auto_confirm_threshold,
+            ),
         )
 
         deep = raw.get("deep_recognition", {})
@@ -760,6 +811,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             skip_unchanged=deep.get(
                 "skip_unchanged", cfg.deep_recognition.skip_unchanged
             ),
+            min_persons_for_ensemble=deep.get(
+                "min_persons_for_ensemble",
+                cfg.deep_recognition.min_persons_for_ensemble,
+            ),
+            min_examples_for_ensemble=deep.get(
+                "min_examples_for_ensemble",
+                cfg.deep_recognition.min_examples_for_ensemble,
+            ),
             base_prob_threshold=deep.get(
                 "base_prob_threshold", cfg.deep_recognition.base_prob_threshold
             ),
@@ -770,6 +829,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             min_prototype_similarity=deep.get(
                 "min_prototype_similarity",
                 cfg.deep_recognition.min_prototype_similarity,
+            ),
+            min_sim_margin=deep.get(
+                "min_sim_margin", cfg.deep_recognition.min_sim_margin
             ),
             outlier_similarity=deep.get(
                 "outlier_similarity", cfg.deep_recognition.outlier_similarity

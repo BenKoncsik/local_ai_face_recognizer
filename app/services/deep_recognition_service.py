@@ -143,12 +143,15 @@ class DeepRecognitionService:
         self,
         mode: str = "rescan",
         progress_cb=None,
+        force: bool = False,
     ) -> Tuple[TrainingRun, DeepTrainStats, DeepFaceClassifier]:
         """Retrain the neural ensemble on every trusted labeled face.
 
         Returns the persisted :class:`TrainingRun`, the statistics and the
         ready-to-use classifier.  When the labeled data is unchanged since the
-        last run and ``skip_unchanged`` is on, the saved model is reused.
+        last run and ``skip_unchanged`` is on, the saved model is reused —
+        unless ``force`` is set (the explicit "train the model" action must
+        always retrain, e.g. to pick up new engine defaults).
         """
         dataset = build_training_dataset(
             self._session,
@@ -167,7 +170,8 @@ class DeepRecognitionService:
 
         fingerprint = dataset.fingerprint()
         if (
-            self._config.skip_unchanged
+            not force
+            and self._config.skip_unchanged
             and classifier.load(self.model_path)
             and classifier.fingerprint == fingerprint
         ):
@@ -323,17 +327,29 @@ class DeepRecognitionService:
             .first()
         )
 
+    def latest_assignment_run_id(self) -> Optional[int]:
+        """Id of the newest run that actually produced auto-assignments.
+
+        Train-only runs create a :class:`TrainingRun` without assignments;
+        the review tab must keep showing the last run that has any.
+        """
+        row = (
+            self._session.query(AutoAssignment.training_run_id)
+            .order_by(AutoAssignment.training_run_id.desc())
+            .first()
+        )
+        return row[0] if row is not None else None
+
     def list_auto_assignments(
         self,
         run_id: Optional[int] = None,
         only_open: bool = True,
     ) -> List[AutoAssignmentDTO]:
-        """Reviewable assignments of *run_id* (default: the latest run)."""
+        """Reviewable assignments of *run_id* (default: last run with any)."""
         if run_id is None:
-            run = self.latest_run()
-            if run is None:
+            run_id = self.latest_assignment_run_id()
+            if run_id is None:
                 return []
-            run_id = run.id
 
         query = (
             self._session.query(AutoAssignment)
@@ -441,10 +457,9 @@ class DeepRecognitionService:
 
     def count_open_assignments(self, run_id: Optional[int] = None) -> int:
         if run_id is None:
-            run = self.latest_run()
-            if run is None:
+            run_id = self.latest_assignment_run_id()
+            if run_id is None:
                 return 0
-            run_id = run.id
         return (
             self._session.query(AutoAssignment)
             .filter(AutoAssignment.training_run_id == run_id)
@@ -512,6 +527,39 @@ class DeepRecognitionService:
     def revert_assignment(self, assignment_id: int) -> AutoAssignment:
         """User sends the face back to where it was before the run."""
         assignment = self._require_assignment(assignment_id)
+        self._revert_one(assignment)
+        self._session.commit()
+        return assignment
+
+    def revert_all_open(self, run_id: Optional[int] = None) -> int:
+        """Revert every still-open (auto) assignment of *run_id* in one go.
+
+        Recovery hatch for a run gone wrong (e.g. an avalanche of faces onto
+        one person): each face returns to where it was before the run and a
+        "different person" judgement is recorded so the engine learns from
+        the mass rejection too. Returns the number of reverted assignments.
+        """
+        if run_id is None:
+            run_id = self.latest_assignment_run_id()
+            if run_id is None:
+                return 0
+        open_assignments = (
+            self._session.query(AutoAssignment)
+            .filter(AutoAssignment.training_run_id == run_id)
+            .filter(AutoAssignment.status == AUTO_ASSIGN_STATUS_AUTO)
+            .all()
+        )
+        for assignment in open_assignments:
+            self._revert_one(assignment)
+        self._session.commit()
+        log.info(
+            "Deep recognition: bulk-reverted %d open assignments of run %s",
+            len(open_assignments), run_id,
+        )
+        return len(open_assignments)
+
+    def _revert_one(self, assignment: AutoAssignment) -> None:
+        """Shared revert core; caller commits."""
         face = assignment.face
         if face is not None and face.person_id == assignment.person_id:
             previous = (
@@ -528,8 +576,6 @@ class DeepRecognitionService:
             )
         assignment.status = AUTO_ASSIGN_STATUS_REVERTED
         assignment.decided_at = _utcnow_naive()
-        self._session.commit()
-        return assignment
 
     # ------------------------------------------------------------------
     # Internals

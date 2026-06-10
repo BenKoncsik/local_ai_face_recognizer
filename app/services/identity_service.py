@@ -6,7 +6,7 @@ Handles user-driven operations on Person clusters:
 * split (remove a face from a cluster)
 * reassign a face to another cluster
 * mark two faces as same / different
-* delete a person (un-assign all faces)
+* delete a person (un-assign all faces, or hard-delete faces for false detections)
 """
 
 from __future__ import annotations
@@ -86,6 +86,24 @@ class BulkReassignResult:
     @property
     def moved_face_ids(self) -> List[int]:
         return [s.face_id for s in self.snapshots]
+
+
+@dataclass(frozen=True)
+class PersonDeletionResult:
+    """Outcome of a :meth:`IdentityService.delete_person` call.
+
+    Reports what was removed so the caller can log / show counts.  ``n_faces``
+    is the number of face rows affected (deleted when ``remove_faces`` was set,
+    otherwise un-assigned); ``n_crops_removed`` counts crop thumbnail files
+    actually unlinked from disk.
+    """
+
+    person_id: int
+    person_name: str
+    n_faces: int
+    n_crops_removed: int = 0
+    faces_deleted: bool = False
+    n_ignored: int = 0  # embeddings snapshotted onto the permanent ignore list
 
 
 class IdentityService:
@@ -274,23 +292,125 @@ class IdentityService:
         log.info("Cleaned up %d empty Unknown person(s)", deleted)
         return deleted
 
-    def delete_person(self, person_id: int) -> None:
-        """Un-assign all faces from *person_id* and delete the person row."""
+    def delete_person(
+        self,
+        person_id: int,
+        *,
+        remove_faces: bool = False,
+        ignore_embeddings: bool = False,
+    ) -> PersonDeletionResult:
+        """Delete a person row, optionally hard-deleting all of its faces.
+
+        Two modes:
+
+        * ``remove_faces=False`` (default) — *un-assign* every face (``person_id
+          → NULL``) and drop the person row.  The faces survive as orphan
+          Unknowns and may be re-clustered later.  Use for a real person that
+          was merely mislabeled.
+        * ``remove_faces=True`` — a true, complete delete for **false
+          detections** (a hand, an object, a mis-detected crop).  Every face row
+          of the person is removed together with its bounding box, embedding,
+          landmarks, crop-path record and FaceCorrection links; the stored crop
+          thumbnail files are unlinked from disk best-effort; finally the person
+          row itself is deleted.  Nothing is left to resurface as an orphan face
+          or a fresh Unknown on the next pipeline run.
+
+        When ``ignore_embeddings`` is set, each face's embedding is first copied
+        onto the persistent ignore list (see
+        :meth:`IgnoredFaceService.snapshot_person_embeddings`) so the same
+        physical person is also suppressed if the detector re-finds it on a later
+        run.  The snapshot and the delete commit together as one transaction.
+
+        Only this person's faces are ever touched.  The whole operation runs in a
+        single transaction: on any error it rolls back and re-raises, so the
+        database is never left half-deleted.
+
+        Returns:
+            A :class:`PersonDeletionResult` with the removed counts.
+
+        Raises:
+            ValueError: when the person is missing or protected.
+        """
         person = self._require_person(person_id)
         if person.is_protected:
             raise ValueError(f"'{person.name}' is a protected person and cannot be deleted.")
-        self._session.query(Face).filter(Face.person_id == person_id).update(
-            {
-                Face.person_id: None,
-                Face.assignment_source: None,
-                Face.assignment_confidence: None,
-                Face.assigned_at: None,
-            },
-            synchronize_session="fetch",
+
+        name = person.name
+        faces = list(person.faces)
+        n_faces = len(faces)
+        n_crops_removed = 0
+        n_ignored = 0
+
+        try:
+            if ignore_embeddings:
+                # Lazy import avoids a service-layer import cycle.
+                from app.services.ignored_face_service import IgnoredFaceService
+
+                n_ignored = IgnoredFaceService(
+                    self._session
+                ).snapshot_person_embeddings(person_id)
+            if remove_faces:
+                for face in faces:
+                    if self._unlink_crop(face.crop_path):
+                        n_crops_removed += 1
+                    # Hard delete: cascades FaceCorrection (delete-orphan) and
+                    # drops bbox / embedding / landmarks / crop_path with the row.
+                    self._session.delete(face)
+            else:
+                self._session.query(Face).filter(Face.person_id == person_id).update(
+                    {
+                        Face.person_id: None,
+                        Face.assignment_source: None,
+                        Face.assignment_confidence: None,
+                        Face.assigned_at: None,
+                    },
+                    synchronize_session="fetch",
+                )
+            self._session.delete(person)
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            log.exception("Failed to delete person %d (%r); rolled back", person_id, name)
+            raise
+
+        if remove_faces:
+            log.info(
+                "Deleted person %d (%r): %d face(s) hard-deleted, %d crop file(s) "
+                "unlinked, %d embedding(s) ignored",
+                person_id, name, n_faces, n_crops_removed, n_ignored,
+            )
+        else:
+            log.info(
+                "Deleted person %d (%r): %d face(s) un-assigned, %d embedding(s) ignored",
+                person_id, name, n_faces, n_ignored,
+            )
+        return PersonDeletionResult(
+            person_id=person_id,
+            person_name=name,
+            n_faces=n_faces,
+            n_crops_removed=n_crops_removed,
+            faces_deleted=remove_faces,
+            n_ignored=n_ignored,
         )
-        self._session.delete(person)
-        self._session.commit()
-        log.info("Deleted person %d (%r)", person_id, person.name)
+
+    @staticmethod
+    def _unlink_crop(crop_path: Optional[str]) -> bool:
+        """Best-effort delete of a crop thumbnail file.
+
+        Never raises: a missing file (already gone) or an OS error is logged and
+        treated as "nothing to remove", so a single bad path cannot abort a
+        person deletion.
+        """
+        if not crop_path:
+            return False
+        try:
+            path = Path(crop_path)
+            if path.exists():
+                path.unlink()
+                return True
+        except OSError as exc:
+            log.warning("Could not delete crop file %r: %s", crop_path, exc)
+        return False
 
     # ------------------------------------------------------------------
     # Face operations
@@ -320,6 +440,8 @@ class IdentityService:
         face.assignment_source = "manual"
         face.assignment_confidence = None
         face.assigned_at = _utcnow_naive()
+        # A manual reassignment overrides any pending auto-merge review state.
+        self._clear_auto_merge_markers(face)
         log.debug("Assignment after: %s", face_debug_state(face, face.crop_path))
         self._session.commit()
         log.info(
@@ -391,6 +513,8 @@ class IdentityService:
             face.assignment_source = "manual"
             face.assignment_confidence = None
             face.assigned_at = now
+            # A manual bulk reassignment overrides any pending auto-merge state.
+            self._clear_auto_merge_markers(face)
 
         if not result.snapshots:
             # No-op move (every face skipped); avoid an empty cleanup pass.
@@ -469,6 +593,22 @@ class IdentityService:
     def _snapshot_person(self, person: Person) -> Dict[str, Any]:
         """Capture a person's column values for later recreation (undo)."""
         return {col: getattr(person, col) for col in _PERSON_SNAPSHOT_COLUMNS}
+
+    @staticmethod
+    def _clear_auto_merge_markers(face: Face) -> None:
+        """Drop the reviewable auto-merge-from-Unknown markers from a face.
+
+        Called whenever a face is *manually* (re)assigned: a deliberate user
+        move supersedes the "needs review" state stamped by
+        :class:`UnknownMergeService`, so the face becomes a plain assignment.
+        """
+        if not (face.auto_merged_from_unknown or face.auto_merge_review_status):
+            return
+        face.auto_merged_from_unknown = False
+        face.auto_merge_review_status = None
+        face.auto_merge_source_person_id = None
+        face.auto_merge_confirmed_at = None
+        face.auto_merge_confirmed_by_user = False
 
     def remove_face_from_cluster(self, face_id: int) -> Face:
         """Un-assign a face from its current person (makes it unclustered)."""

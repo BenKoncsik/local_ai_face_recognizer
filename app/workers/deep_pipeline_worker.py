@@ -57,6 +57,7 @@ log = logging.getLogger(__name__)
 
 MODE_RESCAN = "rescan"
 MODE_REBUILD = "rebuild"
+MODE_TRAIN = "train"
 
 
 class DeepPipelineWorker(QThread):
@@ -90,7 +91,7 @@ class DeepPipelineWorker(QThread):
         drive_mirror_dir: Optional[Path] = None,
     ) -> None:
         super().__init__(parent)
-        if mode not in (MODE_RESCAN, MODE_REBUILD):
+        if mode not in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN):
             raise ValueError(f"Unknown deep pipeline mode: {mode!r}")
         self._root_folder = root_folder
         self._config = config
@@ -128,6 +129,10 @@ class DeepPipelineWorker(QThread):
     def _run_pipeline(self) -> None:
         db_path = self._db_path_override or str(self._config.db_path_resolved)
         init_db(db_path)
+
+        if self._mode == MODE_TRAIN:
+            self._run_train_only_pipeline()
+            return
 
         n_stages = 9 if self._mode == MODE_REBUILD else 8
         stage = [0]
@@ -244,6 +249,68 @@ class DeepPipelineWorker(QThread):
             f"unknown groups: +{cluster_stats.n_new_persons} | "
             f"intra-image fixes: {consistency_stats.n_faces_reassigned} | "
             f"{n_suggestions} suggestion(s)"
+        )
+        self.log_message.emit(summary)
+        self.finished.emit(True, summary)
+
+    # ------------------------------------------------------------------
+    # Train-only pipeline
+    # ------------------------------------------------------------------
+
+    def _run_train_only_pipeline(self) -> None:
+        """Retrain the model from every person-assigned face; touch nothing.
+
+        Walks the already-recognized faces only: no scan, no detection, no
+        assignment — the user's data stays exactly as it is.  Always retrains
+        (the explicit action must not be skipped as "data unchanged").
+        """
+        self.log_message.emit("Stage 1/2: Generating missing face embeddings …")
+        try:
+            embedded = self._run_embedding()
+        except ImportError as exc:
+            log.error("TFLite backend missing: %s", exc)
+            self.error.emit(
+                "Hiányzik a TFLite futtatókörnyezet. "
+                "Telepítsd/javítsd a függőségeket:\n"
+                "  pip install ai-edge-litert\n"
+                f"Részletek: {exc}"
+            )
+            self.finished.emit(False, "Missing TFLite runtime — embedding skipped")
+            return
+        if self._abort:
+            self.finished.emit(False, "Aborted after embedding")
+            return
+
+        self.log_message.emit(
+            "Stage 2/2: Training the neural network from your categorized "
+            "faces (this may take a while — accuracy over speed) …"
+        )
+
+        def train_cb(current, total, detail):
+            self.progress.emit(current, total or 0, "Training", detail)
+
+        with session_scope() as session:
+            svc = DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(
+                    self._config.deep_recognition.model_dir
+                ),
+            )
+            _, train, _ = svc.train(
+                mode=MODE_TRAIN, progress_cb=train_cb, force=True
+            )
+
+        acc = (
+            f"{train.validation_accuracy * 100:.1f}%"
+            if train.validation_accuracy is not None
+            else "n/a"
+        )
+        summary = (
+            f"Done (train) — {embedded} face(s) newly embedded | "
+            f"model trained on {train.n_examples} face(s) of "
+            f"{train.n_persons} person(s) (+{train.n_augmented} synthetic), "
+            f"accuracy {acc} | no faces were modified"
         )
         self.log_message.emit(summary)
         self.finished.emit(True, summary)

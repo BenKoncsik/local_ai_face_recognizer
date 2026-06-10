@@ -24,10 +24,13 @@ class StubConfig:
     min_class_size: int = 4
     augment_noise_sigma: float = 0.03
     calibration_folds: int = 2
+    min_persons_for_ensemble: int = 2
+    min_examples_for_ensemble: int = 8
     base_prob_threshold: float = 0.60
     min_prob_threshold: float = 0.35
     min_margin: float = 0.10
     min_prototype_similarity: float = 0.55
+    min_sim_margin: float = 0.05
     outlier_similarity: float = 0.42
 
 
@@ -158,6 +161,84 @@ class TestPersistence:
         assert not clf.load(path)
 
 
+class TestOpenSetSafety:
+    """Regression tests for the one-person-avalanche failure mode."""
+
+    def test_sim_floor_never_below_configured_min(self):
+        """A person with noisy/diverse labeled faces must not drag the
+        prototype floor below min_prototype_similarity — that floor is hard."""
+        diverse = [_person_vec(axis, noise=0.3, seed=axis) for axis in (0, 3, 7, 11)]
+        persons = {
+            1: diverse,
+            2: [_person_vec(30, seed=50 + i) for i in range(4)],
+        }
+        clf = DeepFaceClassifier(StubConfig())
+        clf.train(_dataset(persons))
+        assert clf._state.sim_floors
+        assert all(f >= 0.55 for f in clf._state.sim_floors.values())
+
+    def test_small_cohort_stays_in_prototype_mode(self):
+        """Below the person/example minimums the MLP is overconfident —
+        the engine must fall back to pure prototype matching."""
+        persons = {
+            1: [_person_vec(0, seed=i) for i in range(6)],
+            2: [_person_vec(20, seed=10 + i) for i in range(6)],
+            3: [_person_vec(40, seed=20 + i) for i in range(6)],
+        }
+        cfg = StubConfig(min_persons_for_ensemble=4)
+        clf = DeepFaceClassifier(cfg)
+        report = clf.train(_dataset(persons))
+        assert report.mode == "prototype"
+
+    def test_ambiguous_face_between_two_lookalikes_is_rejected(self):
+        """A face equally similar to two (correlated) people must stay unknown."""
+
+        def unit(*pairs: Tuple[int, float]) -> np.ndarray:
+            v = np.zeros(DIM, dtype=np.float32)
+            for axis, w in pairs:
+                v[axis] = w
+            return v / np.linalg.norm(v)
+
+        # Two lookalike persons whose prototypes are 0.8-correlated; the
+        # probe sits exactly between them: high similarity to both, ~no margin.
+        t1, t2 = unit((0, 1.0)), unit((0, 0.8), (1, 0.6))
+        persons = {
+            1: [t1, unit((0, 0.9), (2, 0.436))],
+            2: [t2, unit((0, 0.72), (1, 0.54), (3, 0.436))],
+        }
+        cfg = StubConfig(min_persons_for_ensemble=99)  # force prototype mode
+        clf = DeepFaceClassifier(cfg)
+        clf.train(_dataset(persons))
+        ambiguous = (t1 + t2) / np.linalg.norm(t1 + t2)
+        prediction = clf.predict(ambiguous)
+        assert prediction.person_id is None
+        assert prediction.reason == "margin"
+
+    def test_imbalanced_tiny_cohort_does_not_avalanche(self):
+        """Mirror of a real incident: 17/5/1 labeled faces with sloppy crops
+        assigned nearly every unknown face to the dominant person. A face that
+        only vaguely resembles them (cos ≈ 0.45) must be rejected."""
+        from app.config import DeepRecognitionConfig
+
+        rng = np.random.default_rng(0)
+        dominant = [_person_vec(0, noise=0.35, seed=i) for i in range(17)]
+        persons = {
+            1: dominant,
+            2: [_person_vec(20, noise=0.1, seed=30 + i) for i in range(5)],
+            3: [_person_vec(40, seed=60)],
+        }
+        clf = DeepFaceClassifier(DeepRecognitionConfig(ensemble_size=2, max_iter=200))
+        report = clf.train(_dataset(persons))
+        # 3 persons / 23 examples is below the ensemble minimums.
+        assert report.mode == "prototype"
+
+        vague = _person_vec(0, noise=1.4, seed=999)  # far-off lookalike
+        sims = np.vstack(dominant) @ vague
+        assert sims.max() < 0.55, "probe must sit below the prototype floor"
+        prediction = clf.predict(vague)
+        assert prediction.person_id is None
+
+
 class TestContinualLearning:
     def test_more_examples_increase_confidence(self):
         """The engine must get better at a person as more faces are confirmed."""
@@ -169,7 +250,7 @@ class TestContinualLearning:
             1: [_person_vec(0, seed=i) for i in range(14)],
             2: [_person_vec(30, seed=50 + i) for i in range(6)],
         }
-        probe = _person_vec(0, noise=0.18, seed=999)
+        probe = _person_vec(0, noise=0.06, seed=999)
 
         clf_few = DeepFaceClassifier(StubConfig())
         clf_few.train(_dataset(few))

@@ -82,7 +82,17 @@ def _seed_suggestion(axis=0, named_name="Anna", auto_name="Unknown 1") -> int:
         assert results, "expected a look-alike suggestion"
         svc.persist_results(results, "job-1", datetime.utcnow() + timedelta(days=1))
     with session_scope() as session:
-        return session.query(MergeSuggestion).one().id
+        # Re-seeding re-scores earlier pairs too, so filter to the new person
+        # (the pair is stored in normalised id order — check both sides).
+        return (
+            session.query(MergeSuggestion)
+            .filter(
+                (MergeSuggestion.source_person_id == auto)
+                | (MergeSuggestion.target_person_id == auto)
+            )
+            .one()
+            .id
+        )
 
 
 class TestDecisionLogging:
