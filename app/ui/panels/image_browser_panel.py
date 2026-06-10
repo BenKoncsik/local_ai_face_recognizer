@@ -36,6 +36,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDockWidget,
     QFrame,
@@ -1351,8 +1352,13 @@ class ImageBrowserPanel(QWidget):
         self._deol_compare: bool = False               # True = compare divider active now
         self._deol_mode: Optional[str] = None          # remembered choice: 'bw'|'color'|'compare'
         self._deol_split: int = 50                     # remembered split position (percent)
-        self._deol_bw_bgr: Optional[np.ndarray] = None     # cached B&W pixels for compare
-        self._deol_color_bgr: Optional[np.ndarray] = None  # cached colorized pixels for compare
+        # Comparison group: B&W original first, then colorized variants. The
+        # compare view composes any two of them, chosen by left/right index.
+        self._deol_group: list = []                    # list[ComparisonMember]
+        self._deol_left_idx: int = 0                   # group index shown on the left (B&W by default)
+        self._deol_right_idx: int = 1                  # group index shown on the right (1st colorized)
+        self._deol_left_bgr: Optional[np.ndarray] = None   # cached left-side pixels for compare
+        self._deol_right_bgr: Optional[np.ndarray] = None  # cached right-side pixels (resized to left)
 
         self._build_ui()
         self._setup_shortcuts()
@@ -1655,6 +1661,20 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_compare.setStyleSheet(_nav_style)
         self._btn_view_compare.clicked.connect(self._on_deol_compare_toggle)
         _deol_row.addWidget(self._btn_view_compare)
+        # Left/right pickers for the comparison group — only shown in compare
+        # mode when 3+ related images exist (B&W original + 2+ colorized).
+        self._deol_left_lbl = QLabel()
+        self._deol_left_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        _deol_row.addWidget(self._deol_left_lbl)
+        self._deol_left_combo = QComboBox()
+        self._deol_left_combo.currentIndexChanged.connect(self._on_deol_left_changed)
+        _deol_row.addWidget(self._deol_left_combo)
+        self._deol_right_lbl = QLabel()
+        self._deol_right_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        _deol_row.addWidget(self._deol_right_lbl)
+        self._deol_right_combo = QComboBox()
+        self._deol_right_combo.currentIndexChanged.connect(self._on_deol_right_changed)
+        _deol_row.addWidget(self._deol_right_combo)
         _deol_row.addStretch()
         self._btn_deol_sync = QPushButton()
         self._btn_deol_sync.setStyleSheet(_nav_style)
@@ -2053,6 +2073,10 @@ class ImageBrowserPanel(QWidget):
         self._btn_view_color.setText(t("ibp_view_colorized"))
         self._btn_view_compare.setText(t("ibp_view_compare"))
         self._btn_view_compare.setToolTip(t("ibp_view_compare_tip"))
+        self._deol_left_lbl.setText(t("ibp_deol_left"))
+        self._deol_right_lbl.setText(t("ibp_deol_right"))
+        if self._deol_group:
+            self._populate_deol_combos()  # refresh translated member labels
         self._btn_deol_sync.setText(t("ibp_deol_sync"))
         self._btn_deol_sync.setToolTip(t("ibp_deol_sync_tip"))
 
@@ -2174,7 +2198,12 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _setup_deoldified_pair(self, image_id: int, image_path: str) -> None:
-        """Detect deoldified pairing and configure the toggle bar."""
+        """Detect the comparison group and configure the toggle bar.
+
+        A group is the B&W original plus every colorized variant that shares its
+        filename (folder-independent).  Two members behave exactly like the old
+        single pair; three or more enable the left/right pickers in compare mode.
+        """
         from app.app_settings import app_qsettings
         settings = app_qsettings()
         if not settings.value("deoldified/auto_pair", False, type=bool):
@@ -2184,58 +2213,130 @@ class ImageBrowserPanel(QWidget):
             is_deoldified_path,
             DeoldifiedPairingService,
         )
-        from app.services.image_library_service import resolve_image_path
 
-        if is_deoldified_path(image_path):
-            # Current image IS the colorized one → find its original
-            with session_scope() as session:
-                img = session.get(Image, image_id)
-                if img is None:
-                    return
-                svc = DeoldifiedPairingService(session)
-                orig = svc.find_original_for_deoldified(img)
-                if orig is None:
-                    return
-                self._deol_pair_orig_id = orig.id
-                self._deol_pair_partner_id = orig.id
+        with session_scope() as session:
+            img = session.get(Image, image_id)
+            if img is None:
+                return
+            group = DeoldifiedPairingService(session).get_comparison_group(img)
+        if len(group) < 2:
+            return
 
-            self._deol_pair_color_path = image_path
+        self._deol_group = group
+        bw_member = group[0]  # is_bw=True by construction
+        current_is_color = is_deoldified_path(image_path)
+
+        # Default selection: left = B&W original, right = colorized. When the
+        # tree image is itself a colorized variant, prefer it on the right so the
+        # opened image stays visible.
+        self._deol_left_idx = 0
+        self._deol_right_idx = 1
+        if current_is_color:
+            for i, m in enumerate(group):
+                if m.image_id == image_id and not m.is_bw:
+                    self._deol_right_idx = i
+                    break
+            self._deol_pair_orig_id = bw_member.image_id
             self._deol_viewing_color = True
             self._btn_view_bw.setChecked(False)
             self._btn_view_color.setChecked(True)
-            self._deoldified_bar.setVisible(True)
-            log.debug(
-                "Deoldified pair: color=%s → orig_id=%d",
-                image_path, self._deol_pair_orig_id,
-            )
         else:
-            # Current image is the original → look for a colorized variant
-            with session_scope() as session:
-                img = session.get(Image, image_id)
-                if img is None:
-                    return
-                svc = DeoldifiedPairingService(session)
-                color_img = svc.find_deoldified_for_original(img)
-                if color_img is None:
-                    return
-                self._deol_pair_partner_id = color_img.id
-                color_resolved = resolve_image_path(color_img)
-                self._deol_pair_color_path = (
-                    str(color_resolved) if color_resolved else color_img.file_path
-                )
-
+            self._deol_pair_orig_id = None  # current IS the B&W original
             self._deol_viewing_color = False
             self._btn_view_bw.setChecked(True)
             self._btn_view_color.setChecked(False)
-            self._deoldified_bar.setVisible(True)
-            log.debug(
-                "Deoldified pair: orig=%s → color=%s",
-                image_path, self._deol_pair_color_path,
-            )
+
+        self._deol_pair_color_path = group[self._deol_right_idx].file_path
+        self._update_deol_sync_partner(image_id)
+        self._populate_deol_combos()
+        self._deoldified_bar.setVisible(True)
+        log.debug(
+            "Comparison group of %d image(s): %s",
+            len(group), [m.label or "bw" for m in group],
+        )
 
         # Auto-sync annotations from the filled side into the empty side.
         if settings.value("deoldified/auto_sync", True, type=bool):
             self._run_deoldified_sync(image_id, announce=False)
+
+    def _update_deol_sync_partner(self, image_id: int) -> None:
+        """Point the sync partner at the other side of the active comparison.
+
+        When the tree image is the B&W original, the partner is the selected
+        colorized variant; when it is colorized, the partner is the original.
+        """
+        if not self._deol_group:
+            self._deol_pair_partner_id = None
+            return
+        if self._deol_pair_orig_id is not None:
+            self._deol_pair_partner_id = self._deol_pair_orig_id
+        else:
+            self._deol_pair_partner_id = self._deol_group[self._deol_right_idx].image_id
+
+    def _deol_member_text(self, member) -> str:
+        """Combo label for one comparison member."""
+        if member.is_bw:
+            return t("ibp_deol_bw_label")
+        if member.label and member.label != "deoldified":
+            return f"{t('ibp_view_colorized')} {member.label}"
+        return t("ibp_view_colorized")
+
+    def _populate_deol_combos(self) -> None:
+        """Fill the left/right pickers from the current group (signals blocked)."""
+        for combo, idx in (
+            (self._deol_left_combo, self._deol_left_idx),
+            (self._deol_right_combo, self._deol_right_idx),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            for m in self._deol_group:
+                combo.addItem(self._deol_member_text(m))
+            if 0 <= idx < combo.count():
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+        self._deol_update_combo_visibility()
+
+    def _deol_update_combo_visibility(self) -> None:
+        """Show the left/right pickers only in compare mode with 3+ members."""
+        show = self._deol_compare and len(self._deol_group) >= 3
+        for w in (
+            self._deol_left_lbl, self._deol_left_combo,
+            self._deol_right_lbl, self._deol_right_combo,
+        ):
+            w.setVisible(show)
+
+    def _on_deol_left_changed(self, idx: int) -> None:
+        """Left picker changed → reload both cached sides and recompose."""
+        if idx < 0 or idx >= len(self._deol_group) or idx == self._deol_left_idx:
+            return
+        self._deol_left_idx = idx
+        # Right pixels are resized to the left shape, so invalidate both.
+        self._deol_left_bgr = None
+        self._deol_right_bgr = None
+        self._deol_recompose_compare()
+
+    def _on_deol_right_changed(self, idx: int) -> None:
+        """Right picker changed → update single-view color path and recompose."""
+        if idx < 0 or idx >= len(self._deol_group) or idx == self._deol_right_idx:
+            return
+        self._deol_right_idx = idx
+        self._deol_right_bgr = None
+        member = self._deol_group[idx]
+        if not member.is_bw:
+            self._deol_pair_color_path = member.file_path
+        self._update_deol_sync_partner(self._current_image_id)
+        self._deol_recompose_compare()
+
+    def _deol_recompose_compare(self) -> None:
+        """Re-render the compare composite after a picker change."""
+        if not self._deol_compare:
+            return
+        if not self._deol_ensure_compare_bgr():
+            return
+        comp = self._deol_composite()
+        if comp is not None:
+            self._orig_img_bgr = comp
+            self._redraw_faces()
 
     def _on_deol_view_toggle(self, show_colorized: bool) -> None:
         """User picked the single B&W or colorized view (remembered choice)."""
@@ -2270,6 +2371,7 @@ class ImageBrowserPanel(QWidget):
         self._deol_compare = False
         self._image_label.set_compare_mode(False)
         self._btn_view_compare.setChecked(False)
+        self._deol_update_combo_visibility()
         self._deol_viewing_color = show_colorized
         self._btn_view_bw.setChecked(not show_colorized)
         self._btn_view_color.setChecked(show_colorized)
@@ -2278,48 +2380,38 @@ class ImageBrowserPanel(QWidget):
             self._reset_zoom()
         self._redraw_faces()
 
-    def _deol_bw_path(self) -> Optional[str]:
-        """Resolve the on-disk path of the B&W side of the current pair."""
-        from app.services.image_library_service import resolve_image_path
-
-        if self._deol_pair_orig_id is not None:
-            with session_scope() as session:
-                orig = session.get(Image, self._deol_pair_orig_id)
-                if orig is None:
-                    return None
-                resolved = resolve_image_path(orig)
-                return str(resolved) if resolved else orig.file_path
-        return self._current_path  # current IS the B&W original
-
-    def _deol_ensure_pair_bgr(self) -> bool:
-        """Load and cache both sides of the pair, color resized to B&W shape."""
-        if self._deol_bw_bgr is not None and self._deol_color_bgr is not None:
+    def _deol_ensure_compare_bgr(self) -> bool:
+        """Load and cache the two selected sides, right resized to left shape."""
+        if self._deol_left_bgr is not None and self._deol_right_bgr is not None:
             return True
+        if not self._deol_group:
+            return False
         from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr
 
-        bw_path = self._deol_bw_path()
-        bw = load_image_bgr(bw_path) if bw_path else None
-        color = load_image_bgr(self._deol_pair_color_path)
-        if bw is None or color is None:
+        left_m = self._deol_group[self._deol_left_idx]
+        right_m = self._deol_group[self._deol_right_idx]
+        left = load_image_bgr(left_m.file_path)
+        right = load_image_bgr(right_m.file_path)
+        if left is None or right is None:
             return False
-        if color.shape[:2] != bw.shape[:2]:
-            color = cv2.resize(
-                color, (bw.shape[1], bw.shape[0]), interpolation=cv2.INTER_AREA
+        if right.shape[:2] != left.shape[:2]:
+            right = cv2.resize(
+                right, (left.shape[1], left.shape[0]), interpolation=cv2.INTER_AREA
             )
-        self._deol_bw_bgr = bw
-        self._deol_color_bgr = color
+        self._deol_left_bgr = left
+        self._deol_right_bgr = right
         return True
 
     def _deol_composite(self) -> Optional[np.ndarray]:
-        """Compose left=B&W, right=color split at the current slider position."""
-        bw = self._deol_bw_bgr
-        color = self._deol_color_bgr
-        if bw is None or color is None:
+        """Compose left side and right side split at the current slider position."""
+        left = self._deol_left_bgr
+        right = self._deol_right_bgr
+        if left is None or right is None:
             return None
-        h, w = bw.shape[:2]
+        h, w = left.shape[:2]
         split = max(0, min(w, int(round(w * self._deol_split / 100.0))))
-        out = color.copy()
-        out[:, :split] = bw[:, :split]
+        out = right.copy()
+        out[:, :split] = left[:, :split]
         return out
 
     def _on_deol_compare_toggle(self) -> None:
@@ -2332,7 +2424,7 @@ class ImageBrowserPanel(QWidget):
 
     def _enter_compare(self, *, reset_zoom: bool) -> bool:
         """Activate the on-image compare divider; False if pixels unavailable."""
-        if not self._deol_ensure_pair_bgr():
+        if not self._deol_ensure_compare_bgr():
             return False
         comp = self._deol_composite()
         if comp is None:
@@ -2347,6 +2439,7 @@ class ImageBrowserPanel(QWidget):
             self._reset_zoom()
         self._redraw_faces()
         self._image_label.set_compare_mode(True, self._deol_split)
+        self._deol_update_combo_visibility()
         return True
 
     def _on_compare_dragged(self, percent: int) -> None:
@@ -2377,12 +2470,17 @@ class ImageBrowserPanel(QWidget):
         Keeps the remembered mode/split so the choice persists across images.
         """
         self._deol_compare = False
-        self._deol_bw_bgr = None
-        self._deol_color_bgr = None
+        self._deol_left_bgr = None
+        self._deol_right_bgr = None
+        self._deol_group = []
+        self._deol_left_idx = 0
+        self._deol_right_idx = 1
         if hasattr(self, "_image_label"):
             self._image_label.set_compare_mode(False)
         if hasattr(self, "_btn_view_compare"):
             self._btn_view_compare.setChecked(False)
+        if hasattr(self, "_deol_left_combo"):
+            self._deol_update_combo_visibility()
 
     def _run_deoldified_sync(self, image_id: int, *, announce: bool) -> Optional[dict]:
         """Copy annotations between the current image and its deoldified pair.

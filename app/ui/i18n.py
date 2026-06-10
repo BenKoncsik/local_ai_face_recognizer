@@ -1423,6 +1423,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                        "right and the black-and-white on the left.",
                                  "hu": "Húzd a csúszkát: jobbra a színezett, balra a "
                                        "fekete-fehér változat látszik."},
+    "ibp_deol_left":            {"en": "Left:",                "hu": "Bal:"},
+    "ibp_deol_right":           {"en": "Right:",               "hu": "Jobb:"},
+    "ibp_deol_bw_label":        {"en": "Black & white",        "hu": "Fekete-fehér"},
     "ibp_deol_sync":            {"en": "Copy data from pair",  "hu": "Adatok átvétele a párról"},
     "ibp_deol_sync_tip":        {"en": "Copy faces and image data from the paired image into "
                                        "the empty one. Only runs when exactly one of the two "

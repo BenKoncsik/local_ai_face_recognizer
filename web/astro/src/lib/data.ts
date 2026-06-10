@@ -66,6 +66,12 @@ export interface PairVariant {
   color: string;
 }
 
+export interface CompareMember {
+  label: string;
+  src: string;
+  isBw: boolean;
+}
+
 export interface Photo {
   id: string;
   thumb: string;
@@ -86,6 +92,9 @@ export interface Photo {
   personIds: number[];
   persons: string[];
   pair: PairVariant | null;
+  // Full comparison group (B&W original + colorized variants). Older bundles
+  // without this key fall back to the simple two-image `pair` slider.
+  compare?: CompareMember[] | null;
   hasGps: boolean;
 }
 

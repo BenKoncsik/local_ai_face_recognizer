@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.services.deoldified_pairing_service import (
+    ComparisonMember,
     DeoldifiedPairingService,
     extract_original_filename,
     extract_original_stem,
+    extract_variant_label,
     is_deoldified_path,
 )
 
@@ -570,3 +572,92 @@ class TestSyncPairData:
             assert result is not None
             assert result["faces_copied"] == 0
             assert result["metadata_fields"] == ["note"]
+
+
+class TestExtractVariantLabel:
+    def test_artistic(self) -> None:
+        assert extract_variant_label("photo-deoldified (artistic)") == "(artistic)"
+
+    def test_stable(self) -> None:
+        assert extract_variant_label("photo-deoldified (stable)") == "(stable)"
+
+    def test_plain_deoldified(self) -> None:
+        assert extract_variant_label("photo-deoldified") == "deoldified"
+
+    def test_not_deoldified(self) -> None:
+        assert extract_variant_label("normal_photo") == ""
+
+    def test_case_insensitive(self) -> None:
+        assert extract_variant_label("photo-DEOLDIFIED (artistic)") == "(artistic)"
+
+
+class TestFindAllDeoldifiedForOriginal:
+    def test_returns_every_variant_sorted_by_label(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            s.add_all([
+                Image(file_path="/f/photo.jpg", file_hash="orig", file_mtime=0.0),
+                Image(file_path="/f/photo-deoldified (stable).jpg",
+                      file_hash="stable", file_mtime=0.0),
+                Image(file_path="/f/photo-deoldified (artistic).jpg",
+                      file_hash="artistic", file_mtime=0.0),
+                Image(file_path="/f/unrelated.jpg", file_hash="other", file_mtime=0.0),
+            ])
+
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "orig").first()
+            svc = DeoldifiedPairingService(s)
+            variants = svc.find_all_deoldified_for_original(orig)
+            assert [v.file_hash for v in variants] == ["artistic", "stable"]
+            # The single-pair wrapper still returns the first.
+            assert svc.find_deoldified_for_original(orig).file_hash == "artistic"
+
+
+class TestGetComparisonGroup:
+    def _seed(self, session) -> None:
+        from app.db.models import Image
+        session.add_all([
+            Image(file_path="/f/photo.jpg", file_hash="orig", file_mtime=0.0),
+            Image(file_path="/f/photo-deoldified (artistic).jpg",
+                  file_hash="artistic", file_mtime=0.0),
+            Image(file_path="/f/photo-deoldified (stable).jpg",
+                  file_hash="stable", file_mtime=0.0),
+        ])
+
+    def test_group_from_original_orders_bw_first(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            self._seed(s)
+        with session_scope() as s:
+            orig = s.query(Image).filter(Image.file_hash == "orig").first()
+            group = DeoldifiedPairingService(s).get_comparison_group(orig)
+            assert [m.is_bw for m in group] == [True, False, False]
+            assert [m.label for m in group] == ["", "(artistic)", "(stable)"]
+            assert all(isinstance(m, ComparisonMember) for m in group)
+
+    def test_group_from_a_colorized_variant_is_identical(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            self._seed(s)
+        with session_scope() as s:
+            stable = s.query(Image).filter(Image.file_hash == "stable").first()
+            group = DeoldifiedPairingService(s).get_comparison_group(stable)
+            assert len(group) == 3
+            assert group[0].is_bw is True
+            assert [m.label for m in group[1:]] == ["(artistic)", "(stable)"]
+
+    def test_no_group_for_lone_image(self, tmp_db) -> None:
+        from app.db.database import session_scope
+        from app.db.models import Image
+
+        with session_scope() as s:
+            s.add(Image(file_path="/f/solo.jpg", file_hash="solo", file_mtime=0.0))
+        with session_scope() as s:
+            solo = s.query(Image).filter(Image.file_hash == "solo").first()
+            assert DeoldifiedPairingService(s).get_comparison_group(solo) == []

@@ -14,8 +14,9 @@ is re-appended.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -23,6 +24,24 @@ if TYPE_CHECKING:
     from app.db.models import Image
 
 _RE_DEOLDIFIED = re.compile(r"-deoldified.*$", re.IGNORECASE)
+# Captures the text *after* the '-deoldified' token (e.g. " (artistic)"),
+# used to label one colorized variant apart from its siblings.
+_RE_VARIANT_LABEL = re.compile(r"-deoldified\s*(.*)$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ComparisonMember:
+    """One image in a comparison group (the B&W original or a colorized variant).
+
+    ``label`` is the human-facing variant tag — empty for the B&W original,
+    ``"(artistic)"`` / ``"(stable)"`` / ``"deoldified"`` for colorized images.
+    ``file_path`` is the on-disk path (already resolved when possible).
+    """
+
+    image_id: int
+    file_path: str
+    label: str
+    is_bw: bool
 
 
 def extract_original_stem(stem: str) -> Optional[str]:
@@ -57,6 +76,28 @@ def extract_original_filename(filename: str) -> Optional[str]:
     if original_stem is None:
         return None
     return original_stem + p.suffix
+
+
+def extract_variant_label(stem: str) -> str:
+    """Return the colorized-variant label from a stem, or '' if not deoldified.
+
+    The label is the text following the '-deoldified' token, with surrounding
+    whitespace trimmed.  A plain '-deoldified' suffix yields ``"deoldified"`` so
+    every colorized member has a non-empty, distinguishable label.
+
+    >>> extract_variant_label("photo-deoldified (artistic)")
+    '(artistic)'
+    >>> extract_variant_label("photo-deoldified (stable)")
+    '(stable)'
+    >>> extract_variant_label("photo-deoldified")
+    'deoldified'
+    >>> extract_variant_label("normal_photo")
+    ''
+    """
+    m = _RE_VARIANT_LABEL.search(stem)
+    if m is None:
+        return ""
+    return m.group(1).strip() or "deoldified"
 
 
 def is_deoldified_path(path: str) -> bool:
@@ -123,10 +164,23 @@ class DeoldifiedPairingService:
     def find_deoldified_for_original(
         self, original_image: "Image"
     ) -> Optional["Image"]:
-        """Return a deoldified Image for an original image, or None.
+        """Return the first deoldified Image for an original image, or None.
+
+        Convenience wrapper over :meth:`find_all_deoldified_for_original` that
+        keeps the original single-pair callers working.
+        """
+        variants = self.find_all_deoldified_for_original(original_image)
+        return variants[0] if variants else None
+
+    def find_all_deoldified_for_original(
+        self, original_image: "Image"
+    ) -> List["Image"]:
+        """Return every deoldified Image for an original, ordered by label.
 
         Matches any image — in any folder — whose filename is
-        '{original_stem}-deoldified...' (case-insensitive).
+        '{original_stem}-deoldified...' (case-insensitive).  A single B&W
+        original can have several colorized siblings ('(artistic)', '(stable)',
+        plain); all are returned, sorted by their variant label for stability.
         """
         import sqlalchemy as sa
 
@@ -162,14 +216,56 @@ class DeoldifiedPairingService:
             )
             .all()
         )
+        matches: List["Image"] = []
         for row in rows:
             if row.id == original_image.id:
                 continue
             row_stem = Path(_basename(row.file_path)).stem
             orig_stem = extract_original_stem(row_stem)
             if orig_stem is not None and orig_stem.lower() == stem.lower():
-                return row
-        return None
+                matches.append(row)
+        matches.sort(
+            key=lambda r: extract_variant_label(Path(_basename(r.file_path)).stem)
+        )
+        return matches
+
+    def get_comparison_group(self, image: "Image") -> List[ComparisonMember]:
+        """Return the full comparison group for an image: B&W original + variants.
+
+        Resolves the B&W original (``image`` itself when it is the original, or
+        its parent when ``image`` is colorized), then lists every colorized
+        sibling.  The B&W original is always first (``is_bw=True``), followed by
+        the colorized variants in label order.  Returns an empty list when no
+        group exists (no original found, or an original with no colorized
+        variants), so callers can fall back to single-image behaviour.
+        """
+        from app.services.image_library_service import resolve_image_path
+
+        if is_deoldified_path(image.file_path):
+            original = self.find_original_for_deoldified(image)
+            if original is None:
+                return []
+        else:
+            original = image
+
+        variants = self.find_all_deoldified_for_original(original)
+        if not variants:
+            return []
+
+        def _member(img: "Image", *, is_bw: bool) -> ComparisonMember:
+            resolved = resolve_image_path(img)
+            path = str(resolved) if resolved else img.file_path
+            label = (
+                "" if is_bw
+                else extract_variant_label(Path(_basename(img.file_path)).stem)
+            )
+            return ComparisonMember(
+                image_id=img.id, file_path=path, label=label, is_bw=is_bw
+            )
+
+        members = [_member(original, is_bw=True)]
+        members.extend(_member(v, is_bw=False) for v in variants)
+        return members
 
     def _find_by_basenames(
         self, candidates: list[str], *, exclude_id: Optional[int] = None

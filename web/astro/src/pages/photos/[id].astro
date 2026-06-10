@@ -39,6 +39,16 @@ const objectList = Array.from(
   new Map(objects.map((o) => [o.object_id, o])).values()
 );
 const hasPair = !!photo.pair;
+// Full comparison group: B&W original + colorized variants. Three or more
+// members enable the left/right pickers; exactly two keep the simple slider.
+const members = photo.compare ?? [];
+const hasMulti = members.length >= 3;
+const bwIndex = members.findIndex((m) => m.isBw);
+const firstColorIndex = members.findIndex((m) => !m.isBw);
+const defLeft = bwIndex >= 0 ? bwIndex : 0;
+const defRight = firstColorIndex >= 0 ? firstColorIndex : Math.min(1, members.length - 1);
+const memberLabel = (m: { isBw: boolean; label: string }) =>
+  m.isBw ? 'Fekete-fehér' : m.label ? `Színes ${m.label}` : 'Színes';
 ---
 <Layout title={photo.fileName} active="photos">
   <div class="topbar">
@@ -64,6 +74,9 @@ const hasPair = !!photo.pair;
         the resolved .src and the compare works from file:// too. */}
     {hasPair && <img id="pair-color" src={photo.pair!.color} hidden aria-hidden="true" alt="" />}
     {hasPair && <img id="pair-bw" src={photo.pair!.bw} hidden aria-hidden="true" alt="" />}
+    {hasMulti && members.map((m, i) => (
+      <img class="cmp-src" data-i={i} src={m.src} hidden aria-hidden="true" alt="" />
+    ))}
     {hasPair && (
       <div id="cmp-slider" aria-hidden="true">
         <div class="line"></div><div class="handle">⇔</div>
@@ -76,6 +89,21 @@ const hasPair = !!photo.pair;
       <button data-mode="color" class="pc active" type="button">Színes</button>
       <button data-mode="bw" class="pc" type="button">Fekete-fehér</button>
       <button data-mode="compare" class="pc" type="button">Összehasonlítás</button>
+    </div>
+  )}
+
+  {hasMulti && (
+    <div id="cmp-pick" class="pair-pick">
+      <label>Bal:
+        <select id="cmp-left">
+          {members.map((m, i) => <option value={i} selected={i === defLeft}>{memberLabel(m)}</option>)}
+        </select>
+      </label>
+      <label>Jobb:
+        <select id="cmp-right">
+          {members.map((m, i) => <option value={i} selected={i === defRight}>{memberLabel(m)}</option>)}
+        </select>
+      </label>
     </div>
   )}
 
@@ -140,6 +168,12 @@ const hasPair = !!photo.pair;
     .pc:hover { border-color: #88aaff; }
     .pc.active { background: #2f6df0; border-color: #88aaff; color: #fff; }
 
+    .pair-pick { display: none; gap: 16px; justify-content: center; align-items: center; margin: 4px 0 12px; color: #bbd; font-size: .9rem; }
+    .pair-pick.show { display: flex; }
+    .pair-pick label { display: inline-flex; align-items: center; gap: 6px; }
+    .pair-pick select { padding: 5px 8px; border: 1px solid #3e5f9c; border-radius: 6px; color: #eaf0ff; background: #1d2b45; cursor: pointer; }
+    .pair-pick select:hover { border-color: #88aaff; }
+
     .info { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 16px 0; }
     .facts { display: flex; gap: 18px; flex-wrap: wrap; color: #bbb; font-size: .9rem; }
     .facts b { color: #6b86c0; font-weight: 600; }
@@ -168,10 +202,23 @@ const hasPair = !!photo.pair;
       const base = document.getElementById('base-img') as HTMLImageElement;
       const top = document.getElementById('top-img') as HTMLImageElement | null;
       const slider = document.getElementById('cmp-slider') as HTMLElement | null;
+      const pick = document.getElementById('cmp-pick') as HTMLElement | null;
+      const leftSel = document.getElementById('cmp-left') as HTMLSelectElement | null;
+      const rightSel = document.getElementById('cmp-right') as HTMLSelectElement | null;
       // Read the *resolved* URLs from the hidden <img> sources (already made
       // page-relative by astro-relative-links), so they work over file:// too.
       const color = (document.getElementById('pair-color') as HTMLImageElement).src;
       const bw = (document.getElementById('pair-bw') as HTMLImageElement).src;
+      // Comparison-group member URLs, indexed by their data-i (empty for a
+      // simple two-image pair, which falls back to bw/color above).
+      const memberSrcs: string[] = [];
+      document.querySelectorAll('.cmp-src').forEach((el) => {
+        memberSrcs[+(el as HTMLElement).dataset.i!] = (el as HTMLImageElement).src;
+      });
+      // The slider clips `top` from the right, so `top` is the LEFT side and
+      // `base` is the RIGHT side of the divider.
+      const leftSrc = () => (leftSel && memberSrcs.length) ? memberSrcs[+leftSel.value] : bw;
+      const rightSrc = () => (rightSel && memberSrcs.length) ? memberSrcs[+rightSel.value] : color;
       let split = 50;
 
       function setSplit(pct: number) {
@@ -185,17 +232,26 @@ const hasPair = !!photo.pair;
         );
         if (mode === 'compare') {
           stage.classList.add('compare');
-          base.src = color;
-          if (top) top.src = bw;
+          base.src = rightSrc();
+          if (top) top.src = leftSrc();
+          if (pick) pick.classList.add('show');
           setSplit(50);
         } else {
           stage.classList.remove('compare');
-          base.src = mode === 'bw' ? bw : color;
+          if (pick) pick.classList.remove('show');
+          base.src = mode === 'bw' ? bw : rightSrc();
         }
       }
       document.querySelectorAll('.pc').forEach((b) =>
         b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode!))
       );
+      function onPickChange() {
+        if (!stage.classList.contains('compare')) return;
+        base.src = rightSrc();
+        if (top) top.src = leftSrc();
+      }
+      leftSel?.addEventListener('change', onPickChange);
+      rightSel?.addEventListener('change', onPickChange);
 
       let dragging = false;
       function pct(e: PointerEvent) {

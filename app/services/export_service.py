@@ -330,7 +330,8 @@ class ExportService:
 
             source = Path(img_path)
             db_image = image_by_path.get(img_path)
-            pair = self._build_astro_pair(db_image, img_path, images_root)
+            compare = self._build_astro_compare_group(db_image, img_path, images_root)
+            pair = self._pair_from_compare(compare)
             object_records: List[dict] = []
             if db_image is not None:
                 image_id_to_photo_id[db_image.id] = photo_id
@@ -358,6 +359,7 @@ class ExportService:
                     "personIds": person_ids,
                     "persons": persons_in_image,
                     "pair": pair,
+                    "compare": compare,
                     "hasGps": db_image is not None and _effective_image_gps(db_image) is not None,
                 }
             )
@@ -382,6 +384,13 @@ class ExportService:
             tour["thumbnailPath"] = _no_slash(variants["thumb"])
             if pair:
                 tour["pair"] = {"bw": _no_slash(pair["bw"]), "color": _no_slash(pair["color"])}
+            if compare:
+                # Whole comparison group for the slideshow picker (root-relative,
+                # no leading slash like the other slideshow.html image paths).
+                tour["compare"] = [
+                    {"label": m["label"], "src": _no_slash(m["src"]), "isBw": m["isBw"]}
+                    for m in compare
+                ]
             tour_records.append(tour)
 
         _report(74, "Személyek feldolgozása…")
@@ -632,49 +641,56 @@ class ExportService:
             })
         return records
 
-    def _build_astro_pair(
+    def _build_astro_compare_group(
         self,
         db_image: Optional[Image],
         img_path: str,
         images_root: Path,
-    ) -> Optional[dict]:
-        """Export medium variants of a deoldified B&W/colour pair, if present.
+    ) -> Optional[List[dict]]:
+        """Export medium variants of the whole comparison group, if present.
 
-        Reuses :class:`DeoldifiedPairingService` (filename-based, folder
-        independent) to find the partner, then emits a medium-size variant of
-        each side under the Astro image tree.
+        Reuses :class:`DeoldifiedPairingService.get_comparison_group`
+        (filename-based, folder independent): the B&W original plus every
+        colorized variant.  Each member is exported as a medium-size variant and
+        returned as ``{"label", "src", "isBw"}``.  Returns None when fewer than
+        two members exist, so the photo simply has no compare UI.
         """
-        from app.services.deoldified_pairing_service import (
-            DeoldifiedPairingService,
-            is_deoldified_path,
-        )
-        from app.services.image_library_service import resolve_image_path
+        from app.services.deoldified_pairing_service import DeoldifiedPairingService
 
         if db_image is None:
             return None
-        svc = DeoldifiedPairingService(self._session)
-        current_is_color = is_deoldified_path(img_path)
-        partner = (
-            svc.find_original_for_deoldified(db_image)
-            if current_is_color
-            else svc.find_deoldified_for_original(db_image)
-        )
-        if partner is None:
+        group = DeoldifiedPairingService(self._session).get_comparison_group(db_image)
+        if len(group) < 2:
             return None
-        resolved = resolve_image_path(partner)
-        partner_disk = str(resolved) if resolved else partner.file_path
 
-        this_med = _export_one_variant(
-            load_image_bgr(img_path), _astro_image_id(img_path), images_root,
-            "medium", ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
-        partner_med = _export_one_variant(
-            load_image_bgr(partner_disk), _astro_image_id(partner.file_path), images_root,
-            "medium", ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
-        if this_med is None or partner_med is None:
+        members: List[dict] = []
+        for m in group:
+            med = _export_one_variant(
+                load_image_bgr(m.file_path), _astro_image_id(m.file_path),
+                images_root, "medium", ASTRO_MEDIUM_EDGE, ASTRO_MEDIUM_QUALITY)
+            if med is None:
+                continue
+            members.append({"label": m.label, "src": med[0], "isBw": m.is_bw})
+        # Need both a B&W side and at least one colorized side to compare.
+        if len(members) < 2 or not any(x["isBw"] for x in members):
             return None
-        if current_is_color:
-            return {"color": this_med[0], "bw": partner_med[0]}
-        return {"color": partner_med[0], "bw": this_med[0]}
+        return members
+
+    @staticmethod
+    def _pair_from_compare(compare: Optional[List[dict]]) -> Optional[dict]:
+        """Derive the legacy ``{bw, color}`` pair from a comparison group.
+
+        Used by the slideshow/tour views, which keep the simple two-image
+        before/after slider.  ``bw`` is the original, ``color`` the first
+        colorized variant.
+        """
+        if not compare:
+            return None
+        bw = next((m["src"] for m in compare if m["isBw"]), None)
+        color = next((m["src"] for m in compare if not m["isBw"]), None)
+        if bw is None or color is None:
+            return None
+        return {"bw": bw, "color": color}
 
     # ------------------------------------------------------------------
     # Collage HTML export
@@ -1790,6 +1806,10 @@ _TOUR_HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="tour-slider-line"></div>
           <div class="tour-slider-handle">⇔</div>
         </div>
+        <div id="tour-pick" aria-hidden="true">
+          <label>Bal <select id="tour-left"></select></label>
+          <label>Jobb <select id="tour-right"></select></label>
+        </div>
         <button id="nav-prev" class="nav-zone nav-prev" type="button" aria-label="Előző kép">‹</button>
         <button id="nav-next" class="nav-zone nav-next" type="button" aria-label="Következő kép">›</button>
       </div>
@@ -1920,6 +1940,16 @@ main.map-collapsed #side{position:absolute;top:14px;right:14px;width:auto;z-inde
              transform:translateX(-50%);cursor:ew-resize;z-index:46;
              align-items:center;justify-content:center;touch-action:none}
 .stage-media.compare #tour-slider{display:flex}
+/* Left/right pickers — shown only when the image has 3+ related variants.
+   Anchored inside #stage-media so they stay visible in fullscreen too. */
+#tour-pick{display:none;position:absolute;top:8px;left:50%;transform:translateX(-50%);
+           z-index:47;gap:10px;padding:5px 9px;border-radius:8px;
+           background:rgba(17,17,17,.82);box-shadow:0 1px 6px rgba(0,0,0,.6)}
+.stage-media.has-pick #tour-pick{display:flex}
+#tour-pick label{display:inline-flex;align-items:center;gap:5px;color:#dbe6ff;
+           font-size:12px;white-space:nowrap}
+#tour-pick select{padding:3px 6px;border:1px solid #3e5f9c;border-radius:5px;
+           color:#eaf0ff;background:#1d2b45;cursor:pointer;font-size:12px}
 #tour-slider .tour-slider-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
              transform:translateX(-50%);background:#fff;box-shadow:0 0 4px rgba(0,0,0,.85)}
 #tour-slider .tour-slider-handle{width:36px;height:36px;border-radius:50%;background:#fff;
@@ -2072,9 +2102,13 @@ let map = null, marker = null, mapInit = false;
 
 const $ = id => document.getElementById(id);
 let tourSplit = 50;
+// Members of the current photo's comparison group (B&W + colorized variants)
+// when the left/right picker is active; empty for a simple two-image pair.
+let compareMembers = [];
 const els = {
   count: $('tour-count'), stage: $('stage'), media: $('stage-media'),
   img: $('tour-img'), imgTop: $('tour-img-top'), slider: $('tour-slider'),
+  leftSel: $('tour-left'), rightSel: $('tour-right'),
   overlay: $('tour-overlay'), empty: $('empty-msg'),
   info: $('info'), position: $('position'),
   prev: $('btn-prev'), next: $('btn-next'), play: $('btn-play'),
@@ -2177,14 +2211,57 @@ function setTourSplit(pct){
   els.slider.style.left = tourSplit.toFixed(3) + '%';
 }
 
+function memberLabel(m){
+  return m.isBw ? 'Fekete-fehér' : (m.label ? 'Színes ' + m.label : 'Színes');
+}
+
+function fillCompareSelect(select, members, selected){
+  select.innerHTML = '';
+  members.forEach((m, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = memberLabel(m);
+    if(i === selected) opt.selected = true;
+    select.appendChild(opt);
+  });
+}
+
+// Drive the two image layers from the picked left/right members. `imgTop` is
+// the LEFT side (clipped from the right by the slider); `img` is the RIGHT.
+function applyCompareSides(){
+  if(!compareMembers.length) return;
+  const last = compareMembers.length - 1;
+  const li = Math.min(last, Math.max(0, parseInt(els.leftSel.value, 10) || 0));
+  const ri = Math.min(last, Math.max(0, parseInt(els.rightSel.value, 10) || 0));
+  els.imgTop.src = compareMembers[li].src;
+  els.img.src = compareMembers[ri].src;
+}
+
 function setupPairMedia(record){
+  const members = (record && record.compare) || null;
   const pair = record && record.pair;
-  if(pair){
+  if(members && members.length >= 3){
+    // Three+ members (B&W + several colorized variants): show the left/right
+    // picker so any two can be compared, exactly like the gallery detail page.
+    compareMembers = members;
+    const bwIndex = members.findIndex(m => m.isBw);
+    const firstColor = members.findIndex(m => !m.isBw);
+    fillCompareSelect(els.leftSel, members, bwIndex >= 0 ? bwIndex : 0);
+    fillCompareSelect(els.rightSel, members,
+      firstColor >= 0 ? firstColor : Math.min(1, members.length - 1));
+    els.media.classList.add('compare', 'has-pick');
+    applyCompareSides();
+    setTourSplit(50);
+  } else if(pair){
+    // Simple two-image pair → slider only, no picker.
+    compareMembers = [];
+    els.media.classList.remove('has-pick');
     els.media.classList.add('compare');
     els.imgTop.src = pair.bw;      // B&W layer clipped on the left, color base on the right
     setTourSplit(50);
   } else {
-    els.media.classList.remove('compare');
+    compareMembers = [];
+    els.media.classList.remove('compare', 'has-pick');
     els.imgTop.src = '';
   }
 }
@@ -2535,8 +2612,8 @@ els.stage.addEventListener('touchend', e => {
   }
   els.media.addEventListener('pointerdown', e => {
     if(!els.media.classList.contains('compare')) return;
-    // Clicking a face/object opens its panel — don't move the slider there.
-    if(e.target.closest && e.target.closest('.tb, .tob, .tobp')) return;
+    // Clicking a face/object panel or the compare picker — don't move the slider.
+    if(e.target.closest && e.target.closest('.tb, .tob, .tobp, #tour-pick')) return;
     dragging = true;
     setTourSplit(pctFromEvent(e));
     e.preventDefault();
@@ -2556,6 +2633,8 @@ els.speed.addEventListener('change', () => {
   speedMs = parseInt(els.speed.value, 10) || 4000;
   if(playing) startPlay();
 });
+els.leftSel.addEventListener('change', applyCompareSides);
+els.rightSel.addEventListener('change', applyCompareSides);
 els.full.addEventListener('click', toggleFullscreen);
 els.ppClose.addEventListener('click', closePersonPanel);
 document.querySelectorAll('.label-modes .lm').forEach(b =>
