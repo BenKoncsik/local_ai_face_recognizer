@@ -934,6 +934,37 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_ctx_ignore_forever": {"en": "Ignore forever",   "hu": "Kizárás végleg"},
 
     # ── Re-recognition (image-browser context menu + dialogs) ───────────────
+    # --- Reviewable auto-merge from Unknown ---
+    "amerge_accept":          {"en": "Accept", "hu": "Elfogadás"},
+    "amerge_move":            {"en": "Move to another person", "hu": "Áthelyezés más személyhez"},
+    "amerge_delete":          {"en": "Delete face", "hu": "Arc törlése"},
+    "amerge_pending_badge":   {"en": "Auto-merged — needs review",
+                               "hu": "Automatikus összevonás — ellenőrizendő"},
+    "amerge_notice_title":    {"en": "Faces moved for review",
+                               "hu": "Arcok áthelyezve ellenőrzésre"},
+    "amerge_notice_msg":      {"en": "The other faces of {source} were moved to "
+                                     "{target}.\nAuto-confirmed: {auto}\n"
+                                     "Awaiting review: {pending}\n\n"
+                                     "Review them on the face boxes or in "
+                                     "“Auto-merges to review”.",
+                               "hu": "A(z) {source} többi arca áthelyezve ide: "
+                                     "{target}.\nAutomatikusan elfogadva: {auto}\n"
+                                     "Ellenőrizendő: {pending}\n\n"
+                                     "Ellenőrizd a kereteken vagy az "
+                                     "„Ellenőrizendő összevonások” ablakban."},
+    "amerge_review_menu":     {"en": "Auto-merges to review…",
+                               "hu": "Ellenőrizendő összevonások…"},
+    "amerge_review_title":    {"en": "Auto-merges to review",
+                               "hu": "Ellenőrizendő automatikus összevonások"},
+    "amerge_review_empty":    {"en": "No auto-merged faces are awaiting review.",
+                               "hu": "Nincs ellenőrizendő automatikusan összevont arc."},
+    "amerge_review_count":    {"en": "{n} face(s) awaiting review",
+                               "hu": "{n} ellenőrizendő arc"},
+    "amerge_accept_all":      {"en": "Accept all", "hu": "Mind elfogadása"},
+    "amerge_col_source":      {"en": "From: {name}", "hu": "Eredeti: {name}"},
+    "amerge_close":           {"en": "Close", "hu": "Bezárás"},
+    "amerge_ctx_accept":      {"en": "Accept auto-merge", "hu": "Összevonás elfogadása"},
+    "amerge_ctx_move":        {"en": "Move auto-merged face…", "hu": "Összevont arc áthelyezése…"},
     "rerec_ctx_one":          {"en": "Re-recognize faces",
                                "hu": "Arcok újrafelismerése"},
     "rerec_ctx_many":         {"en": "Re-recognize selected images ({n})",

@@ -752,6 +752,8 @@ class PreviewPanel(QWidget):
     face_diagnostics_requested     = Signal(int)
     face_set_thumbnail_requested   = Signal(int)   # face_id
     face_clear_thumbnail_requested = Signal(int)   # person_id
+    face_accept_auto_merge         = Signal(int)   # face_id (confirm pending)
+    face_move_auto_merge           = Signal(int)   # face_id (re-assign pending)
     object_create_requested        = Signal(int, int, int)  # image_id, x, y
     prev_image_requested           = Signal()
     next_image_requested           = Signal()
@@ -1169,6 +1171,7 @@ class PreviewPanel(QWidget):
         gx: int,
         gy: int,
         person_name: Optional[str] = None,
+        is_pending: bool = False,
     ) -> None:
         """Show the face context menu at global position (gx, gy)."""
         if self._selected_face_id != face_id:
@@ -1186,6 +1189,13 @@ class PreviewPanel(QWidget):
         title.setEnabled(False)
         menu.addSeparator()
 
+        accept_action = None
+        move_action = None
+        if is_pending:
+            accept_action = menu.addAction(f"✓  {t('amerge_ctx_accept')}")
+            move_action   = menu.addAction(f"⤴  {t('amerge_ctx_move')}")
+            menu.addSeparator()
+
         assign_action = menu.addAction(f"👤  {t('assign_to_person')}")
         edit_action   = menu.addAction(f"✏  {t('modify_selection')}")
         delete_action = menu.addAction(f"🗑  {t('delete_selection')}")
@@ -1200,7 +1210,11 @@ class PreviewPanel(QWidget):
             clear_thumb_action = menu.addAction(f"↩  {t('clear_person_thumbnail')}")
 
         chosen = menu.exec(QPoint(gx, gy))
-        if chosen == assign_action:
+        if accept_action is not None and chosen == accept_action:
+            self.face_accept_auto_merge.emit(face_id)
+        elif move_action is not None and chosen == move_action:
+            self.face_move_auto_merge.emit(face_id)
+        elif chosen == assign_action:
             self.face_assign_requested.emit(face_id)
         elif chosen == edit_action:
             self._start_face_edit(face_id)

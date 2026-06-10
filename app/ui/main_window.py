@@ -40,6 +40,7 @@ from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
 from app.services.identity_service import BulkReassignResult, IdentityService
+from app.services.unknown_merge_service import UnknownMergeService
 from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
@@ -246,6 +247,10 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.clicked.connect(self._on_show_suggestions)
         tb.addWidget(self._suggestions_btn)
 
+        self._amerge_btn = QPushButton()
+        self._amerge_btn.clicked.connect(self._on_open_amerge_review)
+        tb.addWidget(self._amerge_btn)
+
         tb.addSeparator()
 
         self._settings_btn = QPushButton()
@@ -331,6 +336,12 @@ class MainWindow(QMainWindow):
         )
         self._preview_panel.face_clear_thumbnail_requested.connect(
             self._on_face_clear_thumbnail
+        )
+        self._preview_panel.face_accept_auto_merge.connect(
+            self._on_face_accept_auto_merge
+        )
+        self._preview_panel.face_move_auto_merge.connect(
+            self._on_face_move_auto_merge
         )
         self._preview_panel.object_create_requested.connect(
             self._on_preview_object_create
@@ -648,6 +659,7 @@ class MainWindow(QMainWindow):
         self._no_face_btn.setText(t("view_no_face"))
         self._suggestions_btn.setText(t("suggestions_btn"))
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
+        self._refresh_amerge_btn()
         self._settings_btn.setText(t("settings"))
         if hasattr(self, "_recording_controls"):
             self._recording_controls.retranslate()
@@ -1059,6 +1071,34 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         self._refresh_match_chip()
+
+    def _refresh_amerge_btn(self) -> None:
+        """Label the auto-merge review button with the pending count; hide if 0."""
+        if not hasattr(self, "_amerge_btn"):
+            return
+        try:
+            with session_scope() as session:
+                n = UnknownMergeService(session).count_pending()
+        except Exception:  # noqa: BLE001
+            n = 0
+        self._amerge_btn.setText(
+            f"{t('amerge_review_menu')} ({n})" if n else t("amerge_review_menu")
+        )
+        self._amerge_btn.setVisible(n > 0)
+
+    @Slot()
+    def _on_open_amerge_review(self) -> None:
+        from app.ui.dialogs.auto_merge_review_dialog import AutoMergeReviewDialog
+
+        dlg = AutoMergeReviewDialog(
+            recognition_config=self._config.recognition, parent=self
+        )
+        dlg.applied.connect(self._refresh_persons)
+        dlg.applied.connect(self._image_browser._reload_current_face_data)
+        dlg.exec()
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+        self._refresh_amerge_btn()
 
     @Slot()
     def _on_find_overlapping_unknown_faces(self) -> None:
@@ -2251,7 +2291,29 @@ class MainWindow(QMainWindow):
         # Ensure the preview panel has the image loaded so "Edit bbox" works.
         self._show_face_in_preview(face_id)
         person_name = self._cluster_panel.get_face_person_name(face_id)
-        self._preview_panel.show_face_context_menu(face_id, gx, gy, person_name=person_name)
+        with session_scope() as session:
+            f = session.get(Face, face_id)
+            is_pending = f is not None and f.auto_merge_review_status == "pending"
+        self._preview_panel.show_face_context_menu(
+            face_id, gx, gy, person_name=person_name, is_pending=is_pending
+        )
+
+    @Slot(int)
+    def _on_face_accept_auto_merge(self, face_id: int) -> None:
+        """Confirm a pending auto-merged face from the face-view context menu."""
+        with session_scope() as session:
+            UnknownMergeService(session).confirm_auto_merge(face_id)
+        if self._current_person_id:
+            self._on_person_selected(self._current_person_id)
+        self._show_face_in_preview(face_id)
+        self._image_browser._reload_current_face_data()
+
+    @Slot(int)
+    def _on_face_move_auto_merge(self, face_id: int) -> None:
+        """Re-assign a pending face to another person (clears the pending flag)."""
+        self._current_face_id = face_id
+        # Reuse the standard reassign flow; reassign_face clears the markers.
+        self._on_reassign_face()
 
     @Slot(int)
     def _on_preview_face_selected(self, face_id: int) -> None:
@@ -3464,6 +3526,7 @@ class MainWindow(QMainWindow):
         # immediately when visible, otherwise lazily on next show.
         if hasattr(self, "_persons_panel"):
             self._persons_panel.mark_stale()
+        self._refresh_amerge_btn()
         log.debug("Sidebar refreshed: %d person(s)", len(persons))
 
     @Slot(int)

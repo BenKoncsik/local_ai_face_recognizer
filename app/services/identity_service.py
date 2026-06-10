@@ -440,6 +440,8 @@ class IdentityService:
         face.assignment_source = "manual"
         face.assignment_confidence = None
         face.assigned_at = _utcnow_naive()
+        # A manual reassignment overrides any pending auto-merge review state.
+        self._clear_auto_merge_markers(face)
         log.debug("Assignment after: %s", face_debug_state(face, face.crop_path))
         self._session.commit()
         log.info(
@@ -511,6 +513,8 @@ class IdentityService:
             face.assignment_source = "manual"
             face.assignment_confidence = None
             face.assigned_at = now
+            # A manual bulk reassignment overrides any pending auto-merge state.
+            self._clear_auto_merge_markers(face)
 
         if not result.snapshots:
             # No-op move (every face skipped); avoid an empty cleanup pass.
@@ -589,6 +593,22 @@ class IdentityService:
     def _snapshot_person(self, person: Person) -> Dict[str, Any]:
         """Capture a person's column values for later recreation (undo)."""
         return {col: getattr(person, col) for col in _PERSON_SNAPSHOT_COLUMNS}
+
+    @staticmethod
+    def _clear_auto_merge_markers(face: Face) -> None:
+        """Drop the reviewable auto-merge-from-Unknown markers from a face.
+
+        Called whenever a face is *manually* (re)assigned: a deliberate user
+        move supersedes the "needs review" state stamped by
+        :class:`UnknownMergeService`, so the face becomes a plain assignment.
+        """
+        if not (face.auto_merged_from_unknown or face.auto_merge_review_status):
+            return
+        face.auto_merged_from_unknown = False
+        face.auto_merge_review_status = None
+        face.auto_merge_source_person_id = None
+        face.auto_merge_confirmed_at = None
+        face.auto_merge_confirmed_by_user = False
 
     def remove_face_from_cluster(self, face_id: int) -> Face:
         """Un-assign a face from its current person (makes it unclustered)."""

@@ -28,6 +28,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QThreadPoo
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QCursor,
     QIcon,
     QImage,
     QPainter,
@@ -35,6 +36,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -70,6 +72,7 @@ from app.db.database import session_scope
 from app.db.models import Face, Image, Person, Place
 from app.services.family_service import FamilyImageSearchCriteria, FamilyService
 from app.services.identity_service import IdentityService
+from app.services.unknown_merge_service import UnknownMergeService
 from app.services.image_browser_service import (
     FolderSummary,
     ImageBrowserService,
@@ -233,6 +236,11 @@ def _get_pil_font(size: int):
     return ImageFont.load_default()
 
 
+# Amber highlight for faces auto-merged from an Unknown cluster, awaiting
+# review.  RGB for PIL labels; the BGR sibling is derived where boxes are drawn.
+_PENDING_RGB = (255, 176, 32)
+
+
 def _draw_faces(
     img_bgr: np.ndarray,
     faces: List[_FaceData],
@@ -241,11 +249,13 @@ def _draw_faces(
     bbox_opacity: float = 1.0,
     show_labels: bool = True,
     label_opacity: float = 1.0,
+    pending_ids: Optional[set] = None,
 ) -> np.ndarray:
     from PIL import Image as PILImage, ImageDraw
 
     from app.ui.helpers.label_placement import FaceLabel, place_labels
 
+    pending_ids = pending_ids or set()
     img = img_bgr.copy()
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     pil_img = PILImage.fromarray(img_rgb)
@@ -258,8 +268,13 @@ def _draw_faces(
     face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
     for face_id, x, y, w, h, person_name, _ in faces:
         selected = face_id == selected_id
-        color_rgb = (50, 220, 50) if selected else (180, 180, 180)
-        name = person_name or "?"
+        if selected:
+            color_rgb = (50, 220, 50)
+        elif face_id in pending_ids:
+            color_rgb = _PENDING_RGB
+        else:
+            color_rgb = (180, 180, 180)
+        name = ("⚠ " + person_name) if (face_id in pending_ids and person_name) else (person_name or "?")
         label_font_size = font_size
         font = _get_pil_font(label_font_size)
 
@@ -327,20 +342,47 @@ def _draw_faces(
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     # --- Phase 4: render bounding boxes ---
+    # BGR amber for pending boxes (reversed _PENDING_RGB).
+    pending_bgr = (_PENDING_RGB[2], _PENDING_RGB[1], _PENDING_RGB[0])
+
+    def _box_color(face_id: int, selected: bool):
+        if selected:
+            return (50, 220, 50)
+        if face_id in pending_ids:
+            return pending_bgr
+        return (180, 180, 180)
+
+    def _draw_pending_badge(canvas, x, y):
+        """Small '?' marker at the top-left corner of a pending face box."""
+        r = max(10, int(min(image_w, image_h) * 0.012))
+        cx, cy = x + r, y + r
+        cv2.circle(canvas, (cx, cy), r, pending_bgr, -1)
+        cv2.circle(canvas, (cx, cy), r, (30, 30, 30), 1)
+        scale = r / 11.0
+        cv2.putText(
+            canvas, "?", (cx - int(5 * scale), cy + int(6 * scale)),
+            cv2.FONT_HERSHEY_SIMPLEX, scale, (30, 30, 30), max(1, int(scale * 2)),
+            cv2.LINE_AA,
+        )
+
     if show_bboxes and bbox_opacity > 0.0:
         if bbox_opacity >= 0.99:
             for face_id, x, y, w, h, _, _ in faces:
                 selected = face_id == selected_id
-                color = (50, 220, 50) if selected else (180, 180, 180)
+                color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
                 cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
+                if face_id in pending_ids and not selected:
+                    _draw_pending_badge(img, x, y)
         else:
             overlay_cv = img.copy()
             for face_id, x, y, w, h, _, _ in faces:
                 selected = face_id == selected_id
-                color = (50, 220, 50) if selected else (180, 180, 180)
+                color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
                 cv2.rectangle(overlay_cv, (x, y), (x + w, y + h), color, thickness)
+                if face_id in pending_ids and not selected:
+                    _draw_pending_badge(overlay_cv, x, y)
             cv2.addWeighted(overlay_cv, bbox_opacity, img, 1.0 - bbox_opacity, 0, img)
 
     return img
@@ -370,6 +412,53 @@ class _FocusLineEdit(QLineEdit):
             self.escape_pressed.emit()
         else:
             super().keyPressEvent(event)
+
+
+class _PendingActionBar(QFrame):
+    """Floating quick-action bar shown over an auto-merged (pending) face box.
+
+    Three actions, mirroring the review dialog: confirm (✓), move to another
+    person (⤴) and delete the face + its box (🗑).
+    """
+
+    accept_requested = Signal()
+    move_requested = Signal()
+    delete_requested = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet(
+            "_PendingActionBar { background: #2a2118; border: 1px solid #ffb020;"
+            " border-radius: 4px; }"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(4)
+
+        def _btn(text: str, tip: str, color: str) -> QPushButton:
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setFixedHeight(24)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{ color: {color}; font-size: 13px; font-weight: bold;"
+                " background: #3a3127; border: 1px solid #5a4a30; border-radius: 3px;"
+                " padding: 1px 8px; }"
+                "QPushButton:hover { background: #4a3d2a; }"
+            )
+            return b
+
+        self._accept_btn = _btn("✓", t("amerge_accept"), "#7CFC7C")
+        self._move_btn = _btn("⤴", t("amerge_move"), "#FFD27A")
+        self._delete_btn = _btn("🗑", t("amerge_delete"), "#FF8A8A")
+        self._accept_btn.clicked.connect(self.accept_requested)
+        self._move_btn.clicked.connect(self.move_requested)
+        self._delete_btn.clicked.connect(self.delete_requested)
+        layout.addWidget(self._accept_btn)
+        layout.addWidget(self._move_btn)
+        layout.addWidget(self._delete_btn)
+        self.adjustSize()
 
 
 class _InlineFaceEditor(QFrame):
@@ -707,6 +796,10 @@ class _DrawableImageLabel(QLabel):
         self._start = None
         self._end = None
         self.setStyleSheet(self._BORDER_EDIT)
+        # Show the correct cursor for the current pointer position right away
+        # (over a handle → resize/move, otherwise cross) instead of waiting for
+        # the next move event.
+        self._refresh_hover_cursor()
         self.update()
 
     def cancel_interactive_edit(self) -> None:
@@ -739,8 +832,10 @@ class _DrawableImageLabel(QLabel):
         self._imode_drag_start_bbox = None
         self.setStyleSheet(self._BORDER_NORMAL)
         # Reset the cursor: during edit mode it may have been changed to a
-        # resize/move shape by _update_edit_cursor(); restore the panel default.
-        self.setCursor(Qt.CrossCursor)
+        # resize/move shape by _update_edit_cursor(); restore the panel default
+        # and drain any override cursor. _imode is already False above so this
+        # lands on the plain cross.
+        self._reset_cursor_state()
         self.update()
         if not silent:
             if commit and bbox is not None:
@@ -969,7 +1064,7 @@ class _DrawableImageLabel(QLabel):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MiddleButton:
             self._mid_start = None
-            self.setCursor(Qt.CrossCursor if not self._imode else Qt.ArrowCursor)
+            self._reset_cursor_state()
             return
         if event.button() != Qt.LeftButton:
             return
@@ -992,6 +1087,9 @@ class _DrawableImageLabel(QLabel):
                 nw, nh = new_bbox[2], new_bbox[3]
                 self._last_op_type = "move" if (ow == nw and oh == nh) else "resize"
                 self.bbox_edit_committed.emit(*new_bbox)
+            # Drag finished: the resize/move cursor set during the drag must
+            # not stay frozen. Re-evaluate hover for the (possibly moved) box.
+            self._reset_cursor_state()
             self.update()
             return
 
@@ -1027,6 +1125,69 @@ class _DrawableImageLabel(QLabel):
             self.setCursor(cursors[handle])
         else:
             self.setCursor(Qt.CrossCursor)
+
+    # ── Cursor reset ────────────────────────────────────────────────────
+
+    def _refresh_hover_cursor(self) -> None:
+        """Set the widget cursor based on what is under the pointer *now*.
+
+        After a drag/move/resize ends the active interaction cursor (e.g. a
+        diagonal resize arrow) must not stay frozen on screen. This recomputes
+        the correct cursor for the current mouse position and mode instead of
+        waiting for the next ``mouseMoveEvent``.
+        """
+        # While in interactive-edit mode, show a handle cursor if the pointer
+        # is over a handle, otherwise the plain cross.
+        if self._imode and self._imode_handle is None:
+            local = self.mapFromGlobal(QCursor.pos())
+            handle = self._hit_test_handle(local.x(), local.y())
+            self._update_edit_cursor(handle)
+            return
+        if self._imode:
+            # An active drag is in progress — leave the drag cursor as-is.
+            return
+        # Compare-divider hover is handled live in mouseMoveEvent; fall back
+        # to the panel default cross cursor everywhere else.
+        self.setCursor(Qt.CrossCursor)
+
+    def _reset_cursor_state(self) -> None:
+        """Robustly restore the cursor after any interaction finishes.
+
+        Clears stale drag/move/resize handle state, drains any application
+        override cursors that may have been left active, and re-evaluates the
+        widget cursor for the current pointer position. Safe to call from any
+        exit path (release, commit, cancel, ESC, leave, view refresh).
+        """
+        # Clear interaction flags so nothing stays "grabbed".
+        self._imode_handle = None
+        self._imode_drag_start = None
+        self._imode_drag_start_bbox = None
+        self._mid_start = None
+        self._compare_dragging = False
+
+        # Balance any QApplication.setOverrideCursor() calls (e.g. a busy
+        # cursor pushed during a long save). Drain until the stack is empty so
+        # a missed restore elsewhere cannot leave the cursor stuck.
+        app = QApplication.instance()
+        if app is not None:
+            guard = 0
+            while app.overrideCursor() is not None and guard < 16:
+                QApplication.restoreOverrideCursor()
+                guard += 1
+
+        self._refresh_hover_cursor()
+
+    def leaveEvent(self, event) -> None:
+        """Reset the cursor when the pointer leaves the image view.
+
+        Without this a resize/move cursor set mid-drag could remain visible if
+        the pointer slipped out of the widget. Skips reset while a drag is
+        genuinely in progress so the active gesture is not disturbed.
+        """
+        if self._imode_handle is None and not self._compare_dragging \
+                and self._mid_start is None:
+            self._reset_cursor_state()
+        super().leaveEvent(event)
 
     # ── Key events ──────────────────────────────────────────────────────
 
@@ -1282,6 +1443,9 @@ class ImageBrowserPanel(QWidget):
         self._current_path: str = ""
         self._detection_done: bool = False
         self._face_data: List[_FaceData] = []
+        # Face ids on the current image that are auto-merged-from-Unknown and
+        # awaiting review (drives the amber overlay + the floating action bar).
+        self._pending_face_ids: set[int] = set()
         # Object occurrence markers for the current image, with object_id:
         # (occ_id, object_id, x, y, name, bbox_or_None)
         self._object_marker_data: List[tuple] = []
@@ -1716,6 +1880,13 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.assign_requested.connect(self._on_inline_assign)
         self._inline_editor.create_requested.connect(self._on_inline_create)
         self._inline_editor.closed.connect(self._hide_inline_editor)
+
+        # Floating quick-action bar for pending (auto-merged) faces.
+        self._pending_bar = _PendingActionBar(self._image_label)
+        self._pending_bar.hide()
+        self._pending_bar.accept_requested.connect(self._on_pending_accept)
+        self._pending_bar.move_requested.connect(self._on_pending_move)
+        self._pending_bar.delete_requested.connect(self._on_pending_delete)
 
         preview_splitter.addWidget(image_widget)
 
@@ -2570,6 +2741,10 @@ class ImageBrowserPanel(QWidget):
                     )
             svc = ImageBrowserService(session)
             self._face_data = svc.get_image_faces(source_id)
+            from app.services.unknown_merge_service import UnknownMergeService
+            self._pending_face_ids = set(
+                UnknownMergeService(session).pending_face_ids(source_id)
+            )
 
     def _reload_current_face_data(self) -> None:
         """Reload face assignments for the current image and refresh the UI."""
@@ -4539,9 +4714,11 @@ class ImageBrowserPanel(QWidget):
             bbox_opacity=self._bbox_opacity if self._show_bboxes else 0.0,
             show_labels=self._show_labels,
             label_opacity=self._label_opacity if self._show_labels else 0.0,
+            pending_ids=self._pending_face_ids,
         )
         self._full_pixmap = _bgr_to_qpixmap(annotated)
         self._image_label.set_source_pixmap(self._full_pixmap)
+        self._position_pending_action_bar()
 
     # ──────────────────────────────────────────────────────────────────
     # Zoom / pan
@@ -4569,6 +4746,7 @@ class ImageBrowserPanel(QWidget):
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
         self._hide_inline_editor()
+        self._position_pending_action_bar()
 
     def _on_pan_moved(self, dx: int, dy: int) -> None:
         self._pan_x += dx
@@ -4576,6 +4754,7 @@ class ImageBrowserPanel(QWidget):
         self._clamp_pan()
         self._image_label.set_zoom_pan(self._zoom, self._pan_x, self._pan_y)
         self._hide_inline_editor()
+        self._position_pending_action_bar()
 
     def _clamp_pan(self) -> None:
         if self._full_pixmap is None:
@@ -4638,6 +4817,8 @@ class ImageBrowserPanel(QWidget):
         if entry is None:
             log.debug("_show_inline_editor: face_id=%d not found in face_data", face_id)
             return
+        # The inline person picker and the pending action bar must not overlap.
+        self._pending_bar.hide()
         _, bx, by, bw, bh, person_name, person_id = entry
 
         self._inline_editor.populate(
@@ -4697,6 +4878,96 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.hide()
         self._inline_editor_face_id = None
 
+    # ──────────────────────────────────────────────────────────────────
+    # Pending (auto-merged-from-Unknown) review actions
+    # ──────────────────────────────────────────────────────────────────
+
+    def _position_pending_action_bar(self) -> None:
+        """Show the quick-action bar over the selected pending face, else hide it."""
+        fid = self._selected_face_id
+        if (
+            fid is None
+            or fid not in self._pending_face_ids
+            or self._full_pixmap is None
+        ):
+            self._pending_bar.hide()
+            return
+        entry = next((f for f in self._face_data if f[0] == fid), None)
+        if entry is None:
+            self._pending_bar.hide()
+            return
+        _, bx, by, bw, bh, _, _ = entry
+        self._pending_bar.adjustSize()
+        bar_w = self._pending_bar.width()
+        bar_h = self._pending_bar.height()
+        cr = self._image_label.contentsRect()
+
+        lx, ly_top = self._image_to_label(bx, by)
+        _, ly_bot = self._image_to_label(bx, by + bh)
+        # Prefer just above the box; fall back to just below, then clamp.
+        if ly_top - bar_h - 6 >= 0:
+            pos_y = ly_top - bar_h - 6
+        elif ly_bot + bar_h + 6 <= cr.height():
+            pos_y = ly_bot + 6
+        else:
+            pos_y = max(2, ly_top + 2)
+        pos_x = max(2, min(lx, cr.width() - bar_w - 2))
+        self._pending_bar.move(pos_x, pos_y)
+        self._pending_bar.show()
+        self._pending_bar.raise_()
+
+    def _notify_unknown_merge(self, result) -> None:
+        """Inform the user when an assignment scattered an Unknown cluster."""
+        if result is None or not getattr(result, "was_unknown_cluster", False):
+            return
+        moved = result.n_pending + result.n_auto_confirmed
+        if moved <= 0:
+            return
+        QMessageBox.information(
+            self,
+            t("amerge_notice_title"),
+            t(
+                "amerge_notice_msg",
+                source=result.source_person_name or "?",
+                target=result.target_name,
+                pending=result.n_pending,
+                auto=result.n_auto_confirmed,
+            ),
+        )
+
+    def _on_pending_accept(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        with session_scope() as session:
+            UnknownMergeService(session).confirm_auto_merge(fid)
+        self._reload_current_face_data()
+        self.person_data_changed.emit()
+
+    def _on_pending_move(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        # Reuse the inline editor: the face is already on a named person, so
+        # picking a target goes through reassign_face, which clears the markers.
+        self._show_inline_editor(fid)
+
+    def _on_pending_delete(self) -> None:
+        fid = self._selected_face_id
+        if fid is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            t("remove_face_title"),
+            t("remove_face_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._pending_bar.hide()
+        self._delete_face(fid)
+        self.person_data_changed.emit()
+
     def _on_inline_assign(self, person_id: int) -> None:
         face_id = self._inline_editor_face_id
         if face_id is None:
@@ -4708,12 +4979,15 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.reset_search()
         self._hide_inline_editor()
         with session_scope() as session:
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
         self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
 
     def _on_inline_create(self, name: str) -> None:
         face_id = self._inline_editor_face_id
@@ -4744,7 +5018,9 @@ class ImageBrowserPanel(QWidget):
                 "New person creation: face_id=%d new_person='%s' person_id=%d",
                 face_id, name, person_id,
             )
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
             log.info(
                 "Face assignment: face_id=%d → person_id=%d (new person via inline)",
                 face_id, person_id,
@@ -4754,6 +5030,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
         self._open_person_info_dialog(person_id)
 
     # ──────────────────────────────────────────────────────────────────
@@ -5388,12 +5665,15 @@ class ImageBrowserPanel(QWidget):
             self._selected_face_id, person_id,
         )
         with session_scope() as session:
-            IdentityService(session).reassign_face(self._selected_face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(self._selected_face_id, person_id)
         self._remember_recent_person(person_id)
         self._reload_current_face_data()
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
 
     def _on_create_and_assign(self) -> None:
         if self._selected_face_id is None:
@@ -5433,7 +5713,9 @@ class ImageBrowserPanel(QWidget):
                 "New person creation: face_id=%d new_person='%s' person_id=%d",
                 face_id, name, person_id,
             )
-            IdentityService(session).reassign_face(face_id, person_id)
+            result = UnknownMergeService(
+                session, self._config.recognition if self._config else None
+            ).assign_unknown_face(face_id, person_id)
             log.info(
                 "Face assignment: face_id=%d → person_id=%d (new person via panel)",
                 face_id, person_id,
@@ -5444,6 +5726,7 @@ class ImageBrowserPanel(QWidget):
         self._reload_persons_combo()
         self.person_data_changed.emit()
         self._image_label.setFocus()
+        self._notify_unknown_merge(result)
         self._open_person_info_dialog(person_id)
 
     def _open_person_info_dialog(self, person_id: int) -> None:

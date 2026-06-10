@@ -270,6 +270,17 @@ class RecognitionConfig:
     # nothing is proposed.  Must be < rerecognition_auto_threshold.
     rerecognition_suggest_threshold: float = 0.55
 
+    # --- Auto-merge from Unknown (reviewable) ---
+    # Master switch for the intelligent auto-confirm of faces dragged along when
+    # one face of an "Unknown N" cluster is manually assigned to a named person.
+    # When off, every auto-moved sibling stays "pending" for manual review.
+    unknown_auto_merge_enabled: bool = True
+    # Cosine similarity at/above which an auto-moved sibling face is
+    # automatically confirmed (pending flag removed) — but only when the target
+    # person has at least one manually confirmed reference face and the match is
+    # unambiguous (margin >= min_margin).  Deliberately high.
+    unknown_auto_confirm_threshold: float = 0.80
+
 
 @dataclass
 class IgnoredFaceConfig:
@@ -666,6 +677,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             rerecognition_suggest_threshold=rec.get(
                 "rerecognition_suggest_threshold",
                 cfg.recognition.rerecognition_suggest_threshold,
+            ),
+            unknown_auto_merge_enabled=rec.get(
+                "unknown_auto_merge_enabled",
+                cfg.recognition.unknown_auto_merge_enabled,
+            ),
+            unknown_auto_confirm_threshold=rec.get(
+                "unknown_auto_confirm_threshold",
+                cfg.recognition.unknown_auto_confirm_threshold,
             ),
         )
 

@@ -529,6 +529,34 @@ class Face(Base):
     assignment_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
+    # --- Auto-merge from Unknown (reviewable) ---
+    # When the user manually assigns ONE face of an "Unknown N" cluster to a
+    # named person, the cluster's *other* faces are moved along automatically but
+    # flagged here as needing review (the user only positively identified the one
+    # face).  The manually picked face is NOT flagged.  These markers let the
+    # auto-moved faces be listed, confirmed, re-moved or deleted later, and they
+    # are cleared whenever a face is confirmed or manually re-assigned.
+    auto_merged_from_unknown: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # NULL normally; "pending" while the auto-move awaits user review.
+    auto_merge_review_status: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, index=True
+    )
+    # Id of the original "Unknown N" person the face was moved away from (may no
+    # longer exist once the emptied cluster is cleaned up).
+    auto_merge_source_person_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    auto_merge_confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    # True only when a human explicitly confirmed the move; False for an
+    # auto-confirm (high-similarity) clearance.
+    auto_merge_confirmed_by_user: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     # Face quality evaluation — populated by FaceQualityService after detection.
     # NULL means "not yet evaluated" and is treated as usable (backward compat).
     quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
