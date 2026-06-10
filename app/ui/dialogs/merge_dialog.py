@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from app.db.models import Person
 from app.ui.i18n import t
 from app.ui.widgets.person_search_select import PersonSearchSelect
-from app.utils.person_search import PersonEntry
+from app.utils.person_search import PersonEntry, person_is_unknown
 
 
 class MergeDialog(QDialog):
@@ -43,6 +43,7 @@ class MergeDialog(QDialog):
                 person_id=p.id,
                 name=p.name,
                 display_text=t("merge_faces_count", name=p.name, n=len(p.faces)),
+                is_unknown=person_is_unknown(p),
             )
             for p in all_persons
             if p.id != source_person.id

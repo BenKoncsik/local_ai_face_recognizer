@@ -417,16 +417,6 @@ class MainWindow(QMainWindow):
         self._delete_person_btn.clicked.connect(self._on_delete_person)
         layout.addWidget(self._delete_person_btn)
 
-        self._ignore_person_btn = QPushButton()
-        self._ignore_person_btn.setEnabled(False)
-        self._ignore_person_btn.setStyleSheet(
-            "QPushButton { color: #FAB387; border-color: #6B4A30; }"
-            "QPushButton:hover { background-color: #3D3020; border-color: #FAB387; }"
-            "QPushButton:disabled { color: #6C7086; border-color: #313244; }"
-        )
-        self._ignore_person_btn.clicked.connect(self._on_ignore_person)
-        layout.addWidget(self._ignore_person_btn)
-
         self._remove_face_btn = QPushButton()
         self._remove_face_btn.setEnabled(False)
         self._remove_face_btn.clicked.connect(self._on_remove_face)
@@ -665,8 +655,6 @@ class MainWindow(QMainWindow):
         self._rename_btn.setText(t("rename_person"))
         self._merge_btn.setText(t("merge_into"))
         self._delete_person_btn.setText(t("delete_person"))
-        self._ignore_person_btn.setText(t("ignore_person"))
-        self._ignore_person_btn.setToolTip(t("ignore_person_tip"))
         self._remove_face_btn.setText(t("remove_face"))
         self._reassign_btn.setText(t("reassign_face"))
         self._move_faces_btn.setText(t("persons_move_faces_btn"))
@@ -2166,9 +2154,6 @@ class MainWindow(QMainWindow):
         self._rename_btn.setEnabled(not is_protected)
         self._merge_btn.setEnabled(True)
         self._delete_person_btn.setEnabled(not is_protected)
-        # Ignore-forever only applies to auto-named "Unknown N" identities —
-        # named people must never land on the permanent ignore list.
-        self._ignore_person_btn.setEnabled(is_auto_named and not is_protected)
         self._remove_face_btn.setEnabled(False)
         self._reassign_btn.setEnabled(False)
         self._person_info_btn.setEnabled(not is_protected)
@@ -2675,67 +2660,36 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, t("protected_delete_title"), t("protected_delete_msg"))
                 return
             name = person.name
-
-        reply = QMessageBox.question(
-            self,
-            t("delete_person_title"),
-            t("delete_person_confirm", name=name),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        with session_scope() as session:
-            IdentityService(session).delete_person(self._current_person_id)
-
-        self._current_person_id = None
-        self._current_face_id = None
-        self._cluster_panel.clear()
-        self._preview_panel.clear()
-        self._delete_person_btn.setEnabled(False)
-        self._ignore_person_btn.setEnabled(False)
-        self._rename_btn.setEnabled(False)
-        self._merge_btn.setEnabled(False)
-        self._person_info_btn.setEnabled(False)
-        self._refresh_persons()
-        self._image_browser._reload_current_face_data()
-        log.info("Person '%s' deleted.", name)
-
-    @Slot()
-    def _on_ignore_person(self) -> None:
-        """Permanently exclude the selected Unknown person from recognition."""
-        if self._current_person_id is None:
-            return
-
-        with session_scope() as session:
-            person = session.get(Person, self._current_person_id)
-            if person is None:
-                return
-            if person.is_protected or not person.is_auto_named:
-                QMessageBox.warning(
-                    self, t("ignore_person_title"), t("ignore_person_named_msg")
-                )
-                return
-            name = person.name
             n_faces = len(person.faces)
+            # The "exclude forever" option is embedding-based and only meaningful
+            # for auto-named "Unknown N" identities — never offer it for a named
+            # person, whose embeddings must not land on the ignore list.
+            can_ignore = person.is_auto_named
 
-        reply = QMessageBox.question(
-            self,
-            t("ignore_person_title"),
-            t("ignore_person_confirm", name=name, n=n_faces),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(t("delete_person_title"))
+        box.setText(t("delete_person_confirm", name=name, n=n_faces))
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        ignore_check: Optional[QCheckBox] = None
+        if can_ignore:
+            ignore_check = QCheckBox(t("delete_person_ignore_check"))
+            ignore_check.setToolTip(t("ignore_person_tip"))
+            box.setCheckBox(ignore_check)
+        if box.exec() != QMessageBox.Yes:
             return
+        ignore_embeddings = ignore_check is not None and ignore_check.isChecked()
 
         try:
             with session_scope() as session:
-                from app.services.ignored_face_service import IgnoredFaceService
-                n_ignored = IgnoredFaceService(
-                    session, self._config.ignored_faces
-                ).ignore_person_forever(self._current_person_id)
+                result = IdentityService(session).delete_person(
+                    self._current_person_id,
+                    remove_faces=True,
+                    ignore_embeddings=ignore_embeddings,
+                )
         except ValueError as exc:
-            QMessageBox.warning(self, t("ignore_person_title"), str(exc))
+            QMessageBox.warning(self, t("delete_person_title"), str(exc))
             return
 
         self._current_person_id = None
@@ -2743,14 +2697,25 @@ class MainWindow(QMainWindow):
         self._cluster_panel.clear()
         self._preview_panel.clear()
         self._delete_person_btn.setEnabled(False)
-        self._ignore_person_btn.setEnabled(False)
         self._rename_btn.setEnabled(False)
         self._merge_btn.setEnabled(False)
         self._person_info_btn.setEnabled(False)
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
-        self._status_label.setText(t("ignore_person_status", name=name, n=n_ignored))
-        log.info("Person '%s' ignored forever (%d embedding(s) stored).", name, n_ignored)
+        if result.n_ignored:
+            self._status_label.setText(
+                t("delete_person_status_ignored", name=name,
+                  n=result.n_faces, k=result.n_ignored)
+            )
+        else:
+            self._status_label.setText(
+                t("delete_person_status", name=name, n=result.n_faces)
+            )
+        log.info(
+            "Person '%s' deleted: %d face(s) removed, %d crop file(s) unlinked, "
+            "%d embedding(s) ignored.",
+            name, result.n_faces, result.n_crops_removed, result.n_ignored,
+        )
 
     @Slot()
     def _on_manage_ignored_faces(self) -> None:

@@ -391,10 +391,21 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     # ── Dialogs — delete person ───────────────────────────────────────────────
     "delete_person_title":   {"en": "Delete Person",
                               "hu": "Személy törlése"},
-    "delete_person_confirm": {"en": "Delete '{name}' and unassign all their faces?\n"
-                                    "This cannot be undone.",
-                              "hu": "Törlöd '{name}' személyt és feloldod az összes arcát?\n"
+    "delete_person_confirm": {"en": "Delete '{name}' and all {n} of their faces?\n"
+                                    "Every face, bounding box, thumbnail and embedding is "
+                                    "permanently removed.\nThis cannot be undone.",
+                              "hu": "Biztosan törlöd ezt a személyt ('{name}') és az összes "
+                                    "hozzá tartozó arcot ({n} db)?\nMinden arckeret, előnézet "
+                                    "és felismerési adat véglegesen törlődik.\n"
                                     "Ez a művelet nem vonható vissza."},
+    "delete_person_ignore_check": {
+        "en": "Also exclude these faces from recognition forever",
+        "hu": "Az arcok végleges kizárása a felismerésből is"},
+    "delete_person_status": {"en": "Deleted '{name}': {n} face(s) removed.",
+                             "hu": "'{name}' törölve: {n} arc eltávolítva."},
+    "delete_person_status_ignored": {
+        "en": "Deleted '{name}': {n} face(s) removed, {k} excluded forever.",
+        "hu": "'{name}' törölve: {n} arc eltávolítva, {k} véglegesen kizárva."},
 
     # ── Dialogs — scan ────────────────────────────────────────────────────────
     "no_folder_title":   {"en": "No Folder", "hu": "Nincs mappa"},

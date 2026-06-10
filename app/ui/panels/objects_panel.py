@@ -47,6 +47,7 @@ from app.ui.widgets.object_gallery_widget import (
     ObjectGalleryWidget,
     crop_pixmap,
 )
+from app.ui.widgets.person_search_select import PersonSearchSelect
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +68,12 @@ def _role_label(role: str) -> str:
 
 
 class _AddPersonDialog(QDialog):
-    """Pick a person and a role to link to an object."""
+    """Pick a person and a role to link to an object.
+
+    Uses the shared :class:`PersonSearchSelect` so person selection here behaves
+    exactly like everywhere else: relevance-ranked, double-click to confirm, and
+    unknown clusters hidden from the base list but reachable by search.
+    """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -77,7 +83,7 @@ class _AddPersonDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        self._person = QComboBox()
+        self._person = PersonSearchSelect()
         try:
             with session_scope() as session:
                 persons = (
@@ -86,10 +92,11 @@ class _AddPersonDialog(QDialog):
                     .order_by(Person.name)
                     .all()
                 )
-                for p in persons:
-                    self._person.addItem(p.name, p.id)
+                self._person.set_persons(persons)
         except Exception:
             log.exception("Failed to load persons for object link")
+        # Double-click a person to confirm the dialog, matching the merge dialog.
+        self._person.person_double_clicked.connect(self.accept)
         form.addRow(t("object_detail_persons"), self._person)
 
         self._role = QComboBox()
@@ -108,8 +115,7 @@ class _AddPersonDialog(QDialog):
 
     @property
     def person_id(self) -> Optional[int]:
-        data = self._person.currentData()
-        return int(data) if data is not None else None
+        return self._person.current_person_id()
 
     @property
     def role(self) -> str:

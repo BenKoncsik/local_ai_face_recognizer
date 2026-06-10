@@ -8,6 +8,7 @@ from app.utils.person_search import (
     PersonEntry,
     filter_entries,
     normalize,
+    person_is_unknown,
     search_persons,
 )
 
@@ -198,9 +199,17 @@ class TestFilterEntries:
 class _FakePerson:
     """Minimal stand-in for app.db.models.Person (id + name)."""
 
-    def __init__(self, pid: int, name: str) -> None:
+    def __init__(
+        self,
+        pid: int,
+        name: str,
+        is_auto_named: bool = False,
+        is_protected: bool = False,
+    ) -> None:
         self.id = pid
         self.name = name
+        self.is_auto_named = is_auto_named
+        self.is_protected = is_protected
 
 
 class TestPersonSearchSelectReset:
@@ -355,3 +364,106 @@ class TestPersonSearchSelectMatchSort:
         widget.set_match_scores({1: 0.9, 2: 0.1}, default_sort=True)
         # Top row shows the match percentage next to the name.
         assert "90%" in widget._list.item(0).text()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# person_is_unknown() — shared "is this a placeholder identity?" predicate
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPersonIsUnknown:
+    def test_named_person_is_not_unknown(self):
+        assert person_is_unknown(_FakePerson(1, "Anna")) is False
+
+    def test_auto_named_is_unknown(self):
+        assert person_is_unknown(_FakePerson(1, "Unknown 3", is_auto_named=True)) is True
+
+    def test_protected_is_unknown(self):
+        assert person_is_unknown(_FakePerson(1, "Ismeretlen", is_protected=True)) is True
+
+    def test_missing_attributes_default_false(self):
+        class _Bare:
+            id = 1
+            name = "X"
+
+        assert person_is_unknown(_Bare()) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# search_persons(hide_unknown=…) — base list hides unknown, search reveals it
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSearchPersonsHideUnknown:
+    @staticmethod
+    def _entries() -> list[PersonEntry]:
+        return [
+            PersonEntry(1, "Anna"),
+            PersonEntry(2, "Unknown 7", is_unknown=True),
+            PersonEntry(3, "Béla"),
+        ]
+
+    def test_base_list_hides_unknown(self):
+        result = search_persons("", self._entries(), hide_unknown=True)
+        assert [e.person_id for e in result] == [1, 3]
+
+    def test_base_list_keeps_unknown_when_flag_off(self):
+        result = search_persons("", self._entries(), hide_unknown=False)
+        assert [e.person_id for e in result] == [1, 2, 3]
+
+    def test_search_reveals_unknown(self):
+        # Even with hide_unknown, a query that matches the name surfaces it.
+        result = search_persons("unknown", self._entries(), hide_unknown=True)
+        assert [e.person_id for e in result] == [2]
+
+    def test_search_for_named_unaffected(self):
+        result = search_persons("anna", self._entries(), hide_unknown=True)
+        assert [e.person_id for e in result] == [1]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PersonSearchSelect widget — unknown filtering end to end
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPersonSearchSelectUnknown:
+    @staticmethod
+    def _visible_ids(widget) -> list[int]:
+        from app.ui.widgets.person_search_select import _ROLE_ID
+
+        return [
+            widget._list.item(row).data(_ROLE_ID)
+            for row in range(widget._list.count())
+        ]
+
+    @staticmethod
+    def _make(qtbot):
+        from app.ui.widgets.person_search_select import PersonSearchSelect
+
+        widget = PersonSearchSelect()
+        qtbot.addWidget(widget)
+        persons = [
+            _FakePerson(1, "Anna"),
+            _FakePerson(2, "Unknown 7", is_auto_named=True),
+            _FakePerson(3, "Béla"),
+        ]
+        widget.set_persons(persons)
+        return widget
+
+    def test_base_list_hides_unknown_by_default(self, qtbot):
+        widget = self._make(qtbot)
+        assert self._visible_ids(widget) == [1, 3]
+
+    def test_search_reveals_unknown(self, qtbot):
+        widget = self._make(qtbot)
+        widget._search.setText("unknown")
+        assert self._visible_ids(widget) == [2]
+
+    def test_opt_out_shows_unknown_in_base(self, qtbot):
+        widget = self._make(qtbot)
+        widget.set_hide_unknown_in_base(False)
+        # Alphabetical order: Anna, Béla, Unknown 7.
+        assert self._visible_ids(widget) == [1, 3, 2]
+
+    def test_match_sort_keeps_unknown_visible(self, qtbot):
+        widget = self._make(qtbot)
+        # Match-sorting is a relevance ranking, so unknown clusters stay listed.
+        widget.set_match_scores({1: 0.2, 2: 0.9, 3: 0.1}, default_sort=True)
+        assert self._visible_ids(widget) == [2, 1, 3]
