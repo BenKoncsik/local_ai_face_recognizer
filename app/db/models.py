@@ -904,6 +904,63 @@ class MergeSuggestion(Base):
         )
 
 
+# Decision kinds recorded in the merge-decision history.
+MERGE_DECISION_ACCEPTED = "accepted"
+MERGE_DECISION_REJECTED = "rejected"
+MERGE_DECISION_DISMISSED = "dismissed"
+
+# Who made the decision.
+MERGE_DECISION_SOURCE_MANUAL = "manual"
+MERGE_DECISION_SOURCE_AUTO = "auto"
+
+
+class MergeDecision(Base):
+    """History of decided merge suggestions ("already handled" list).
+
+    A *snapshot* on purpose: accepting a suggestion merges the candidate
+    person away, which CASCADE-deletes the :class:`MergeSuggestion` row, so
+    the decided list cannot be derived from live suggestions.  Names and crop
+    paths are copied at decision time and stay displayable even after the
+    persons were merged or renamed.
+    """
+
+    __tablename__ = "merge_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # The suggestion this decision came from (plain int — the row may be gone).
+    suggestion_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Person ids at decision time (not FKs — they may no longer exist).
+    candidate_person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_person_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Display snapshots.
+    candidate_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    candidate_crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    target_crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    # "accepted" | "rejected" | "dismissed"
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # "manual" | "auto" (auto-merge)
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=MERGE_DECISION_SOURCE_MANUAL
+    )
+
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<MergeDecision id={self.id} {self.candidate_name!r}→"
+            f"{self.target_name!r} {self.decision!r}>"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Deep recognition — training runs and the automatic-assignment review log
 # ---------------------------------------------------------------------------

@@ -1534,6 +1534,41 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "autoAssign.revert_tooltip":
         {"en": "Send the face back to where it was before the run",
          "hu": "Az arc visszakerül oda, ahol a futás előtt volt"},
+
+    # ── "Already decided" history lists ───────────────────────────────────
+    "suggestions_decided_header":
+        {"en": "Already decided ({n})",
+         "hu": "Már eldöntött ({n})"},
+    "suggestions_decided_empty":
+        {"en": "No decided suggestions yet.",
+         "hu": "Még nincs eldöntött javaslat."},
+    "suggestions_decision_accepted":
+        {"en": "Accepted",
+         "hu": "Elfogadva"},
+    "suggestions_decision_rejected":
+        {"en": "Rejected",
+         "hu": "Elutasítva"},
+    "suggestions_decision_dismissed":
+        {"en": "Dismissed",
+         "hu": "Véglegesen elvetve"},
+    "suggestions_decision_auto":
+        {"en": "auto",
+         "hu": "automatikus"},
+    "autoAssign.decided_header":
+        {"en": "Already reviewed ({n})",
+         "hu": "Már átnézett ({n})"},
+    "autoAssign.decided_empty":
+        {"en": "No reviewed groupings yet.",
+         "hu": "Még nincs átnézett csoportosítás."},
+    "autoAssign.status_confirmed":
+        {"en": "Confirmed",
+         "hu": "Megerősítve"},
+    "autoAssign.status_corrected":
+        {"en": "Corrected → {name}",
+         "hu": "Javítva → {name}"},
+    "autoAssign.status_reverted":
+        {"en": "Undone",
+         "hu": "Visszavonva"},
     "scanModes.openButton":
         {"en": "Scan & Maintenance …",
          "hu": "Beolvasás és karbantartás …"},

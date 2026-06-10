@@ -238,6 +238,38 @@ def _migrate_deep_recognition_tables(engine: Engine) -> None:
                 "ON auto_assignments(training_run_id, status)"
             )
         )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS merge_decisions (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    suggestion_id       INTEGER,
+                    candidate_person_id INTEGER,
+                    target_person_id    INTEGER,
+                    candidate_name      VARCHAR(255) NOT NULL,
+                    target_name         VARCHAR(255) NOT NULL,
+                    candidate_crop_path TEXT,
+                    target_crop_path    TEXT,
+                    confidence          FLOAT NOT NULL DEFAULT 0.0,
+                    decision            VARCHAR(16) NOT NULL,
+                    source              VARCHAR(16) NOT NULL DEFAULT 'manual',
+                    decided_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_merge_decisions_decision "
+                "ON merge_decisions(decision)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_merge_decisions_decided_at "
+                "ON merge_decisions(decided_at)"
+            )
+        )
     log.debug("Migration: deep recognition tables ensured")
 
 

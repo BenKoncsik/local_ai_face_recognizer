@@ -105,6 +105,8 @@ class AutoAssignmentDTO:
     bbox: Optional[Tuple[int, int, int, int]]
     run_id: int = 0
     run_finished_at: Optional[datetime] = None
+    corrected_person_name: Optional[str] = None
+    decided_at: Optional[datetime] = None
 
 
 @dataclass
@@ -377,6 +379,62 @@ class DeepRecognitionService:
                         if assignment.training_run
                         else None
                     ),
+                )
+            )
+        return dtos
+
+    def list_decided_assignments(self, limit: int = 100) -> List[AutoAssignmentDTO]:
+        """Already-reviewed assignments (any run), newest decision first."""
+        rows = (
+            self._session.query(AutoAssignment)
+            .filter(AutoAssignment.status != AUTO_ASSIGN_STATUS_AUTO)
+            .order_by(AutoAssignment.decided_at.desc(), AutoAssignment.id.desc())
+            .limit(limit)
+            .all()
+        )
+        dtos: List[AutoAssignmentDTO] = []
+        for assignment in rows:
+            face = assignment.face
+            person = assignment.person
+            dtos.append(
+                AutoAssignmentDTO(
+                    assignment_id=assignment.id,
+                    face_id=assignment.face_id,
+                    person_id=assignment.person_id,
+                    person_name=person.name if person else "?",
+                    previous_person_name=(
+                        assignment.previous_person_name
+                        or (
+                            assignment.previous_person.name
+                            if assignment.previous_person is not None
+                            else None
+                        )
+                    ),
+                    score=assignment.score,
+                    status=assignment.status,
+                    crop_path=face.crop_path if face is not None else None,
+                    image_path=(
+                        face.image.file_path
+                        if face is not None and face.image
+                        else None
+                    ),
+                    bbox=(
+                        (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h)
+                        if face is not None
+                        else None
+                    ),
+                    run_id=assignment.training_run_id,
+                    run_finished_at=(
+                        assignment.training_run.finished_at
+                        if assignment.training_run
+                        else None
+                    ),
+                    corrected_person_name=(
+                        assignment.corrected_person.name
+                        if assignment.corrected_person is not None
+                        else None
+                    ),
+                    decided_at=assignment.decided_at,
                 )
             )
         return dtos

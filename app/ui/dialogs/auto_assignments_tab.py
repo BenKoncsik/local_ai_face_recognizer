@@ -28,7 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.database import session_scope
-from app.db.models import Person
+from app.db.models import (
+    AUTO_ASSIGN_STATUS_CONFIRMED,
+    AUTO_ASSIGN_STATUS_CORRECTED,
+    AUTO_ASSIGN_STATUS_REVERTED,
+    Person,
+)
 from app.services.deep_recognition_service import (
     AutoAssignmentDTO,
     DeepRecognitionService,
@@ -38,6 +43,67 @@ from app.ui.i18n import t
 log = logging.getLogger(__name__)
 
 _ROW_STYLE = "QFrame { background: #232323; border-radius: 6px; }"
+
+
+class _DecidedAssignmentRow(QFrame):
+    """One already-reviewed automatic grouping — display only."""
+
+    def __init__(
+        self, dto: AutoAssignmentDTO, parent: Optional[QWidget] = None
+    ) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet("QFrame { background: #1d1d1d; border-radius: 6px; }")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
+
+        from app.ui.dialogs.suggestion_dialog import _crop_pixmap
+
+        crop = QLabel()
+        crop.setFixedSize(36, 36)
+        crop.setAlignment(Qt.AlignCenter)
+        pixmap = _crop_pixmap(dto.crop_path)
+        if pixmap is not None:
+            crop.setPixmap(
+                pixmap.scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+            crop.setStyleSheet("border: 1px solid #444; border-radius: 4px;")
+        else:
+            crop.setText("?")
+            crop.setStyleSheet(
+                "border: 1px solid #444; border-radius: 4px; color: #666;"
+            )
+        row.addWidget(crop)
+
+        name = QLabel(f"→ {dto.person_name}")
+        name.setStyleSheet("color: #ccc; border: none;")
+        name.setWordWrap(True)
+        row.addWidget(name, stretch=1)
+
+        if dto.status == AUTO_ASSIGN_STATUS_CONFIRMED:
+            status_text, color = t("autoAssign.status_confirmed"), "#88ee88"
+        elif dto.status == AUTO_ASSIGN_STATUS_CORRECTED:
+            status_text = t(
+                "autoAssign.status_corrected",
+                name=dto.corrected_person_name or "?",
+            )
+            color = "#88aaff"
+        elif dto.status == AUTO_ASSIGN_STATUS_REVERTED:
+            status_text, color = t("autoAssign.status_reverted"), "#ff8888"
+        else:
+            status_text, color = dto.status, "#aaaaaa"
+        status = QLabel(status_text)
+        status.setStyleSheet(
+            f"color: {color}; font-weight: bold; border: none; font-size: 11px;"
+        )
+        row.addWidget(status)
+
+        if dto.decided_at is not None:
+            when = QLabel(dto.decided_at.strftime("%Y-%m-%d %H:%M"))
+            when.setStyleSheet("color: #666; border: none; font-size: 10px;")
+            row.addWidget(when)
 
 
 class _AutoAssignmentRow(QFrame):
@@ -168,6 +234,25 @@ class AutoAssignmentsTab(QWidget):
         )
         root.addWidget(self._empty_label)
 
+        # ── "Already reviewed" history (collapsed by default) ─────────────
+        from app.ui.widgets.collapsible_section import CollapsibleSection
+
+        decided_scroll = QScrollArea()
+        decided_scroll.setWidgetResizable(True)
+        decided_scroll.setMaximumHeight(240)
+        self._decided_widget = QWidget()
+        self._decided_layout = QVBoxLayout(self._decided_widget)
+        self._decided_layout.setSpacing(4)
+        self._decided_layout.addStretch()
+        decided_scroll.setWidget(self._decided_widget)
+
+        self._decided_section = CollapsibleSection(
+            t("autoAssign.decided_header", n=0), decided_scroll
+        )
+        self._decided_section.toggled.connect(self._on_decided_toggled)
+        self._decided_loaded = False
+        root.addWidget(self._decided_section)
+
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
@@ -211,6 +296,52 @@ class AutoAssignmentsTab(QWidget):
         self._count_label.setText(t("autoAssign.count", n=len(dtos)))
         self._empty_label.setVisible(not dtos)
         self.count_changed.emit(len(dtos))
+        self._refresh_decided()
+
+    def _refresh_decided(self) -> None:
+        """Update the "already reviewed" header; reload its rows if open."""
+        from app.db.models import AUTO_ASSIGN_STATUS_AUTO, AutoAssignment
+
+        try:
+            with session_scope() as session:
+                count = (
+                    session.query(AutoAssignment)
+                    .filter(AutoAssignment.status != AUTO_ASSIGN_STATUS_AUTO)
+                    .count()
+                )
+                decided = (
+                    DeepRecognitionService(
+                        session, self._deep_config
+                    ).list_decided_assignments()
+                    if self._decided_section.is_expanded()
+                    else None
+                )
+        except Exception:  # noqa: BLE001 — history must never break the tab
+            log.exception("Failed to load reviewed groupings")
+            return
+
+        self._decided_section.set_title(t("autoAssign.decided_header", n=count))
+        if decided is None:
+            self._decided_loaded = False
+            return
+        self._decided_loaded = True
+
+        while self._decided_layout.count() > 1:
+            item = self._decided_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        if not decided:
+            empty = QLabel(t("autoAssign.decided_empty"))
+            empty.setStyleSheet("color: #666; font-style: italic; border: none;")
+            empty.setAlignment(Qt.AlignCenter)
+            self._decided_layout.insertWidget(0, empty)
+        for i, dto in enumerate(decided):
+            self._decided_layout.insertWidget(i, _DecidedAssignmentRow(dto))
+
+    def _on_decided_toggled(self, expanded: bool) -> None:
+        if expanded and not self._decided_loaded:
+            self._refresh_decided()
 
     # ------------------------------------------------------------------
     # Actions
