@@ -176,6 +176,16 @@ class PipelineWorker(QThread):
         )
         rec_stats = self._run_recognition(exclude_low_quality)
 
+        # --- Stage 4b: Permanently-ignored face filter ---
+        # After recognition so known people keep their faces; before unknown
+        # clustering so suppressed faces never spawn new "Unknown N" persons.
+        ignored_stats = self._run_ignored_filter()
+        if ignored_stats.n_suppressed:
+            self.log_message.emit(
+                f"  Suppressed {ignored_stats.n_suppressed} face(s) matching "
+                f"the permanent ignore list."
+            )
+
         # --- Stage 5: Unknown-face clustering ---
         self.log_message.emit(
             "Stage 5/7: Clustering unassigned faces into Unknown persons …"
@@ -341,6 +351,28 @@ class PipelineWorker(QThread):
             assignments, stats = svc.recognize_pending()
             self.progress.emit(1, 1, "Recognition", f"{stats.n_assigned} face(s) assigned")
             return stats
+
+    def _run_ignored_filter(self) -> "IgnoredFilterStats":
+        """Suppress unassigned faces that match the permanent ignore list."""
+        from app.services.ignored_face_service import (
+            IgnoredFaceService,
+            IgnoredFilterStats,
+        )
+        try:
+            with session_scope() as session:
+                svc = IgnoredFaceService(
+                    session=session,
+                    config=getattr(self._config, "ignored_faces", None),
+                )
+                stats = svc.suppress_matching_unassigned()
+                self.progress.emit(
+                    1, 1, "Ignore filter",
+                    f"{stats.n_suppressed} face(s) suppressed",
+                )
+                return stats
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Ignored-face filter stage failed: %s", exc)
+            return IgnoredFilterStats()
 
     def _run_clustering(self, exclude_low_quality: bool = False) -> ClusteringStats:
         """Cluster unassigned embedded faces into Unknown N persons."""

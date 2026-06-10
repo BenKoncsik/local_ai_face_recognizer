@@ -261,6 +261,26 @@ class RecognitionConfig:
 
 
 @dataclass
+class IgnoredFaceConfig:
+    """Parameters for the permanently-ignored faces filter.
+
+    Faces the user excluded "forever" are stored as embeddings; the pipeline
+    suppresses freshly embedded, still-unassigned faces that match one of the
+    stored vectors so the same person never resurfaces as a new "Unknown N".
+    """
+
+    # When False the pipeline skips the filter entirely (the ignore list is
+    # kept, just not applied).
+    enabled: bool = True
+
+    # Minimum cosine similarity between a new face and an ignored embedding
+    # for the new face to be suppressed.  Deliberately stricter than the
+    # recognition auto-assign threshold (0.72) so genuinely new people are
+    # never silently swallowed by the ignore list.
+    ignore_similarity: float = 0.80
+
+
+@dataclass
 class SuggestionConfig:
     """Parameters for the unknown-person name-suggestion feature.
 
@@ -406,6 +426,7 @@ class AppConfig:
     )
     identity_repair: IdentityRepairConfig = field(default_factory=IdentityRepairConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
+    ignored_faces: IgnoredFaceConfig = field(default_factory=IgnoredFaceConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -622,6 +643,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             same_image_assist_margin=rec.get(
                 "same_image_assist_margin",
                 cfg.recognition.same_image_assist_margin,
+            ),
+        )
+
+        ign = raw.get("ignored_faces", {})
+        cfg.ignored_faces = IgnoredFaceConfig(
+            enabled=ign.get("enabled", cfg.ignored_faces.enabled),
+            ignore_similarity=ign.get(
+                "ignore_similarity", cfg.ignored_faces.ignore_similarity
             ),
         )
 

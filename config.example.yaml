@@ -141,6 +141,20 @@ recognition:
   # Margin for the assisted pass (looser — candidate pool is already restricted).
   same_image_assist_margin: 0.05
 
+ignored_faces:
+  # Permanent face ignore list ("Ignore Forever" on Unknown persons).
+  # Faces matching a stored ignored embedding are suppressed in the pipeline
+  # after recognition and before unknown clustering, so they never resurface
+  # as new "Unknown N" persons after a re-scan.
+
+  # Disable to keep the list but stop applying it.
+  enabled: true
+
+  # Minimum cosine similarity between a new face and an ignored embedding for
+  # the new face to be suppressed. Deliberately stricter than the recognition
+  # auto_assign_threshold (0.72) so genuinely new people are never swallowed.
+  ignore_similarity: 0.80
+
 suggestions:
   # Unknown-person name suggestions: compares auto-named ("Unknown N")
   # persons against the embedding profiles of manually-named persons.

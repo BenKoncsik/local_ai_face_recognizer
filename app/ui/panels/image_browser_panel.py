@@ -3289,6 +3289,7 @@ class ImageBrowserPanel(QWidget):
         assign_action: Optional[object] = None
         edit_action: Optional[object] = None
         delete_action: Optional[object] = None
+        ignore_action: Optional[object] = None
         object_open_action: Optional[object] = None
         object_delete_action: Optional[object] = None
 
@@ -3345,6 +3346,11 @@ class ImageBrowserPanel(QWidget):
             edit_action = menu.addAction(t("ibp_ctx_edit_frame"))
             menu.addSeparator()
             delete_action = menu.addAction(t("ibp_ctx_delete"))
+            # Permanent ignore only applies to faces not assigned to a named
+            # person — the service refuses named-person faces anyway, but we
+            # keep the menu honest by hiding the option for them.
+            if self._face_is_ignorable(face_id):
+                ignore_action = menu.addAction(t("ibp_ctx_ignore_forever"))
             menu.addSeparator()
 
         manual_mark_action = menu.addAction(t("ibp_ctx_manual_mark"))
@@ -3364,6 +3370,8 @@ class ImageBrowserPanel(QWidget):
             self._start_interactive_face_edit(face_id)
         elif chosen is delete_action and face_id is not None:
             self._delete_face(face_id)
+        elif ignore_action is not None and chosen is ignore_action and face_id is not None:
+            self._ignore_face_forever(face_id)
         elif chosen is manual_mark_action:
             self._draw_mode_btn.setChecked(True)
         elif chosen is object_mark_action:
@@ -3938,6 +3946,57 @@ class ImageBrowserPanel(QWidget):
             img_id, new_id, x, y, w, h,
         )
         return new_id
+
+    def _face_is_ignorable(self, face_id: int) -> bool:
+        """True when the face may go on the permanent ignore list.
+
+        Unassigned faces and faces of auto-named ("Unknown N") or protected
+        persons qualify; faces of manually named people never do.
+        """
+        try:
+            with session_scope() as session:
+                face = session.get(Face, face_id)
+                if face is None or face.get_embedding() is None:
+                    return False
+                if face.person is None:
+                    return True
+                return face.person.is_auto_named or face.person.is_protected
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to check ignorability of face %d", face_id)
+            return False
+
+    def _ignore_face_forever(self, face_id: int) -> None:
+        """Add a single face to the permanent ignore list and hide it."""
+        reply = QMessageBox.question(
+            self,
+            t("ignore_person_title"),
+            t("ibp_ctx_ignore_confirm"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if self._inline_editor_face_id == face_id:
+            self._hide_inline_editor()
+        try:
+            with session_scope() as session:
+                from app.services.ignored_face_service import IgnoredFaceService
+                IgnoredFaceService(session).ignore_face_forever(face_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, t("ignore_person_title"), str(exc))
+            return
+        log.info("Face %d ignored forever from image browser", face_id)
+        if self._selected_face_id == face_id:
+            self._selected_face_id = None
+            self._clear_face_panel()
+        if self._interactive_edit_face_id == face_id:
+            self._interactive_edit_face_id = None
+            self._interactive_edit_orig_bbox = None
+            self._image_label.cancel_interactive_edit()
+            self._draw_hint.setVisible(False)
+        self._undo_stack = [e for e in self._undo_stack if e.face_id != face_id]
+        self._redo_stack = [e for e in self._redo_stack if e.face_id != face_id]
+        self._reload_current_face_data()
 
     def _delete_face(self, face_id: int) -> None:
         if self._inline_editor_face_id == face_id:

@@ -37,6 +37,53 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "rename_person":      {"en": "Rename Person", "hu": "Személy átnevezése"},
     "merge_into":         {"en": "Merge Into …", "hu": "Összevonás …"},
     "delete_person":      {"en": "Delete Person", "hu": "Személy törlése"},
+    "ignore_person":      {"en": "Ignore Forever", "hu": "Kizárás végleg"},
+    "ignore_person_tip":  {"en": "Permanently exclude this Unknown person from recognition.\n"
+                                 "The face signatures are remembered, so the person will\n"
+                                 "not reappear after a re-scan.",
+                           "hu": "Az ismeretlen személy végleges kizárása a felismerésből.\n"
+                                 "Az arc-jellemzők megmaradnak, így a személy újrafuttatás\n"
+                                 "után sem jelenik meg újra."},
+    "ignore_person_title": {"en": "Ignore Forever", "hu": "Kizárás végleg"},
+    "ignore_person_confirm": {
+        "en": "Permanently exclude '{name}' ({n} face(s)) from face recognition?\n\n"
+              "The face signatures are stored on a persistent ignore list, so this "
+              "person will not reappear after future scans.\n"
+              "You can revoke this later in the Ignored Faces manager.",
+        "hu": "Véglegesen kizárod '{name}' személyt ({n} arc) az arcfelismerésből?\n\n"
+              "Az arc-jellemzők egy tartós kizárólistára kerülnek, így ez a személy "
+              "a későbbi futtatások után sem jelenik meg újra.\n"
+              "A kizárás később visszavonható a Kizárt arcok kezelőben.",
+    },
+    "ignore_person_named_msg": {
+        "en": "Only auto-named (Unknown) persons can be ignored forever.",
+        "hu": "Csak automatikusan elnevezett (Ismeretlen) személy zárható ki véglegesen.",
+    },
+    "ignore_person_status": {
+        "en": "'{name}' ignored forever ({n} face signature(s) stored).",
+        "hu": "'{name}' véglegesen kizárva ({n} arc-jellemző elmentve).",
+    },
+    "ignored_faces_title": {"en": "Ignored Faces", "hu": "Kizárt arcok"},
+    "ignored_faces_info": {
+        "en": "Faces on this list are permanently excluded from recognition: any "
+              "newly detected face matching one of these signatures is suppressed "
+              "automatically. Revoking an entry lets the face be recognised again "
+              "on the next scan.",
+        "hu": "A listán lévő arcok véglegesen ki vannak zárva a felismerésből: az "
+              "ezekhez hasonló újonnan talált arcokat a rendszer automatikusan "
+              "elrejti. Egy bejegyzés visszavonása után az arc a következő "
+              "futtatáskor újra felismerhető.",
+    },
+    "ignored_faces_unignore": {"en": "Revoke Selected", "hu": "Kijelöltek visszavonása"},
+    "ignored_faces_unignore_confirm": {
+        "en": "Remove {n} entr(ies) from the permanent ignore list?\n"
+              "These faces may reappear after the next scan.",
+        "hu": "Eltávolítasz {n} bejegyzést a végleges kizárólistáról?\n"
+              "Ezek az arcok a következő futtatás után újra megjelenhetnek.",
+    },
+    "ignored_faces_count": {"en": "{n} ignored face(s)", "hu": "{n} kizárt arc"},
+    "ignored_faces_empty": {"en": "(no ignored faces)", "hu": "(nincs kizárt arc)"},
+    "ignored_faces_unknown_source": {"en": "(unknown source)", "hu": "(ismeretlen forrás)"},
     "remove_face":        {"en": "Remove Selected Face", "hu": "Kiválasztott arc eltávolítása"},
     "reassign_face":      {"en": "Reassign Face …", "hu": "Arc áthelyezése …"},
     "recluster_all":      {"en": "Recognize Unassigned", "hu": "Névtelen arcok felismerése"},
@@ -873,6 +920,17 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ibp_ctx_edit_bbox":      {"en": "Edit bbox",        "hu": "Bbox módosítása"},
     "ibp_ctx_edit_frame":     {"en": "Edit bounding box", "hu": "Keret szerkesztése"},
     "ibp_ctx_delete":         {"en": "Delete",           "hu": "Törlés"},
+    "ibp_ctx_ignore_forever": {"en": "Ignore forever",   "hu": "Kizárás végleg"},
+    "ibp_ctx_ignore_confirm": {
+        "en": "Permanently exclude this face from recognition?\n\n"
+              "Its face signature is stored on the persistent ignore list, so it "
+              "will not reappear after future scans.\n"
+              "You can revoke this later in the Ignored Faces manager.",
+        "hu": "Véglegesen kizárod ezt az arcot a felismerésből?\n\n"
+              "Az arc-jellemző egy tartós kizárólistára kerül, így a későbbi "
+              "futtatások után sem jelenik meg újra.\n"
+              "A kizárás később visszavonható a Kizárt arcok kezelőben.",
+    },
     "ibp_ctx_unknown_face":   {"en": "Unknown face",     "hu": "Ismeretlen arc"},
     "ibp_ctx_manual_mark":    {"en": "Manual face selection", "hu": "Kézi arc kijelölés"},
     # Bbox interactive editor
@@ -1526,6 +1584,21 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.cleanupEmptyUnknowns.warning":
         {"en": "Safe — only face-less auto-named Unknown persons are removed",
          "hu": "Biztonságos — csak az arc nélküli automatikus „Unknown” személyeket törli"},
+    "scanModes.ignoredFaces.title":
+        {"en": "Ignored Faces",
+         "hu": "Kizárt arcok"},
+    "scanModes.ignoredFaces.description":
+        {"en": "Manage the permanent face ignore list. Faces excluded with 'Ignore "
+               "Forever' are remembered by their face signature, so they stay hidden "
+               "across re-scans. Here you can review them and revoke entries so a "
+               "face can be recognised again.",
+         "hu": "A végleges arc-kizárólista kezelése. A „Kizárás végleg” művelettel "
+               "kizárt arcokat a rendszer az arc-jellemzőjük alapján jegyzi meg, így "
+               "újrafuttatás után is rejtve maradnak. Itt áttekintheted őket, és "
+               "visszavonhatod a kizárást, hogy egy arc újra felismerhető legyen."},
+    "scanModes.ignoredFaces.startButton":
+        {"en": "Manage Ignored Faces",
+         "hu": "Kizárt arcok kezelése"},
     "cleanup_empty_unknowns_title":
         {"en": "Clean Up Empty Unknown Persons",
          "hu": "Üres Unknown személyek tisztítása"},

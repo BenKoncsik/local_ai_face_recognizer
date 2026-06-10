@@ -598,6 +598,68 @@ class Face(Base):
 
 
 # ---------------------------------------------------------------------------
+# IgnoredFace
+# ---------------------------------------------------------------------------
+
+class IgnoredFace(Base):
+    """A face embedding the user permanently excluded from recognition.
+
+    When the user "ignores forever" an Unknown person, every face embedding of
+    that person is copied here.  The pipeline compares freshly embedded,
+    still-unassigned faces against these vectors and suppresses matches, so the
+    same physical person never resurfaces as a new "Unknown N" after a re-run.
+
+    The exclusion is embedding-based on purpose: "Unknown 327"-style names are
+    regenerated on every run and cannot serve as a stable identity.
+    """
+
+    __tablename__ = "ignored_faces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Embedding stored as raw bytes (numpy float32 array → tobytes()),
+    # same format as Face.embedding.
+    _embedding: Mapped[bytes] = mapped_column(
+        "embedding", LargeBinary, nullable=False
+    )
+
+    # Crop thumbnail shown in the ignored-faces manager (may go stale; the UI
+    # falls back to a placeholder when the file no longer exists).
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Face row the embedding was taken from, when it still exists.  Used to
+    # re-enable the face on un-ignore; a force rescan may delete it (SET NULL).
+    source_face_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("faces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Display snapshot of the person the face belonged to (e.g. "Unknown 327").
+    source_person_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def get_embedding(self) -> Optional[np.ndarray]:
+        """Deserialise the stored embedding bytes to a float32 numpy array."""
+        if self._embedding is None:
+            return None
+        return np.frombuffer(self._embedding, dtype=np.float32).copy()
+
+    def set_embedding(self, vector: np.ndarray) -> None:
+        """Serialise a float32 numpy array and store it."""
+        self._embedding = vector.astype(np.float32).tobytes()
+
+    def __repr__(self) -> str:
+        return (
+            f"<IgnoredFace id={self.id} source_face_id={self.source_face_id} "
+            f"from={self.source_person_name!r}>"
+        )
+
+
+# ---------------------------------------------------------------------------
 # FaceCorrection
 # ---------------------------------------------------------------------------
 

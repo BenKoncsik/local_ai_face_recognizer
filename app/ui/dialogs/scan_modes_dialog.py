@@ -37,6 +37,7 @@ class ScanModesDialog(QDialog):
         on_find_overlapping_unknown_faces: Callable[[], None],
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
         on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
+        on_manage_ignored_faces: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -48,6 +49,7 @@ class ScanModesDialog(QDialog):
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
         self._on_identity_repair_scan = on_identity_repair_scan
         self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
+        self._on_manage_ignored_faces = on_manage_ignored_faces
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -129,6 +131,15 @@ class ScanModesDialog(QDialog):
                 button_label=t("scanModes.cleanupEmptyUnknowns.startButton"),
                 warning=t("scanModes.cleanupEmptyUnknowns.warning"),
                 callback=self._launch_cleanup_empty_unknown_persons,
+                danger=False,
+            ))
+        if self._on_manage_ignored_faces is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.ignoredFaces.title"),
+                description=t("scanModes.ignoredFaces.description"),
+                button_label=t("scanModes.ignoredFaces.startButton"),
+                warning=None,
+                callback=self._launch_manage_ignored_faces,
                 danger=False,
             ))
         cards_layout.addWidget(self._make_card(
@@ -248,3 +259,8 @@ class ScanModesDialog(QDialog):
         self.accept()
         if self._on_cleanup_empty_unknown_persons is not None:
             self._on_cleanup_empty_unknown_persons()
+
+    def _launch_manage_ignored_faces(self) -> None:
+        self.accept()
+        if self._on_manage_ignored_faces is not None:
+            self._on_manage_ignored_faces()
