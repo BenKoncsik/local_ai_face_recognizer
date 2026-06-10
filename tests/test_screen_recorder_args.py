@@ -269,6 +269,14 @@ def test_pick_system_audio() -> None:
         "virtual-audio-capturer"
     )
     assert pick_system_audio(["Mic", "Line In"]) is None
+    # Localized "Stereo Mix" (non-English Windows) must still be detected.
+    assert pick_system_audio(
+        ["Mikrofon (Realtek Audio)", "Sztereó keverő (Realtek Audio)"]
+    ) == "Sztereó keverő (Realtek Audio)"
+    # VB-Audio Virtual Cable loopback.
+    assert pick_system_audio(
+        ["CABLE Output (VB-Audio Virtual Cable)"]
+    ) == "CABLE Output (VB-Audio Virtual Cable)"
 
 
 # ---------------------------------------------------------------------------

@@ -630,13 +630,34 @@ def parse_dshow_audio_devices(stderr_text: str) -> List[str]:
 
 
 # Heuristic names that identify a virtual loopback (system-audio) device.
+# Includes localized "Stereo Mix" variants — on a non-English Windows the
+# device is renamed (e.g. Hungarian "Sztereó keverő"), so matching only the
+# English string would silently skip a perfectly usable loopback.
 _LOOPBACK_HINTS = (
     "blackhole",
     "loopback",
     "soundflower",
     "virtual-audio-capturer",
-    "stereo mix",
+    "virtual audio",
+    "vb-audio",
+    "voicemeeter",
+    "cable output",
     "what u hear",
+    "what you hear",
+    "wave out mix",
+    "wave out",
+    # "Stereo Mix" across locales (en / hu / de / fr / es / it / nl / pl / …).
+    "stereo mix",
+    "stereomix",
+    "sztereó keverő",
+    "szteró keverő",
+    "sztereó keverés",
+    "hangkeverő",
+    "stereomischung",
+    "mixage stéréo",
+    "mezcla estéreo",
+    "missaggio stereo",
+    "stereo-mix",
 )
 
 
