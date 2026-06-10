@@ -3,12 +3,14 @@
 The user can either pick an existing person (searchable list, reusing
 :class:`PersonSearchSelect`) or type a name to create a brand-new person for the
 selected faces.  The source person is excluded from the list so faces cannot be
-"moved" onto themselves.
+"moved" onto themselves.  When the caller supplies face-match scores the selector
+exposes the shared "order by similarity" toggle (see
+:mod:`app.services.match_scoring`).
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -34,6 +36,7 @@ class MoveFacesDialog(QDialog):
         face_count: int,
         persons: List[Person],
         exclude_person_id: Optional[int] = None,
+        match_scores: Optional[Dict[int, float]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -56,6 +59,10 @@ class MoveFacesDialog(QDialog):
         self._selector = PersonSearchSelect(self)
         candidates = [p for p in persons if p.id != exclude_person_id]
         self._selector.set_persons(candidates)
+        # Offer the shared "order by face-match similarity" toggle when the
+        # caller scored the moved faces against known people.
+        if match_scores:
+            self._selector.set_match_scores(match_scores)
         self._selector.person_selected.connect(self._on_person_selected)
         self._selector.person_double_clicked.connect(self._on_person_double_clicked)
         layout.addWidget(self._selector)

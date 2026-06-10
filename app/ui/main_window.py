@@ -40,6 +40,11 @@ from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
 from app.services.identity_service import BulkReassignResult, IdentityService
+from app.services.match_scoring import (
+    match_scores_for_face,
+    match_scores_for_faces,
+    match_scores_for_person,
+)
 from app.services.unknown_merge_service import UnknownMergeService
 from app.services.recognition_service import RecognitionService
 from app.ui.dialogs.export_dialog import ExportDialog
@@ -2626,67 +2631,9 @@ class MainWindow(QMainWindow):
 
             # Compute face-match scores for the source person so the
             # MergeDialog's person selector can show probabilistic name
-            # suggestions (same behaviour as the image-browser inline editor).
+            # suggestions (same shared logic as every other selector popup).
             recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = {}
-            try:
-                from app.services.recognition_service import RecognitionService
-                svc = RecognitionService(session, recognition_cfg)
-                # First try the normal path: build recognition profiles and use
-                # the source's profile centroid when available.
-                profiles = svc.build_profiles()
-                prof = profiles.get(source.id)
-                if prof is not None:
-                    match_scores = svc.score_persons(prof.centroid)
-
-                # Fallback: if no profile/scores (e.g. source is unknown/auto-named)
-                # compute a centroid from the source person's face embeddings and
-                # score that against per-person centroids built from every
-                # person's available embeddings (includes auto-named/unknown).
-                if not match_scores:
-                    try:
-                        import numpy as np
-
-                        # Build normalized centroid for the source person
-                        src_vecs = []
-                        for f in source.faces:
-                            fv = f.get_embedding()
-                            if fv is None:
-                                continue
-                            fn = float(np.linalg.norm(fv))
-                            if fn > 0:
-                                src_vecs.append(fv / fn)
-                        if src_vecs:
-                            src_centroid = np.mean(src_vecs, axis=0)
-                            scn = float(np.linalg.norm(src_centroid))
-                            if scn > 0:
-                                src_centroid = src_centroid / scn
-
-                                # Score against every person by their centroid
-                                fb: dict[int, float] = {}
-                                for p in persons:
-                                    vecs = []
-                                    for f in p.faces:
-                                        fv = f.get_embedding()
-                                        if fv is None:
-                                            continue
-                                        fn = float(np.linalg.norm(fv))
-                                        if fn > 0:
-                                            vecs.append(fv / fn)
-                                    if not vecs:
-                                        continue
-                                    centroid = np.mean(vecs, axis=0)
-                                    cn = float(np.linalg.norm(centroid))
-                                    if cn <= 0:
-                                        continue
-                                    centroid = centroid / cn
-                                    score = float(np.dot(src_centroid, centroid))
-                                    fb[p.id] = score
-                                match_scores = fb
-                    except Exception:
-                        log.exception("Merge dialog fallback scoring failed; continuing without scores")
-            except Exception:
-                log.exception("Failed to compute match scores for merge dialog; continuing without scores")
+            match_scores = match_scores_for_person(session, source, recognition_cfg)
 
             dlg = MergeDialog(source, persons, parent=self, match_scores=match_scores)
             if dlg.exec() != MergeDialog.Accepted:
@@ -2825,54 +2772,13 @@ class MainWindow(QMainWindow):
 
             # Optional face-match ordering: score the face being reassigned
             # against the known people so the user can sort candidates by
-            # similarity.  A missing embedding yields an empty mapping, which
-            # the selector treats as "no match data" (default ordering).
-            match_scores: dict[int, float] = {}
-            face_for_scoring = session.get(Face, self._current_face_id)
-            if face_for_scoring is not None:
-                emb = face_for_scoring.get_embedding()
-                if emb is not None:
-                    try:
-                        match_scores = RecognitionService(
-                            session, self._config.recognition
-                        ).score_persons(emb) or {}
-                    except Exception:  # noqa: BLE001
-                        log.exception("Face-match scoring failed; using default order")
-                        match_scores = {}
-
-                    # Fallback: if no scores were produced (e.g. recognition
-                    # profiles exclude auto-named people), build per-person
-                    # centroids from available face embeddings so unknown/auto
-                    # persons are also considered.
-                    if not match_scores:
-                        try:
-                            import numpy as np
-
-                            norm = float(np.linalg.norm(emb))
-                            if norm > 0:
-                                nemb = emb / norm
-                                fb: dict[int, float] = {}
-                                for p in persons:
-                                    vecs = []
-                                    for f in p.faces:
-                                        fv = f.get_embedding()
-                                        if fv is None:
-                                            continue
-                                        fn = float(np.linalg.norm(fv))
-                                        if fn > 0:
-                                            vecs.append(fv / fn)
-                                    if not vecs:
-                                        continue
-                                    centroid = np.mean(vecs, axis=0)
-                                    cn = float(np.linalg.norm(centroid))
-                                    if cn <= 0:
-                                        continue
-                                    centroid = centroid / cn
-                                    score = float(np.dot(nemb, centroid))
-                                    fb[p.id] = score
-                                match_scores = fb
-                        except Exception:
-                            log.exception("Fallback face-match scoring failed; continuing without scores")
+            # similarity (shared logic with every other selector popup).  A
+            # missing embedding yields an empty mapping, which the selector
+            # treats as "no match data" (default ordering).
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+            match_scores = match_scores_for_face(
+                session, self._current_face_id, recognition_cfg, config=self._config
+            )
 
             dlg = MergeDialog(
                 _FakePerson(), persons, parent=self, match_scores=match_scores
@@ -2928,10 +2834,13 @@ class MainWindow(QMainWindow):
                 src = session.get(Person, self._current_person_id)
                 src_name = src.name if src is not None else ""
             persons = session.query(Person).order_by(Person.name).all()
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+            match_scores = match_scores_for_faces(session, face_ids, recognition_cfg)
             dlg = MoveFacesDialog(
                 face_count=len(face_ids),
                 persons=persons,
                 exclude_person_id=self._current_person_id,
+                match_scores=match_scores,
                 parent=self,
             )
         if dlg.exec() != MoveFacesDialog.Accepted:

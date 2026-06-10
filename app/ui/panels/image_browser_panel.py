@@ -4783,34 +4783,18 @@ class ImageBrowserPanel(QWidget):
     def _compute_match_scores(self, face_id: int) -> dict[int, float]:
         """Score *face_id*'s embedding against known people for match ordering.
 
-        Returns an empty mapping (default ordering, no checkbox) when the face
-        has no embedding or scoring fails — a missing embedding must never break
-        the assign panel.
+        Thin wrapper over the shared :mod:`app.services.match_scoring` helper so
+        every person-selector popup ranks candidates the same way.  Returns an
+        empty mapping (default ordering, no checkbox) when the face has no
+        embedding or scoring fails.
         """
-        from app.services.recognition_service import RecognitionService
+        from app.services.match_scoring import match_scores_for_face
 
         recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-        try:
-            with session_scope() as session:
-                face = session.get(Face, face_id)
-                if face is None:
-                    return {}
-                embedding = face.get_embedding()
-                # Fallback for faces saved without a vector (e.g. older manual
-                # marks, or a marking where the model was unavailable): try to
-                # compute the embedding now so match-ordering becomes available
-                # instead of silently dropping the option.
-                if embedding is None and self._config is not None and face.crop_path:
-                    from app.services.embedding_service import embed_manual_face
-
-                    if embed_manual_face(session, face, self._config):
-                        embedding = face.get_embedding()
-                return RecognitionService(session, recognition_cfg).score_persons(
-                    embedding
-                )
-        except Exception:  # noqa: BLE001 — ordering is best-effort, never fatal
-            log.exception("Face-match scoring failed; using default order")
-            return {}
+        with session_scope() as session:
+            return match_scores_for_face(
+                session, face_id, recognition_cfg, config=self._config
+            )
 
     def _show_inline_editor(self, face_id: int) -> None:
         entry = next((f for f in self._face_data if f[0] == face_id), None)
