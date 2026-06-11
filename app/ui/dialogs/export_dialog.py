@@ -55,6 +55,8 @@ class ExportDialog(QDialog):
         on_collage_html_export: Optional[Callable[[], None]] = None,
         on_project_export: Optional[Callable[[], None]] = None,
         on_project_import: Optional[Callable[[], None]] = None,
+        on_deep_model_export: Optional[Callable[[], None]] = None,
+        on_deep_model_import: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -65,6 +67,8 @@ class ExportDialog(QDialog):
         self._on_collage_html_export_cb = on_collage_html_export
         self._on_project_export_cb = on_project_export
         self._on_project_import_cb = on_project_import
+        self._on_deep_model_export_cb = on_deep_model_export
+        self._on_deep_model_import_cb = on_deep_model_import
         self.setWindowTitle(t("export_title"))
         self.setMinimumWidth(500)
         self.setMinimumHeight(300)
@@ -124,6 +128,30 @@ class ExportDialog(QDialog):
         self._project_import_btn.clicked.connect(self._on_project_import_clicked)
         pkg_layout.addWidget(self._project_import_btn)
         layout.addWidget(pkg_box)
+
+        # --- AI model export / import ---
+        model_box = QGroupBox(t("deep_model_group"))
+        model_layout = QVBoxLayout(model_box)
+
+        model_export_desc = QLabel(t("deep_model_export_desc"))
+        model_export_desc.setWordWrap(True)
+        model_export_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        model_layout.addWidget(model_export_desc)
+        self._model_export_btn = QPushButton(f"🧠  {t('deep_model_export_btn')}")
+        self._model_export_btn.setEnabled(self._on_deep_model_export_cb is not None)
+        self._model_export_btn.clicked.connect(self._on_deep_model_export_clicked)
+        model_layout.addWidget(self._model_export_btn)
+
+        model_import_desc = QLabel(t("deep_model_import_desc"))
+        model_import_desc.setWordWrap(True)
+        model_import_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        model_layout.addWidget(model_import_desc)
+        self._model_import_btn = QPushButton(f"📂  {t('deep_model_import_btn')}")
+        self._model_import_btn.setEnabled(self._on_deep_model_import_cb is not None)
+        self._model_import_btn.clicked.connect(self._on_deep_model_import_clicked)
+        model_layout.addWidget(self._model_import_btn)
+
+        layout.addWidget(model_box)
 
         # --- CSV ---
         csv_box = QGroupBox(t("csv_export"))
@@ -651,3 +679,15 @@ class ExportDialog(QDialog):
             return
         self.accept()
         self._on_project_import_cb()
+
+    def _on_deep_model_export_clicked(self) -> None:
+        if self._on_deep_model_export_cb is None:
+            return
+        self.accept()
+        self._on_deep_model_export_cb()
+
+    def _on_deep_model_import_clicked(self) -> None:
+        if self._on_deep_model_import_cb is None:
+            return
+        self.accept()
+        self._on_deep_model_import_cb()

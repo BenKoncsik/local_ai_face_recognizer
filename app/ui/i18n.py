@@ -500,7 +500,91 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "pkg_import_later":  {"en": "Imported project is ready at:\n{dest}",
                           "hu": "Az importált projekt készen áll itt:\n{dest}"},
     "pkg_error_title":   {"en": "Project package error", "hu": "Projektcsomag hiba"},
-    "export_scope":      {"en": "Scope", "hu": "Hatókör"},
+    "deep_model_group":         {"en": "AI recognition model",
+                                 "hu": "AI felismerési modell"},
+    "deep_model_export_desc":   {"en": "Save the trained model to a file so it can be "
+                                 "transferred to another computer or kept as a backup.",
+                                 "hu": "A betanított modell mentése fájlba, hogy más "
+                                 "számítógépre átvihető vagy biztonsági másolatként "
+                                 "megőrizhető legyen."},
+    "deep_model_export_btn":    {"en": "Export model", "hu": "Modell exportálása"},
+    "deep_model_export_dialog": {"en": "Save AI model", "hu": "AI modell mentése"},
+    "deep_model_export_ok":     {"en": "Model saved to:\n{path}", "hu": "Modell mentve:\n{path}"},
+    "deep_model_export_none":   {"en": "No trained model found. Run the AI scan first.",
+                                 "hu": "Nincs betanított modell. Futtasd először az AI beolvasást."},
+    "deep_model_import_desc":   {"en": "Load a previously exported model file. "
+                                 "The current model will be replaced immediately.",
+                                 "hu": "Korábban exportált modellfájl betöltése. "
+                                 "Az aktuális modell azonnal felülíródik."},
+    "deep_model_import_btn":    {"en": "Import model", "hu": "Modell importálása"},
+    "deep_model_import_dialog": {"en": "Open AI model", "hu": "AI modell megnyitása"},
+    "deep_model_import_ok":     {"en": "Model loaded successfully.",
+                                 "hu": "Modell sikeresen betöltve."},
+    "deep_model_import_err":    {"en": "Could not load the model file. "
+                                 "It may be corrupt or from an incompatible version.",
+                                 "hu": "A modellfájl nem tölthető be. "
+                                 "Sérült vagy inkompatibilis verzióból származhat."},
+    "deep_model_title":         {"en": "AI Model", "hu": "AI modell"},
+
+    # ── Debug tab (Settings) ──────────────────────────────────────────────
+    "settings_tab_debug":       {"en": "Debug", "hu": "Debug"},
+    "debug_ai_viz_group":       {"en": "AI Visualization", "hu": "AI vizualizáció"},
+    "debug_ai_viz_check":       {"en": "Show AI decision window during scan",
+                                 "hu": "AI döntési ablak megjelenítése beolvasás közben"},
+    "debug_ai_viz_desc":        {"en": "Opens a live window showing the face crop, "
+                                 "neuron activations and output probabilities for each "
+                                 "face as the AI processes it.",
+                                 "hu": "Valós idejű ablakot nyit, amely minden feldolgozott "
+                                 "arcnál mutatja a kivágást, a neuron-aktivációkat és a "
+                                 "kimeneti valószínűségeket."},
+    "debug_log_group":          {"en": "Decision Log", "hu": "Döntési napló"},
+    "debug_log_check":          {"en": "Write detailed decision log (deep_debug.jsonl)",
+                                 "hu": "Részletes döntési napló írása (deep_debug.jsonl)"},
+    "debug_log_desc":           {"en": "Appends one JSON line per face to "
+                                 "data/deep_debug.jsonl — contains gate results, "
+                                 "similarity scores and the final decision. "
+                                 "Useful for reverse-engineering why a face was accepted "
+                                 "or rejected.",
+                                 "hu": "Minden archoz egy JSON sort fűz a "
+                                 "data/deep_debug.jsonl fájlhoz — tartalmazza a gate "
+                                 "eredményeket, hasonlóság-értékeket és a végső döntést. "
+                                 "Hasznos annak kiderítésére, miért lett elfogadva vagy "
+                                 "elutasítva egy arc."},
+    "debug_log_open_btn":       {"en": "Open log file", "hu": "Naplófájl megnyitása"},
+    "debug_log_clear_btn":      {"en": "Clear log", "hu": "Napló törlése"},
+    "debug_log_cleared":        {"en": "Debug log cleared.", "hu": "Debug napló törölve."},
+    "debug_log_not_found":      {"en": "No debug log found yet.", "hu": "Még nincs debug napló."},
+
+    # ── AI visualization window ───────────────────────────────────────────
+    "debug_viz_title":          {"en": "AI Decision Visualizer", "hu": "AI döntés vizualizátor"},
+    "debug_viz_gates":          {"en": "Gates", "hu": "Kapuk"},
+    "debug_viz_layer":          {"en": "Layer", "hu": "Réteg"},
+    "debug_viz_neurons":        {"en": "neurons", "hu": "neuron"},
+    "debug_viz_output_probs":   {"en": "Output probabilities", "hu": "Kimeneti valószínűségek"},
+    "debug_viz_person":         {"en": "Person", "hu": "Személy"},
+    "debug_viz_score":          {"en": "Score", "hu": "Pontszám"},
+    "debug_viz_similarity":     {"en": "Similarity", "hu": "Hasonlóság"},
+    "debug_viz_probability":    {"en": "Probability", "hu": "Valószínűség"},
+    "debug_viz_margin":         {"en": "Margin", "hu": "Különbség"},
+    "debug_viz_mode":           {"en": "Mode", "hu": "Mód"},
+    "debug_viz_emb_norm":       {"en": "Emb. norm", "hu": "Emb. norma"},
+    "debug_viz_reason_assigned":    {"en": "ASSIGNED", "hu": "HOZZÁRENDELVE"},
+    "debug_viz_reason_outlier":     {"en": "REJECTED — outlier", "hu": "ELUTASÍTVA — idegen"},
+    "debug_viz_reason_threshold":   {"en": "REJECTED — low probability",
+                                     "hu": "ELUTASÍTVA — alacsony valószínűség"},
+    "debug_viz_reason_margin":      {"en": "REJECTED — ambiguous (margin)",
+                                     "hu": "ELUTASÍTVA — kétértelmű (margin)"},
+    "debug_viz_reason_prototype":   {"en": "REJECTED — too far from examples",
+                                     "hu": "ELUTASÍTVA — túl messze a példáktól"},
+    "debug_viz_reason_untrained":   {"en": "SKIPPED — model not trained",
+                                     "hu": "KIHAGYVA — modell nincs betanítva"},
+    "debug_viz_reason_no_embedding": {"en": "SKIPPED — no embedding",
+                                      "hu": "KIHAGYVA — nincs embedding"},
+    "debug_viz_flow_title":         {"en": "Decision path", "hu": "Döntési útvonal"},
+    "debug_viz_nav_live_tooltip":   {"en": "Jump to latest face (live follow mode)",
+                                     "hu": "Ugrás a legutóbbi archoz (élő követési mód)"},
+
+    "export_scope":             {"en": "Scope", "hu": "Hatókör"},
     "export_all_persons": {"en": "All persons", "hu": "Összes személy"},
     "export_selected_person": {"en": "Selected person only: {name}",
                                "hu": "Csak a kiválasztott: {name}"},
@@ -1251,6 +1335,22 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_gallery_clear_thumb": {"en": "Reset to automatic thumbnail", "hu": "Automatikus bélyegkép visszaállítása"},
     "set_as_person_thumbnail":   {"en": "Set as person thumbnail", "hu": "Beállítás személy bélyegképének"},
     "clear_person_thumbnail":    {"en": "Reset to automatic thumbnail", "hu": "Automatikus bélyegkép visszaállítása"},
+
+    # ── Uncertain identification (face-level) ────────────────────────────────
+    "face_mark_uncertain":       {"en": "Mark identification as uncertain",
+                                  "hu": "Azonosítás megjelölése bizonytalanként"},
+    "face_mark_certain":         {"en": "Mark identification as certain",
+                                  "hu": "Azonosítás megjelölése biztosként"},
+    "face_edit_note":            {"en": "Edit identification note…",
+                                  "hu": "Azonosítási megjegyzés szerkesztése…"},
+    "face_note_dialog_title":    {"en": "Identification note",
+                                  "hu": "Azonosítási megjegyzés"},
+    "face_note_dialog_prompt":   {"en": "Note about this identification (leave blank to remove):",
+                                  "hu": "Megjegyzés ehhez az azonosításhoz (törölje a tartalmát az eltávolításhoz):"},
+    "face_uncertain_tooltip":    {"en": "Uncertain identification",
+                                  "hu": "Bizonytalan azonosítás"},
+    "face_uncertain_saved":      {"en": "Identification status updated.",
+                                  "hu": "Azonosítás állapota frissítve."},
     "thumbnail_set_ok":          {"en": "Thumbnail updated.", "hu": "Bélyegkép frissítve."},
     "thumbnail_clear_ok":        {"en": "Automatic thumbnail restored.", "hu": "Automatikus bélyegkép visszaállítva."},
     "thumbnail_set_error":       {"en": "Could not set thumbnail: {error}", "hu": "Nem sikerült beállítani a bélyegképet: {error}"},

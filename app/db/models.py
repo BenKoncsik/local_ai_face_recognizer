@@ -566,6 +566,16 @@ class Face(Base):
     # Manually assigned faces can still be used for training regardless.
     is_low_quality: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
+    # User-flagged uncertain identification.  When True the person assignment is
+    # considered a hypothesis (e.g. "probably Poszi") rather than a confirmed
+    # identity.  Old records default to False (certain).
+    is_uncertain_identification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # Free-text note attached to the identification of this face.  Used to record
+    # research evidence, doubts or conflicting family memories.  Optional.
+    identification_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     image: Mapped["Image"] = relationship("Image", back_populates="faces")

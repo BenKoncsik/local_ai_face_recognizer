@@ -63,6 +63,8 @@ class PersonFaceCrop:
     crop_path: Optional[str]
     image_path: Optional[str]
     confidence: float
+    is_uncertain: bool = False
+    identification_note: Optional[str] = None
 
 
 class PersonService:
@@ -186,6 +188,8 @@ class PersonService:
                     crop_path=face.crop_path,
                     image_path=image_path,
                     confidence=float(face.confidence or 0.0),
+                    is_uncertain=bool(face.is_uncertain_identification),
+                    identification_note=face.identification_note,
                 )
             )
         return result

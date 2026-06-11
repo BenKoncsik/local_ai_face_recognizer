@@ -70,6 +70,8 @@ class DeepPipelineWorker(QThread):
         auto_assignments_ready:  ``(count)`` — reviewable automatic groupings
         finished:                ``(success, summary)``
         error:                   ``(message)``
+        face_debug:              ``(DeepDebugInfo)`` — emitted per-face when
+                                 ``ai_visualization`` or ``ai_debug_log`` is on
     """
 
     progress = Signal(int, int, str, str)
@@ -78,6 +80,7 @@ class DeepPipelineWorker(QThread):
     auto_assignments_ready = Signal(int)
     finished = Signal(bool, str)
     error = Signal(str)
+    face_debug = Signal(object)
 
     def __init__(
         self,
@@ -89,6 +92,8 @@ class DeepPipelineWorker(QThread):
         drive_client=None,
         drive_root_folder_id: Optional[str] = None,
         drive_mirror_dir: Optional[Path] = None,
+        ai_visualization: bool = False,
+        ai_debug_log: bool = False,
     ) -> None:
         super().__init__(parent)
         if mode not in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN):
@@ -101,6 +106,8 @@ class DeepPipelineWorker(QThread):
         self._drive_client = drive_client
         self._drive_root_folder_id = drive_root_folder_id
         self._drive_mirror_dir = drive_mirror_dir
+        self._ai_visualization = ai_visualization
+        self._ai_debug_log = ai_debug_log
 
     @property
     def _drive_mode(self) -> bool:
@@ -114,6 +121,46 @@ class DeepPipelineWorker(QThread):
         """Request a graceful stop (checked between pipeline stages)."""
         self._abort = True
         log.info("Deep pipeline abort requested")
+
+    def _write_debug_log(self, info: object) -> None:
+        """Append one JSON line to data/deep_debug.jsonl."""
+        import json
+        from app.deep.debug_info import DeepDebugInfo
+        if not isinstance(info, DeepDebugInfo):
+            return
+        try:
+            log_path = self._config.resolve("data/deep_debug.jsonl")
+            entry = {
+                "face_id": info.face_id,
+                "crop_path": info.crop_path,
+                "mode": info.mode,
+                "embedding_norm": round(info.embedding_norm, 4),
+                "embedding_top_dims": [(int(i), round(float(v), 4)) for i, v in info.embedding_top_dims],
+                "all_similarities": {k: round(v, 4) for k, v in info.all_similarities.items()},
+                "gates": [
+                    {
+                        "name": g.name,
+                        "passed": g.passed,
+                        "value": round(g.value, 4),
+                        "threshold": round(g.threshold, 4),
+                    }
+                    for g in info.gates
+                ],
+                "output_probs": {k: round(v, 4) for k, v in list(info.output_probs.items())[:10]},
+                "decision": {
+                    "person_id": info.prediction.person_id,
+                    "person_name": info.prediction.person_name,
+                    "score": round(info.prediction.score, 4),
+                    "probability": round(info.prediction.probability, 4),
+                    "similarity": round(info.prediction.similarity, 4),
+                    "margin": round(info.prediction.margin, 4),
+                    "reason": info.prediction.reason,
+                },
+            }
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Debug log write failed: %s", exc)
 
     def run(self) -> None:
         try:
@@ -508,6 +555,14 @@ class DeepPipelineWorker(QThread):
         def recognize_cb(current, total, detail):
             self.progress.emit(current, total or 0, "Recognizing", detail)
 
+        debug_cb = None
+        if self._ai_visualization or self._ai_debug_log:
+            def debug_cb(info):  # type: ignore[misc]
+                if self._ai_debug_log:
+                    self._write_debug_log(info)
+                if self._ai_visualization:
+                    self.face_debug.emit(info)
+
         with session_scope() as session:
             svc = DeepRecognitionService(
                 session=session,
@@ -520,6 +575,7 @@ class DeepPipelineWorker(QThread):
                 mode=self._mode,
                 train_progress_cb=train_cb,
                 recognize_progress_cb=recognize_cb,
+                debug_cb=debug_cb,
             )
         train = result.train
         acc = (

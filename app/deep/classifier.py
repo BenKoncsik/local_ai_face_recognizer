@@ -240,6 +240,104 @@ class DeepFaceClassifier:
             return self._predict_prototype(vec, sims)
         return self._predict_ensemble(vec, sims)
 
+    def predict_debug(
+        self,
+        embedding: Optional[np.ndarray],
+        face_id: int = -1,
+        crop_path: Optional[str] = None,
+    ) -> Tuple["DeepPrediction", "DeepDebugInfo"]:
+        """Like :meth:`predict` but also returns a :class:`DeepDebugInfo` object.
+
+        The extra work (activation forward pass, gate recording) only happens
+        here — the hot path :meth:`predict` is not affected.
+        """
+        from app.deep.debug_info import (
+            DeepDebugInfo,
+            GateResult,
+            compute_layer_activations,
+        )
+
+        state = self._state
+        gates: List[GateResult] = []
+        layer_activations: List[np.ndarray] = []
+        output_probs: Dict[int, float] = {}
+        all_similarities: Dict[str, float] = {}
+
+        vec = self._unit(embedding)
+        if vec is None or not self.is_trained:
+            pred = self.predict(embedding)
+            return pred, DeepDebugInfo(
+                face_id=face_id, crop_path=crop_path,
+                embedding_norm=0.0, embedding_top_dims=[],
+                all_similarities={}, layer_activations=[],
+                output_probs={}, gates=[], prediction=pred,
+                mode=state.mode,
+            )
+
+        sims = state.train_matrix @ vec
+        # Per-person max similarity
+        for pid in state.classes:
+            mask = state.train_labels == pid
+            if mask.any():
+                all_similarities[state.person_names.get(pid, str(pid))] = float(np.max(sims[mask]))
+
+        # Gate 1: outlier
+        best_global_sim = float(np.max(sims)) if sims.size else 0.0
+        outlier_thr = self._cfg("outlier_similarity", 0.42)
+        gates.append(GateResult("outlier", best_global_sim >= outlier_thr,
+                                best_global_sim, outlier_thr))
+
+        # Activations from first ensemble member (ensemble mode only)
+        if state.mode == "ensemble" and state.members:
+            layer_activations = compute_layer_activations(state.members[0], vec)
+            probs_avg = self._ensemble_proba(vec.reshape(1, -1))[0]
+            output_probs = {
+                state.person_names.get(int(state.classes[i]), str(state.classes[i])): float(p)
+                for i, p in enumerate(probs_avg)
+            }
+            if best_global_sim >= outlier_thr:
+                order = np.argsort(probs_avg)[::-1]
+                top_idx = int(order[0])
+                second_idx = int(order[1]) if len(order) > 1 else top_idx
+                pid = int(state.classes[top_idx])
+                prob = float(probs_avg[top_idx])
+                margin = prob - float(probs_avg[second_idx])
+                thr = state.prob_thresholds.get(pid, self._cfg("base_prob_threshold", 0.60))
+                gates.append(GateResult("prob", prob >= thr, prob, thr))
+                min_margin = self._cfg("min_margin", 0.10)
+                gates.append(GateResult("margin", margin >= min_margin, margin, min_margin))
+                mask = state.train_labels == pid
+                sim = float(np.max(sims[mask])) if mask.any() else 0.0
+                default_floor = self._cfg("min_prototype_similarity", 0.55)
+                floor = max(state.sim_floors.get(pid, default_floor), default_floor)
+                gates.append(GateResult("sim_floor", sim >= floor, sim, floor))
+                other_mask = state.train_labels != pid
+                runner_sim = float(np.max(sims[other_mask])) if other_mask.any() else 0.0
+                sim_margin_thr = self._cfg("min_sim_margin", 0.05)
+                gates.append(GateResult("sim_margin", sim - runner_sim >= sim_margin_thr,
+                                        sim - runner_sim, sim_margin_thr))
+
+        # Embedding stats
+        emb_arr = np.asarray(embedding, dtype=np.float32).ravel()
+        emb_norm = float(np.linalg.norm(emb_arr)) if emb_arr.size else 0.0
+        top_idx_arr = np.argsort(np.abs(emb_arr))[::-1][:10]
+        emb_top = [(int(i), float(emb_arr[i])) for i in top_idx_arr]
+
+        pred = self.predict(embedding)
+        info = DeepDebugInfo(
+            face_id=face_id,
+            crop_path=crop_path,
+            embedding_norm=emb_norm,
+            embedding_top_dims=emb_top,
+            all_similarities=all_similarities,
+            layer_activations=layer_activations,
+            output_probs=output_probs,
+            gates=gates,
+            prediction=pred,
+            mode=state.mode,
+        )
+        return pred, info
+
     def _predict_prototype(self, vec: np.ndarray, sims: np.ndarray) -> DeepPrediction:
         state = self._state
         best: Dict[int, float] = {}

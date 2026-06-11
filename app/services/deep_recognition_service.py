@@ -25,6 +25,7 @@ Safety rules
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,6 +140,58 @@ class DeepRecognitionService:
     def model_path(self) -> Path:
         return self._model_dir / _MODEL_FILENAME
 
+    # ------------------------------------------------------------------
+    # Model export / import
+    # ------------------------------------------------------------------
+
+    def export_model(self, dest_path: Path | str) -> bool:
+        """Copy the current model file to *dest_path*.
+
+        Returns True on success, False when no trained model exists yet.
+        """
+        dest = Path(dest_path)
+        src = self.model_path
+        if not src.exists():
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        log.info("Deep model exported: %s → %s", src, dest)
+        return True
+
+    def import_model(self, src_path: Path | str) -> bool:
+        """Replace the active model with the file at *src_path*.
+
+        Validates the file version before installing.  Returns True on success,
+        False when the file is missing, corrupt, or a version mismatch.
+        """
+        import pickle
+
+        from app.deep.classifier import _MODEL_FILE_VERSION
+
+        src = Path(src_path)
+        if not src.exists():
+            log.warning("Import failed — file not found: %s", src)
+            return False
+        try:
+            with open(src, "rb") as fh:
+                payload = pickle.load(fh)
+            if payload.get("version") != _MODEL_FILE_VERSION:
+                log.warning(
+                    "Import failed — version mismatch (got %s, expected %s)",
+                    payload.get("version"),
+                    _MODEL_FILE_VERSION,
+                )
+                return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Import failed — cannot read model file: %s", exc)
+            return False
+
+        dest = self.model_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        log.info("Deep model imported: %s → %s", src, dest)
+        return True
+
     def train(
         self,
         mode: str = "rescan",
@@ -211,6 +264,7 @@ class DeepRecognitionService:
         classifier: DeepFaceClassifier,
         training_run: TrainingRun,
         progress_cb=None,
+        debug_cb=None,
     ) -> DeepRecognitionStats:
         """Assign still-unknown faces to known people where the model is sure.
 
@@ -243,7 +297,14 @@ class DeepRecognitionService:
                 stats.n_skipped_low_confidence += 1
                 continue
 
-            prediction = classifier.predict(face.get_embedding())
+            if debug_cb is not None:
+                crop_path = str(face.crop_path) if face.crop_path else None
+                prediction, debug_info = classifier.predict_debug(
+                    face.get_embedding(), face_id=face.id, crop_path=crop_path
+                )
+                debug_cb(debug_info)
+            else:
+                prediction = classifier.predict(face.get_embedding())
             if prediction.reason == "no_embedding":
                 stats.n_no_embedding += 1
                 continue
@@ -302,6 +363,7 @@ class DeepRecognitionService:
         mode: str = "rescan",
         train_progress_cb=None,
         recognize_progress_cb=None,
+        debug_cb=None,
     ) -> TrainAndRecognizeResult:
         """Convenience wrapper: one full continual-learning cycle."""
         result = TrainAndRecognizeResult()
@@ -311,7 +373,9 @@ class DeepRecognitionService:
         result.training_run_id = run.id
         result.train = train_stats
         result.recognition = self.recognize(
-            classifier, run, progress_cb=recognize_progress_cb
+            classifier, run,
+            progress_cb=recognize_progress_cb,
+            debug_cb=debug_cb,
         )
         return result
 

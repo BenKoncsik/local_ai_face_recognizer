@@ -49,21 +49,24 @@ from app.ui.widgets.flow_layout import FlowContainer
 
 log = logging.getLogger(__name__)
 
-# (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None)
-_FaceData = Tuple[int, int, int, int, int, Optional[str]]
+# (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None, is_uncertain)
+_FaceData = Tuple[int, int, int, int, int, Optional[str], bool]
 
 # Colours used for bounding-box / label rendering
-_COLOR_SELECTED = QColor(50, 220, 50)
-_COLOR_HOVER    = QColor(255, 200, 60)
-_COLOR_NORMAL   = QColor(180, 180, 180)
+_COLOR_SELECTED   = QColor(50, 220, 50)
+_COLOR_HOVER      = QColor(255, 200, 60)
+_COLOR_NORMAL     = QColor(180, 180, 180)
+_COLOR_UNCERTAIN  = QColor(255, 160, 50)   # orange — uncertain identification
 
-_BG_SELECTED = QColor(10,  30, 10, 210)
-_BG_HOVER    = QColor(30,  25,  5, 210)
-_BG_NORMAL   = QColor(20,  20, 20, 200)
+_BG_SELECTED  = QColor(10,  30, 10, 210)
+_BG_HOVER     = QColor(30,  25,  5, 210)
+_BG_NORMAL    = QColor(20,  20, 20, 200)
+_BG_UNCERTAIN = QColor(40,  20,  0, 210)   # dark amber background
 
-_BORDER_SELECTED = QColor(50,  220, 50,  180)
-_BORDER_HOVER    = QColor(255, 200, 60,  180)
-_BORDER_NORMAL   = QColor(100, 100, 100, 120)
+_BORDER_SELECTED  = QColor(50,  220, 50,  180)
+_BORDER_HOVER     = QColor(255, 200, 60,  180)
+_BORDER_NORMAL    = QColor(100, 100, 100, 120)
+_BORDER_UNCERTAIN = QColor(255, 160, 50,  160)  # orange border
 
 # Object markers use a distinct colour scheme (cyan) so they are never
 # confused with face boxes (green/grey).
@@ -121,9 +124,14 @@ def _draw_faces_pil(
 
     img = img_bgr.copy()
 
-    for face_id, x, y, w, h, _ in faces:
+    for face_id, x, y, w, h, _, is_uncertain in faces:
         selected = face_id == selected_id
-        color = (50, 220, 50) if selected else (180, 180, 180)
+        if selected:
+            color = (50, 220, 50)
+        elif is_uncertain:
+            color = (255, 160, 50)
+        else:
+            color = (180, 180, 180)
         thickness = 3 if selected else 2
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
 
@@ -135,10 +143,16 @@ def _draw_faces_pil(
     font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
     face_meta = []
-    for face_id, x, y, w, h, person_name in faces:
+    for face_id, x, y, w, h, person_name, is_uncertain in faces:
         selected = face_id == selected_id
-        color_rgb = (50, 220, 50) if selected else (180, 180, 180)
-        name = person_name or "?"
+        if selected:
+            color_rgb = (50, 220, 50)
+        elif is_uncertain:
+            color_rgb = (255, 160, 50)
+        else:
+            color_rgb = (180, 180, 180)
+        raw_name = person_name or "?"
+        name = f"{raw_name} (?)" if is_uncertain and person_name else raw_name
         label_font_size = font_size
         font = _get_pil_font(label_font_size)
 
@@ -509,7 +523,7 @@ class _FaceImageLabel(QLabel):
         cache_key = (
             disp_w, disp_h,
             self._selected_face_id,
-            tuple((f[0], int(f[1]), int(f[2]), int(f[3]), int(f[4])) for f in disp_faces),
+            tuple((f[0], int(f[1]), int(f[2]), int(f[3]), int(f[4]), bool(f[6])) for f in disp_faces),
         )
         if self._layout_cache_key == cache_key and self._layout_cache is not None:
             return self._layout_cache
@@ -519,8 +533,9 @@ class _FaceImageLabel(QLabel):
         pad_y = max(3, font.pixelSize() // 7) if font.pixelSize() > 0 else 4
 
         label_sizes: List[Tuple[str, int, int, int, int]] = []
-        for face_id, dx, dy, dw, dh, name in disp_faces:
-            display_name = name or "?"
+        for face_id, dx, dy, dw, dh, name, is_uncertain in disp_faces:
+            raw_name = name or "?"
+            display_name = f"{raw_name} (?)" if is_uncertain and name else raw_name
             tw = metrics.horizontalAdvance(display_name)
             th = metrics.height()
             label_sizes.append((display_name, tw + 2 * pad_x, th + 2 * pad_y, pad_x, pad_y))
@@ -572,12 +587,12 @@ class _FaceImageLabel(QLabel):
 
         # Build display-space face list
         disp_faces: List[Tuple] = []
-        for face_id, ix, iy, iw, ih, name in self._face_render_data:
+        for face_id, ix, iy, iw, ih, name, is_uncertain in self._face_render_data:
             dx = ox + ix * scale
             dy = oy + iy * scale
             dw = iw * scale
             dh = ih * scale
-            disp_faces.append((face_id, dx, dy, dw, dh, name))
+            disp_faces.append((face_id, dx, dy, dw, dh, name, is_uncertain))
 
         # Font sized for display space
         img_font_size = max(34, min(96, int(min(self._full_w, self._full_h) * 0.028)))
@@ -593,7 +608,7 @@ class _FaceImageLabel(QLabel):
 
         # ── Bounding boxes ───────────────────────────────────────────────
         if self._show_bboxes:
-            for i, (face_id, dx, dy, dw, dh, name) in enumerate(disp_faces):
+            for i, (face_id, dx, dy, dw, dh, name, is_uncertain) in enumerate(disp_faces):
                 is_selected = face_id == self._selected_face_id
                 is_hovered = face_id == self._hover_face_id
 
@@ -605,6 +620,10 @@ class _FaceImageLabel(QLabel):
                     color = _COLOR_HOVER
                     thickness = 2.5
                     opacity = 1.0
+                elif is_uncertain:
+                    color = _COLOR_UNCERTAIN
+                    thickness = 1.5
+                    opacity = self._bbox_opacity
                 else:
                     color = _COLOR_NORMAL
                     thickness = 1.5
@@ -620,7 +639,7 @@ class _FaceImageLabel(QLabel):
             pad_x = max(4, disp_font_px // 4)
             pad_y = max(3, disp_font_px // 7)
 
-            for i, (face_id, dx, dy, dw, dh, name) in enumerate(disp_faces):
+            for i, (face_id, dx, dy, dw, dh, name, is_uncertain) in enumerate(disp_faces):
                 if layouts[i] is None:
                     continue
                 layout = layouts[i]
@@ -639,6 +658,11 @@ class _FaceImageLabel(QLabel):
                     bg_color     = _BG_HOVER
                     border_color = _BORDER_HOVER
                     opacity      = 1.0
+                elif is_uncertain:
+                    text_color   = _COLOR_UNCERTAIN
+                    bg_color     = _BG_UNCERTAIN
+                    border_color = _BORDER_UNCERTAIN
+                    opacity      = self._label_opacity
                 else:
                     text_color   = _COLOR_NORMAL
                     bg_color     = _BG_NORMAL
@@ -744,19 +768,21 @@ class PreviewPanel(QWidget):
         next_image_requested: emitted when the user clicks "Következő →"
     """
 
-    face_selected                  = Signal(int)
-    face_assign_requested          = Signal(int)
-    face_delete_requested          = Signal(int)
-    face_create_requested          = Signal(int, int, int, int, int)
-    face_bbox_update_requested     = Signal(int, int, int, int, int)
-    face_diagnostics_requested     = Signal(int)
-    face_set_thumbnail_requested   = Signal(int)   # face_id
-    face_clear_thumbnail_requested = Signal(int)   # person_id
-    face_accept_auto_merge         = Signal(int)   # face_id (confirm pending)
-    face_move_auto_merge           = Signal(int)   # face_id (re-assign pending)
-    object_create_requested        = Signal(int, int, int)  # image_id, x, y
-    prev_image_requested           = Signal()
-    next_image_requested           = Signal()
+    face_selected                      = Signal(int)
+    face_assign_requested              = Signal(int)
+    face_delete_requested              = Signal(int)
+    face_create_requested              = Signal(int, int, int, int, int)
+    face_bbox_update_requested         = Signal(int, int, int, int, int)
+    face_diagnostics_requested         = Signal(int)
+    face_set_thumbnail_requested       = Signal(int)   # face_id
+    face_clear_thumbnail_requested     = Signal(int)   # person_id
+    face_accept_auto_merge             = Signal(int)   # face_id (confirm pending)
+    face_move_auto_merge               = Signal(int)   # face_id (re-assign pending)
+    # face_id, is_uncertain (new value), note (new value or "" to leave unchanged)
+    face_uncertainty_change_requested  = Signal(int, bool, str)
+    object_create_requested            = Signal(int, int, int)  # image_id, x, y
+    prev_image_requested               = Signal()
+    next_image_requested               = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -1037,6 +1063,7 @@ class PreviewPanel(QWidget):
                 f.id,
                 f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
                 f.person.name if f.person else None,
+                bool(f.is_uncertain_identification),
             )
             for f in face.image.faces
             if not f.is_excluded
@@ -1180,12 +1207,20 @@ class PreviewPanel(QWidget):
             self._update_action_buttons()
             self.face_selected.emit(face_id)
 
+        # Resolve current state from in-memory face data
+        entry = next((f for f in self._face_data if f[0] == face_id), None)
         if person_name is None:
-            entry = next((f for f in self._face_data if f[0] == face_id), None)
             person_name = entry[5] if entry else None
+        is_uncertain = bool(entry[6]) if entry else False
+
+        # Build title — show "(?)" suffix if currently uncertain
+        if person_name:
+            title_text = f"👤  {person_name} (?)" if is_uncertain else f"👤  {person_name}"
+        else:
+            title_text = f"👤  {t('unknown_face')}"
 
         menu = QMenu(self)
-        title = menu.addAction(f"👤  {person_name}" if person_name else f"👤  {t('unknown_face')}")
+        title = menu.addAction(title_text)
         title.setEnabled(False)
         menu.addSeparator()
 
@@ -1201,6 +1236,17 @@ class PreviewPanel(QWidget):
         delete_action = menu.addAction(f"🗑  {t('delete_selection')}")
         menu.addSeparator()
         diag_action = menu.addAction(f"🔍  {t('diag_menu')}")
+
+        # Uncertainty section (only for assigned faces)
+        toggle_uncertain_action = None
+        edit_note_action = None
+        if person_name:
+            menu.addSeparator()
+            if is_uncertain:
+                toggle_uncertain_action = menu.addAction(f"✓  {t('face_mark_certain')}")
+            else:
+                toggle_uncertain_action = menu.addAction(f"?  {t('face_mark_uncertain')}")
+            edit_note_action = menu.addAction(f"📝  {t('face_edit_note')}")
 
         set_thumb_action   = None
         clear_thumb_action = None
@@ -1222,11 +1268,51 @@ class PreviewPanel(QWidget):
             self.face_delete_requested.emit(face_id)
         elif chosen == diag_action:
             self.face_diagnostics_requested.emit(face_id)
+        elif toggle_uncertain_action and chosen == toggle_uncertain_action:
+            self.face_uncertainty_change_requested.emit(face_id, not is_uncertain, "")
+        elif edit_note_action and chosen == edit_note_action:
+            self._open_face_note_dialog(face_id, is_uncertain)
         elif set_thumb_action and chosen == set_thumb_action:
             self.face_set_thumbnail_requested.emit(face_id)
         elif clear_thumb_action and chosen == clear_thumb_action:
             # person_id is resolved in main_window from the face_id
             self.face_clear_thumbnail_requested.emit(face_id)
+
+    def _open_face_note_dialog(self, face_id: int, is_uncertain: bool) -> None:
+        """Open a multi-line dialog to view/edit the identification note for *face_id*."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout, QLabel
+
+        # Retrieve current note from in-memory face data (populated from DB on show_face)
+        # We only store (id, x, y, w, h, name, is_uncertain) in _face_data; the note must
+        # be fetched separately.  Open a short-lived session here so the dialog is self-contained.
+        from app.db.database import get_session
+        from app.db.models import Face as _Face
+        current_note = ""
+        try:
+            session = get_session()
+            _face = session.get(_Face, face_id)
+            if _face is not None:
+                current_note = _face.identification_note or ""
+            session.close()
+        except Exception:
+            pass
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(t("face_note_dialog_title"))
+        dlg.setMinimumWidth(400)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel(t("face_note_dialog_prompt")))
+        text_edit = QPlainTextEdit(current_note)
+        text_edit.setMinimumHeight(80)
+        layout.addWidget(text_edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.Accepted:
+            new_note = text_edit.toPlainText().strip()
+            self.face_uncertainty_change_requested.emit(face_id, is_uncertain, new_note)
 
     def _on_draw_mode_toggled(self, active: bool) -> None:
         if active and self._object_btn.isChecked():

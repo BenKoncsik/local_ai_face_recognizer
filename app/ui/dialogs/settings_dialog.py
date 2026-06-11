@@ -78,6 +78,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_shortcuts(), t("settings_tab_shortcuts"))
         tabs.addTab(self._build_tab_recording(), t("settings_tab_recording"))
         tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
+        tabs.addTab(self._build_tab_debug(), t("settings_tab_debug"))
         outer.addWidget(tabs, stretch=1)
 
         # ── Buttons — always visible outside the tabs ─────────────────────
@@ -533,6 +534,93 @@ class SettingsDialog(QDialog):
         self._gdrive_tab = GDriveSettingsTab(self)
         return self._gdrive_tab
 
+    def _build_tab_debug(self) -> QWidget:
+        """Build the Debug tab with AI visualization and decision log toggles."""
+        from PySide6.QtWidgets import QCheckBox, QGroupBox, QPushButton, QScrollArea
+
+        qs = _qsettings()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setSpacing(14)
+        layout.setContentsMargins(2, 8, 2, 2)
+
+        # ── AI Visualization ─────────────────────────────────────────────
+        viz_group = QGroupBox(t("debug_ai_viz_group"))
+        viz_layout = QVBoxLayout(viz_group)
+
+        viz_desc = QLabel(t("debug_ai_viz_desc"))
+        viz_desc.setWordWrap(True)
+        viz_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        viz_layout.addWidget(viz_desc)
+
+        self._debug_viz_check = QCheckBox(t("debug_ai_viz_check"))
+        self._debug_viz_check.setChecked(
+            qs.value("debug/ai_visualization", False, type=bool)
+        )
+        viz_layout.addWidget(self._debug_viz_check)
+        layout.addWidget(viz_group)
+
+        # ── Decision Log ─────────────────────────────────────────────────
+        log_group = QGroupBox(t("debug_log_group"))
+        log_layout = QVBoxLayout(log_group)
+
+        log_desc = QLabel(t("debug_log_desc"))
+        log_desc.setWordWrap(True)
+        log_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        log_layout.addWidget(log_desc)
+
+        self._debug_log_check = QCheckBox(t("debug_log_check"))
+        self._debug_log_check.setChecked(
+            qs.value("debug/ai_log_enabled", False, type=bool)
+        )
+        log_layout.addWidget(self._debug_log_check)
+
+        btn_row = QHBoxLayout()
+        open_log_btn = QPushButton(t("debug_log_open_btn"))
+        open_log_btn.clicked.connect(self._on_open_debug_log)
+        btn_row.addWidget(open_log_btn)
+
+        clear_log_btn = QPushButton(t("debug_log_clear_btn"))
+        clear_log_btn.clicked.connect(self._on_clear_debug_log)
+        btn_row.addWidget(clear_log_btn)
+        btn_row.addStretch()
+        log_layout.addLayout(btn_row)
+        layout.addWidget(log_group)
+
+        layout.addStretch()
+        scroll.setWidget(inner)
+        return scroll
+
+    def _on_open_debug_log(self) -> None:
+        import subprocess
+        from pathlib import Path
+        log_path = Path("data/deep_debug.jsonl")
+        if not log_path.exists():
+            QMessageBox.information(self, t("debug_log_group"), t("debug_log_not_found"))
+            return
+        try:
+            subprocess.Popen(["open", str(log_path)])
+        except Exception:  # noqa: BLE001
+            try:
+                subprocess.Popen(["xdg-open", str(log_path)])
+            except Exception:  # noqa: BLE001
+                QMessageBox.information(
+                    self, t("debug_log_group"), str(log_path.resolve())
+                )
+
+    def _on_clear_debug_log(self) -> None:
+        from pathlib import Path
+        log_path = Path("data/deep_debug.jsonl")
+        if log_path.exists():
+            log_path.unlink()
+        QMessageBox.information(self, t("debug_log_group"), t("debug_log_cleared"))
+
     def _build_tab_face_quality(self) -> QWidget:
         """Build the Face Quality tab."""
         scroll = QScrollArea()
@@ -950,6 +1038,8 @@ class SettingsDialog(QDialog):
         qs.setValue(
             "recording/auto_reduce_fps", self._rec_auto_fps_check.isChecked()
         )
+        qs.setValue("debug/ai_visualization", self._debug_viz_check.isChecked())
+        qs.setValue("debug/ai_log_enabled", self._debug_log_check.isChecked())
         # Flush explicitly — the transient QSettings objects above would
         # otherwise only persist on destruction, which is unreliable on
         # Windows and can silently drop the writes.

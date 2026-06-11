@@ -197,10 +197,12 @@ class ImageBrowserService:
         )
         return result
 
-    def get_image_faces(self, image_id: int) -> List[Tuple[int, int, int, int, int, Optional[str], Optional[int]]]:
+    def get_image_faces(
+        self, image_id: int
+    ) -> List[Tuple[int, int, int, int, int, Optional[str], Optional[int], bool]]:
         """Return face data tuples for *image_id*.
 
-        Each tuple: (face_id, x, y, w, h, person_name_or_None, person_id_or_None)
+        Each tuple: (face_id, x, y, w, h, person_name_or_None, person_id_or_None, is_uncertain)
         Excluded faces are omitted.
         """
         img = self._session.get(Image, image_id)
@@ -215,6 +217,7 @@ class ImageBrowserService:
                 f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
                 f.person.name if f.person else None,
                 f.person_id,
+                bool(f.is_uncertain_identification),
             )
             for f in img.faces
             if not f.is_excluded

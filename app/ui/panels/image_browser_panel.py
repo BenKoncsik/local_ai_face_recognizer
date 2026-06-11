@@ -85,8 +85,8 @@ from app.workers.thumbnail_worker import ThumbnailRunnable
 
 log = logging.getLogger(__name__)
 
-# (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None, person_id_or_None)
-_FaceData = Tuple[int, int, int, int, int, Optional[str], Optional[int]]
+# (face_id, bbox_x, bbox_y, bbox_w, bbox_h, person_name_or_None, person_id_or_None, is_uncertain)
+_FaceData = Tuple[int, int, int, int, int, Optional[str], Optional[int], bool]
 
 
 @dataclass
@@ -265,16 +265,24 @@ def _draw_faces(
     font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
     # --- Phase 1: measure all labels (needed for layout even if hidden) ---
+    _UNCERTAIN_RGB = (255, 160, 50)
     face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
-    for face_id, x, y, w, h, person_name, _ in faces:
+    for face_id, x, y, w, h, person_name, _, is_uncertain in faces:
         selected = face_id == selected_id
         if selected:
             color_rgb = (50, 220, 50)
         elif face_id in pending_ids:
             color_rgb = _PENDING_RGB
+        elif is_uncertain:
+            color_rgb = _UNCERTAIN_RGB
         else:
             color_rgb = (180, 180, 180)
-        name = ("⚠ " + person_name) if (face_id in pending_ids and person_name) else (person_name or "?")
+        if face_id in pending_ids and person_name:
+            name = "⚠ " + person_name
+        elif is_uncertain and person_name:
+            name = person_name + " (?)"
+        else:
+            name = person_name or "?"
         label_font_size = font_size
         font = _get_pil_font(label_font_size)
 
@@ -367,7 +375,7 @@ def _draw_faces(
 
     if show_bboxes and bbox_opacity > 0.0:
         if bbox_opacity >= 0.99:
-            for face_id, x, y, w, h, _, _ in faces:
+            for face_id, x, y, w, h, _, _, _uncertain in faces:
                 selected = face_id == selected_id
                 color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
@@ -376,7 +384,7 @@ def _draw_faces(
                     _draw_pending_badge(img, x, y)
         else:
             overlay_cv = img.copy()
-            for face_id, x, y, w, h, _, _ in faces:
+            for face_id, x, y, w, h, _, _, _uncertain in faces:
                 selected = face_id == selected_id
                 color = _box_color(face_id, selected)
                 thickness = 3 if selected else 2
@@ -3512,6 +3520,7 @@ class ImageBrowserPanel(QWidget):
                     f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
                     f.person.name if f.person else None,
                     f.person_id,
+                    bool(f.is_uncertain_identification),
                 )
                 for f in img.faces
                 if not f.is_excluded
@@ -3533,6 +3542,7 @@ class ImageBrowserPanel(QWidget):
                             f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
                             f.person.name if f.person else None,
                             f.person_id,
+                            bool(f.is_uncertain_identification),
                         )
                         for f in orig.faces
                         if not f.is_excluded
@@ -4677,7 +4687,7 @@ class ImageBrowserPanel(QWidget):
         return int(ox + ix * eff), int(oy + iy * eff)
 
     def _hit_test(self, ox: int, oy: int) -> Optional[int]:
-        for face_id, x, y, w, h, _, _ in self._face_data:
+        for face_id, x, y, w, h, _, _, _uncertain in self._face_data:
             if x <= ox <= x + w and y <= oy <= y + h:
                 return face_id
         return None

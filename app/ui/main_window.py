@@ -355,6 +355,9 @@ class MainWindow(QMainWindow):
         self._preview_panel.face_move_auto_merge.connect(
             self._on_face_move_auto_merge
         )
+        self._preview_panel.face_uncertainty_change_requested.connect(
+            self._on_face_uncertainty_change
+        )
         self._preview_panel.object_create_requested.connect(
             self._on_preview_object_create
         )
@@ -993,6 +996,11 @@ class MainWindow(QMainWindow):
             return
         self._set_scanning_state(True)
 
+        from app.app_settings import app_qsettings
+        _qs = app_qsettings()
+        ai_viz = _qs.value("debug/ai_visualization", False, type=bool)
+        ai_log = _qs.value("debug/ai_log_enabled", False, type=bool)
+
         if drive_active and self._gdrive_session is not None:
             from app.paths import drive_mirror_dir
             folders = self._gdrive_session.folders
@@ -1006,6 +1014,8 @@ class MainWindow(QMainWindow):
                 drive_client=self._gdrive_session._client,
                 drive_root_folder_id=root_id,
                 drive_mirror_dir=drive_mirror_dir(root_id),
+                ai_visualization=ai_viz,
+                ai_debug_log=ai_log,
             )
         else:
             self._worker = DeepPipelineWorker(
@@ -1014,6 +1024,8 @@ class MainWindow(QMainWindow):
                 mode=mode,
                 parent=self,
                 db_path_override=self._db_path,
+                ai_visualization=ai_viz,
+                ai_debug_log=ai_log,
             )
         self._pending_suggestion_count = 0
         self._pending_auto_assignment_count = 0
@@ -1023,6 +1035,9 @@ class MainWindow(QMainWindow):
         self._worker.auto_assignments_ready.connect(self._on_auto_assignments_ready)
         self._worker.finished.connect(self._on_pipeline_finished)
         self._worker.error.connect(self._on_pipeline_error)
+        if ai_viz:
+            self._open_ai_viz_window()
+            self._worker.face_debug.connect(self._on_face_debug)
         self._worker.start()
 
     @Slot()
@@ -2513,6 +2528,24 @@ class MainWindow(QMainWindow):
             IdentityService(session).clear_manual_person_thumbnail(face.person_id)
         self._refresh_persons()
 
+    @Slot(int, bool, str)
+    def _on_face_uncertainty_change(
+        self, face_id: int, is_uncertain: bool, note: str
+    ) -> None:
+        """Toggle uncertain-identification flag and/or update the note for *face_id*."""
+        with session_scope() as session:
+            face = session.get(Face, face_id)
+            if face is None:
+                return
+            # Pass note=None to leave unchanged when the signal was emitted by
+            # the toggle action (which does not touch the existing note).
+            note_arg: str | None = note if note != "" else None
+            IdentityService(session).set_face_uncertainty(face_id, is_uncertain, note_arg)
+        self._show_face_in_preview(face_id)
+        # Refresh the persons panel face grid so the badge updates there too.
+        if self._current_person_id is not None:
+            self._on_person_selected(self._current_person_id)
+
     def _on_preview_face_delete(self, face_id: int) -> None:
         """Handle 'Arc törlése' from the preview panel context menu (hard delete)."""
         reply = QMessageBox.question(
@@ -3202,6 +3235,8 @@ class MainWindow(QMainWindow):
             on_collage_html_export=self._on_export_collage_html,
             on_project_export=self._on_export_project_package,
             on_project_import=self._on_import_project_package,
+            on_deep_model_export=self._on_export_deep_model,
+            on_deep_model_import=self._on_import_deep_model,
             parent=self,
         )
         dlg.exec()
@@ -3419,6 +3454,86 @@ class MainWindow(QMainWindow):
             self, t("pkg_import_title"), t("pkg_import_opened")
         )
         log.info("Activated imported project: %s", new_db)
+
+    # ------------------------------------------------------------------
+    # AI visualization window
+    # ------------------------------------------------------------------
+
+    def _open_ai_viz_window(self) -> None:
+        from app.ui.dialogs.ai_visualization_window import AIVisualizationWindow
+        if not hasattr(self, "_ai_viz_window") or self._ai_viz_window is None:
+            self._ai_viz_window = AIVisualizationWindow(parent=self)
+        self._ai_viz_window.show()
+        self._ai_viz_window.raise_()
+
+    @Slot(object)
+    def _on_face_debug(self, info: object) -> None:
+        if hasattr(self, "_ai_viz_window") and self._ai_viz_window is not None:
+            self._ai_viz_window.update_info(info)
+
+    # ------------------------------------------------------------------
+    # Deep learning model export / import
+    # ------------------------------------------------------------------
+
+    def _on_export_deep_model(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from app.db.database import session_scope
+        from app.services.deep_recognition_service import DeepRecognitionService
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            t("deep_model_export_dialog"),
+            "face_recognition_model.facemodel",
+            "Face model (*.facemodel);;All files (*)",
+        )
+        if not path:
+            return
+        with session_scope() as session:
+            svc = DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(self._config.deep_recognition.model_dir),
+            )
+            ok = svc.export_model(path)
+        if ok:
+            QMessageBox.information(
+                self, t("deep_model_title"), t("deep_model_export_ok", path=path)
+            )
+        else:
+            QMessageBox.warning(
+                self, t("deep_model_title"), t("deep_model_export_none")
+            )
+
+    def _on_import_deep_model(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from app.db.database import session_scope
+        from app.services.deep_recognition_service import DeepRecognitionService
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            t("deep_model_import_dialog"),
+            "",
+            "Face model (*.facemodel);;All files (*)",
+        )
+        if not path:
+            return
+        with session_scope() as session:
+            svc = DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(self._config.deep_recognition.model_dir),
+            )
+            ok = svc.import_model(path)
+        if ok:
+            QMessageBox.information(
+                self, t("deep_model_title"), t("deep_model_import_ok")
+            )
+        else:
+            QMessageBox.warning(
+                self, t("deep_model_title"), t("deep_model_import_err")
+            )
 
     # ------------------------------------------------------------------
     # Helpers

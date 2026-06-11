@@ -641,6 +641,35 @@ class IdentityService:
         self.cleanup_empty_unknown_persons()
         return face
 
+    def set_face_uncertainty(
+        self,
+        face_id: int,
+        is_uncertain: bool,
+        note: Optional[str] = None,
+    ) -> Face:
+        """Flag (or un-flag) a face assignment as uncertain, and optionally update its note.
+
+        Args:
+            face_id:      Face to update.
+            is_uncertain: True = the identification is a hypothesis; False = confirmed.
+            note:         When provided (even an empty string), replaces the current
+                          ``identification_note``.  Pass ``None`` to leave it unchanged.
+
+        Returns:
+            The updated :class:`Face` row.
+        """
+        face = self._require_face(face_id)
+        face.is_uncertain_identification = bool(is_uncertain)
+        if note is not None:
+            face.identification_note = note.strip() or None
+        self._session.commit()
+        log.info(
+            "Face %d identification marked as %s",
+            face_id,
+            "uncertain" if is_uncertain else "certain",
+        )
+        return face
+
     def set_face_merge_excluded(self, face_id: int, excluded: bool) -> Face:
         """Flag (or un-flag) a face as excluded from name-matching merges.
 

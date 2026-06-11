@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from PySide6.QtCore import Qt, QSize, QThreadPool, Signal
-from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
 
 from app.services.person_service import PersonFaceCrop
@@ -21,8 +21,10 @@ from app.workers.thumbnail_worker import ThumbnailRunnable
 
 log = logging.getLogger(__name__)
 
-_ROLE_FACE_ID = Qt.UserRole
+_ROLE_FACE_ID        = Qt.UserRole
+_ROLE_IS_UNCERTAIN   = Qt.UserRole + 1
 _THUMB = 88
+_BADGE_SIZE = 20   # px — orange "?" badge diameter
 
 
 class SelectableFaceGrid(QListWidget):
@@ -66,11 +68,21 @@ class SelectableFaceGrid(QListWidget):
         """Replace the grid with *crops* (selection is reset)."""
         self.clear()
         self._items.clear()
+        self._uncertain: set[int] = set()
         for crop in crops:
             item = QListWidgetItem()
             item.setData(_ROLE_FACE_ID, crop.face_id)
+            item.setData(_ROLE_IS_UNCERTAIN, crop.is_uncertain)
             item.setSizeHint(QSize(_THUMB + 12, _THUMB + 12))
             item.setIcon(self._placeholder_icon())
+            if crop.is_uncertain:
+                self._uncertain.add(crop.face_id)
+                from app.ui.i18n import t
+                note = crop.identification_note or ""
+                tip = t("face_uncertain_tooltip")
+                if note:
+                    tip = f"{tip}\n{note}"
+                item.setToolTip(tip)
             self.addItem(item)
             self._items[crop.face_id] = item
 
@@ -100,6 +112,26 @@ class SelectableFaceGrid(QListWidget):
         pix.fill(Qt.transparent)
         return QIcon(pix)
 
+    def _add_uncertain_badge(self, pix: QPixmap) -> QPixmap:
+        """Overlay an orange '?' badge in the top-right corner of *pix*."""
+        result = pix.copy()
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        r = _BADGE_SIZE // 2
+        cx = result.width() - r - 2
+        cy = r + 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 140, 0))
+        painter.drawEllipse(cx - r, cy - r, _BADGE_SIZE, _BADGE_SIZE)
+        font = QFont()
+        font.setPixelSize(max(9, _BADGE_SIZE - 6))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(255, 255, 255)))
+        painter.drawText(cx - r, cy - r, _BADGE_SIZE, _BADGE_SIZE, Qt.AlignCenter, "?")
+        painter.end()
+        return result
+
     def _on_thumb_ready(self, key: str, img: QImage) -> None:
         try:
             face_id = int(key)
@@ -107,7 +139,10 @@ class SelectableFaceGrid(QListWidget):
             return
         item = self._items.get(face_id)
         if item is not None:
-            item.setIcon(QIcon(QPixmap.fromImage(img)))
+            pix = QPixmap.fromImage(img)
+            if face_id in getattr(self, "_uncertain", set()):
+                pix = self._add_uncertain_badge(pix)
+            item.setIcon(QIcon(pix))
 
     def _emit_selection_count(self) -> None:
         self.selection_changed.emit(len(self.selectedItems()))

@@ -136,6 +136,8 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("auto_merge_source_person_id", "INTEGER"),
             ("auto_merge_confirmed_at", "DATETIME"),
             ("auto_merge_confirmed_by_user", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("is_uncertain_identification", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("identification_note", "TEXT"),
         ],
     }
     with engine.connect() as conn:
