@@ -320,6 +320,12 @@ class _FaceImageLabel(QLabel):
         self._full_w: int = 0
         self._full_h: int = 0
 
+        # Source (full-resolution) pixmap. The label rescales it to its own
+        # current size on every resize so the displayed image and the overlay
+        # transform (_display_transform) always agree — otherwise bounding
+        # boxes drift when the panel/splitter is resized.
+        self._source_pixmap: Optional[QPixmap] = None
+
         # Extended render data including names
         self._face_render_data: List[_FaceData] = []  # (id, x, y, w, h, name)
 
@@ -380,6 +386,35 @@ class _FaceImageLabel(QLabel):
     def set_object_data(self, objects: List[_ObjectData]) -> None:
         self._object_data = objects
         self.update()
+
+    def set_source_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        """Set the full-resolution pixmap to display (or None to clear).
+
+        The pixmap is rescaled to fit the label, keeping aspect ratio, and is
+        re-fitted automatically whenever the label is resized.
+        """
+        self._source_pixmap = pixmap
+        if pixmap is None or pixmap.isNull():
+            self.clear()
+        else:
+            self._rescale_pixmap()
+
+    def _rescale_pixmap(self) -> None:
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            return
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        scaled = self._source_pixmap.scaled(
+            w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.setPixmap(scaled)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Re-fit the image to the new label size before the overlay repaints,
+        # so the bounding boxes stay locked to the faces.
+        self._rescale_pixmap()
 
     def set_draw_mode(self, enabled: bool) -> None:
         self._draw_mode = enabled
@@ -1127,6 +1162,7 @@ class PreviewPanel(QWidget):
         self._image_label.set_object_data([])
         self._image_label.set_draw_mode(False)
         self._image_label.set_object_mode(False)
+        self._image_label.set_source_pixmap(None)
         self._image_label.clear()
         self._image_label.setText(t("preview_empty"))
         self._path_label.setText("")
@@ -1152,7 +1188,9 @@ class PreviewPanel(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._update_scaled_pixmap()
+        # The image label re-fits its own pixmap in its resizeEvent, using its
+        # final geometry — no need to rescale here (and doing so would use the
+        # label's stale size, drifting the bounding boxes).
 
     def _render(self) -> None:
         """Convert the raw BGR image to a clean QPixmap and push overlay settings."""
@@ -1174,10 +1212,9 @@ class PreviewPanel(QWidget):
     def _update_scaled_pixmap(self) -> None:
         if self._full_pixmap is None:
             return
-        w = self._image_label.width()
-        h = self._image_label.height()
-        scaled = self._full_pixmap.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._image_label.setPixmap(scaled)
+        # Hand the full pixmap to the label, which fits it to its own current
+        # size and keeps it fitted across resizes.
+        self._image_label.set_source_pixmap(self._full_pixmap)
 
     # ------------------------------------------------------------------
     # Face interaction
