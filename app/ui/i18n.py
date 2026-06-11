@@ -1828,11 +1828,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                "Átnézed most? Mindegyik csoportosítást megerősítheted, javíthatod "
                "vagy visszavonhatod — az AI tanul a javításaidból."},
     "suggestions_tab_matches":
-        {"en": "Name Suggestions",
-         "hu": "Névjavaslatok"},
+        {"en": "Name Suggestions (classic)",
+         "hu": "Névjavaslatok (klasszikus)"},
     "suggestions_tab_auto":
-        {"en": "Automatic Groupings",
-         "hu": "Automatikus csoportosítás"},
+        {"en": "Automatic groupings (AI)",
+         "hu": "Automatikus csoportosítás (AI)"},
     "autoAssign.intro":
         {"en": "Faces the last AI run placed with known people. Confirm the good "
                "ones, fix the wrong ones — the network learns from every decision "
@@ -1875,6 +1875,50 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "autoAssign.revert_tooltip":
         {"en": "Send the face back to where it was before the run",
          "hu": "Az arc visszakerül oda, ahol a futás előtt volt"},
+    "autoAssign.select_all":
+        {"en": "Select all",
+         "hu": "Összes kijelölése"},
+    "autoAssign.select_all_tooltip":
+        {"en": "Tick every grouping in the review list",
+         "hu": "Minden csoportosítás kijelölése a listában"},
+    "autoAssign.clear_selection":
+        {"en": "Clear selection",
+         "hu": "Kijelölés törlése"},
+    "autoAssign.clear_selection_tooltip":
+        {"en": "Untick every grouping",
+         "hu": "Minden kijelölés megszüntetése"},
+    "autoAssign.accept_selected":
+        {"en": "Accept selected ({n})",
+         "hu": "Kijelöltek elfogadása ({n})"},
+    "autoAssign.accept_selected_tooltip":
+        {"en": "Confirm every ticked grouping at once — each becomes trusted "
+               "training data and moves to the reviewed list",
+         "hu": "Minden kijelölt csoportosítás egyszerre megerősítve — mind "
+               "megbízható tanítópéldává válik és átkerül az átnézett listába"},
+    "autoAssign.reject_selected":
+        {"en": "Reject selected ({n})",
+         "hu": "Kijelöltek elutasítása ({n})"},
+    "autoAssign.reject_selected_tooltip":
+        {"en": "Undo every ticked grouping at once — each face returns to where "
+               "it was before the run and the AI learns from the rejection",
+         "hu": "Minden kijelölt csoportosítás egyszerre visszavonva — minden arc "
+               "visszakerül a futás előtti helyére, és az AI tanul az elutasításból"},
+    "autoAssign.assign_selected":
+        {"en": "Move to person… ({n})",
+         "hu": "Másik személyhez… ({n})"},
+    "autoAssign.assign_selected_tooltip":
+        {"en": "Move every ticked face to one chosen (or new) person at once — "
+               "the AI learns from the correction",
+         "hu": "Minden kijelölt arc áthelyezése egy kiválasztott (vagy új) "
+               "személyhez egyszerre — az AI tanul a javításból"},
+    "autoAssign.override":
+        {"en": "Override",
+         "hu": "Felülbírálás"},
+    "autoAssign.override_tooltip":
+        {"en": "Change your mind: undo this decision and send the face back to "
+               "where it was before the run",
+         "hu": "Döntés felülbírálása: visszavonás, az arc visszakerül oda, ahol "
+               "a futás előtt volt"},
     "autoAssign.revert_all":
         {"en": "Undo all",
          "hu": "Mind visszavonása"},

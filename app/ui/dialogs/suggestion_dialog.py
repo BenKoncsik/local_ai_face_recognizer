@@ -632,9 +632,7 @@ class SuggestionDialog(QDialog):
         kb_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(kb_hint)
 
-        self._tabs.addTab(suggestions_tab, t("suggestions_tab_matches"))
-
-        # ── Tab 2: automatic groupings of the last AI run ─────────────────
+        # ── Tab 1: automatic groupings of the last AI run ─────────────────
         from app.ui.dialogs.auto_assignments_tab import AutoAssignmentsTab
 
         deep_config = (
@@ -646,6 +644,9 @@ class SuggestionDialog(QDialog):
         self._auto_tab.data_changed.connect(self.data_changed)
         self._auto_tab.count_changed.connect(self._on_auto_count_changed)
         self._tabs.addTab(self._auto_tab, t("suggestions_tab_auto"))
+
+        self._tabs.addTab(suggestions_tab, t("suggestions_tab_matches"))
+
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

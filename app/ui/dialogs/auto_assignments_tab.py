@@ -17,6 +17,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -46,12 +47,19 @@ _ROW_STYLE = "QFrame { background: #232323; border-radius: 6px; }"
 
 
 class _DecidedAssignmentRow(QFrame):
-    """One already-reviewed automatic grouping — display only."""
+    """One already-reviewed automatic grouping.
+
+    Shows the decision; lets the user *override* it afterwards (undo the
+    confirm/correct so the face returns to its pre-run state).
+    """
+
+    reverted = Signal(int)  # assignment_id
 
     def __init__(
         self, dto: AutoAssignmentDTO, parent: Optional[QWidget] = None
     ) -> None:
         super().__init__(parent)
+        self._dto = dto
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("QFrame { background: #1d1d1d; border-radius: 6px; }")
 
@@ -105,13 +113,25 @@ class _DecidedAssignmentRow(QFrame):
             when.setStyleSheet("color: #666; border: none; font-size: 10px;")
             row.addWidget(when)
 
+        # Let the user reverse a confirm/correct after the fact. A row that is
+        # already reverted has nothing left to undo.
+        if dto.status != AUTO_ASSIGN_STATUS_REVERTED:
+            override_btn = QPushButton(t("autoAssign.override"))
+            override_btn.setStyleSheet("QPushButton { color: #ffcc66; }")
+            override_btn.setToolTip(t("autoAssign.override_tooltip"))
+            override_btn.clicked.connect(
+                lambda: self.reverted.emit(dto.assignment_id)
+            )
+            row.addWidget(override_btn)
+
 
 class _AutoAssignmentRow(QFrame):
     """One reviewable automatic grouping."""
 
-    confirmed = Signal(int)   # assignment_id
-    corrected = Signal(int)   # assignment_id
-    reverted = Signal(int)    # assignment_id
+    confirmed = Signal(int)        # assignment_id
+    corrected = Signal(int)        # assignment_id
+    reverted = Signal(int)         # assignment_id
+    selection_changed = Signal()   # any checkbox toggled
 
     def __init__(
         self, dto: AutoAssignmentDTO, parent: Optional[QWidget] = None
@@ -124,6 +144,12 @@ class _AutoAssignmentRow(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 8, 8, 8)
         row.setSpacing(8)
+
+        # Per-row tick for batch confirm ("Accept selected").
+        self._check = QCheckBox()
+        self._check.setToolTip(t("autoAssign.accept_selected_tooltip"))
+        self._check.toggled.connect(lambda _on: self.selection_changed.emit())
+        row.addWidget(self._check, alignment=Qt.AlignVCenter)
 
         # Reuse the suggestion dialog's clickable crop (hover zoom + full image).
         from app.ui.dialogs.suggestion_dialog import _ClickableCrop
@@ -156,7 +182,10 @@ class _AutoAssignmentRow(QFrame):
         pct = int(round(max(0.0, min(1.0, dto.score)) * 100))
         score = QLabel(t("suggestions_similarity", pct=pct))
         score.setAlignment(Qt.AlignCenter)
-        score.setFixedWidth(70)
+        # Min width keeps the score column aligned across rows; it must grow,
+        # not clip, so "100% egyezés" stays fully visible (a fixed 70px width
+        # used to chop the leading "1", showing a misleading "00%").
+        score.setMinimumWidth(96)
         score.setStyleSheet(
             "font-size: 13px; font-weight: bold; color: #88ee88; border: none;"
         )
@@ -180,6 +209,18 @@ class _AutoAssignmentRow(QFrame):
         revert_btn.clicked.connect(lambda: self.reverted.emit(dto.assignment_id))
         row.addWidget(revert_btn)
 
+    # ------------------------------------------------------------------
+
+    @property
+    def assignment_id(self) -> int:
+        return self._dto.assignment_id
+
+    def is_selected(self) -> bool:
+        return self._check.isChecked()
+
+    def set_selected(self, value: bool) -> None:
+        self._check.setChecked(value)
+
 
 class AutoAssignmentsTab(QWidget):
     """Tab widget listing the last run's automatic groupings for review.
@@ -196,6 +237,7 @@ class AutoAssignmentsTab(QWidget):
         super().__init__(parent)
         self._deep_config = deep_config
         self._loaded = False
+        self._rows: List[_AutoAssignmentRow] = []
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -222,6 +264,45 @@ class AutoAssignmentsTab(QWidget):
         self._revert_all_btn.setVisible(False)
         header.addWidget(self._revert_all_btn)
         root.addLayout(header)
+
+        # ── Selection toolbar: tick rows, then accept them in one go ───────
+        self._select_bar = QWidget()
+        sel = QHBoxLayout(self._select_bar)
+        sel.setContentsMargins(0, 0, 0, 0)
+        sel.setSpacing(6)
+
+        self._select_all_btn = QPushButton(t("autoAssign.select_all"))
+        self._select_all_btn.setToolTip(t("autoAssign.select_all_tooltip"))
+        self._select_all_btn.clicked.connect(lambda: self._set_all_selected(True))
+        sel.addWidget(self._select_all_btn)
+
+        self._clear_sel_btn = QPushButton(t("autoAssign.clear_selection"))
+        self._clear_sel_btn.setToolTip(t("autoAssign.clear_selection_tooltip"))
+        self._clear_sel_btn.clicked.connect(lambda: self._set_all_selected(False))
+        sel.addWidget(self._clear_sel_btn)
+
+        sel.addStretch()
+
+        self._accept_selected_btn = QPushButton()
+        self._accept_selected_btn.setToolTip(t("autoAssign.accept_selected_tooltip"))
+        self._accept_selected_btn.setStyleSheet("QPushButton { color: #88ee88; }")
+        self._accept_selected_btn.clicked.connect(self._on_accept_selected)
+        sel.addWidget(self._accept_selected_btn)
+
+        self._assign_selected_btn = QPushButton()
+        self._assign_selected_btn.setToolTip(t("autoAssign.assign_selected_tooltip"))
+        self._assign_selected_btn.setStyleSheet("QPushButton { color: #88aaff; }")
+        self._assign_selected_btn.clicked.connect(self._on_assign_selected)
+        sel.addWidget(self._assign_selected_btn)
+
+        self._reject_selected_btn = QPushButton()
+        self._reject_selected_btn.setToolTip(t("autoAssign.reject_selected_tooltip"))
+        self._reject_selected_btn.setStyleSheet("QPushButton { color: #ff8888; }")
+        self._reject_selected_btn.clicked.connect(self._on_reject_selected)
+        sel.addWidget(self._reject_selected_btn)
+
+        self._select_bar.setVisible(False)
+        root.addWidget(self._select_bar)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -284,12 +365,15 @@ class AutoAssignmentsTab(QWidget):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
+        self._rows = []
 
         for dto in dtos:
             row = _AutoAssignmentRow(dto)
             row.confirmed.connect(self._on_confirm)
             row.corrected.connect(self._on_correct)
             row.reverted.connect(self._on_revert)
+            row.selection_changed.connect(self._update_selection_ui)
+            self._rows.append(row)
             self._list_layout.insertWidget(self._list_layout.count() - 1, row)
 
         if dtos and dtos[0].run_finished_at is not None:
@@ -301,6 +385,8 @@ class AutoAssignmentsTab(QWidget):
         self._count_label.setText(t("autoAssign.count", n=len(dtos)))
         self._empty_label.setVisible(not dtos)
         self._revert_all_btn.setVisible(bool(dtos))
+        self._select_bar.setVisible(bool(dtos))
+        self._update_selection_ui()
         self.count_changed.emit(len(dtos))
         self._refresh_decided()
 
@@ -343,7 +429,9 @@ class AutoAssignmentsTab(QWidget):
             empty.setAlignment(Qt.AlignCenter)
             self._decided_layout.insertWidget(0, empty)
         for i, dto in enumerate(decided):
-            self._decided_layout.insertWidget(i, _DecidedAssignmentRow(dto))
+            drow = _DecidedAssignmentRow(dto)
+            drow.reverted.connect(self._on_revert)
+            self._decided_layout.insertWidget(i, drow)
 
     def _on_decided_toggled(self, expanded: bool) -> None:
         if expanded and not self._decided_loaded:
@@ -394,6 +482,78 @@ class AutoAssignmentsTab(QWidget):
         self._run_action(
             lambda svc: svc.revert_assignment(assignment_id), "revert"
         )
+
+    # ── Batch selection / accept ──────────────────────────────────────
+
+    def _selected_ids(self) -> List[int]:
+        return [r.assignment_id for r in self._rows if r.is_selected()]
+
+    def _set_all_selected(self, value: bool) -> None:
+        for row in self._rows:
+            row.set_selected(value)
+        self._update_selection_ui()
+
+    def _update_selection_ui(self) -> None:
+        """Keep the batch buttons' labels/enabled state in sync with the ticks."""
+        n = len(self._selected_ids())
+        self._accept_selected_btn.setText(t("autoAssign.accept_selected", n=n))
+        self._assign_selected_btn.setText(t("autoAssign.assign_selected", n=n))
+        self._reject_selected_btn.setText(t("autoAssign.reject_selected", n=n))
+        for btn in (
+            self._accept_selected_btn,
+            self._assign_selected_btn,
+            self._reject_selected_btn,
+        ):
+            btn.setEnabled(n > 0)
+
+    def _on_accept_selected(self) -> None:
+        ids = self._selected_ids()
+        if not ids:
+            return
+        self._run_action(lambda svc: svc.confirm_assignments(ids), "accept_selected")
+
+    def _on_reject_selected(self) -> None:
+        ids = self._selected_ids()
+        if not ids:
+            return
+        self._run_action(lambda svc: svc.revert_assignments(ids), "reject_selected")
+
+    def _on_assign_selected(self) -> None:
+        ids = self._selected_ids()
+        if not ids:
+            return
+        from app.ui.dialogs.move_faces_dialog import MoveFacesDialog
+
+        try:
+            with session_scope() as session:
+                persons = (
+                    session.query(Person)
+                    .filter(Person.is_auto_named == False)  # noqa: E712
+                    .filter(Person.is_protected == False)  # noqa: E712
+                    .order_by(Person.name)
+                    .all()
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Failed to load persons for batch correction")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        dlg = MoveFacesDialog(
+            face_count=len(ids), persons=persons, parent=self.window()
+        )
+        if dlg.exec() != MoveFacesDialog.Accepted:
+            return
+
+        new_name = dlg.new_person_name()
+        person_id = dlg.selected_person_id()
+
+        def action(svc: DeepRecognitionService):
+            if new_name:
+                svc.correct_assignments_to_new_person(ids, new_name)
+            elif person_id is not None:
+                svc.correct_assignments(ids, person_id)
+
+        self._run_action(action, "assign_selected")
 
     def _on_revert_all(self) -> None:
         n_open = self._list_layout.count() - 1

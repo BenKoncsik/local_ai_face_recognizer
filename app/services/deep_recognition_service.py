@@ -543,6 +543,28 @@ class DeepRecognitionService:
         self._session.commit()
         return assignment
 
+    def confirm_assignments(self, assignment_ids: List[int]) -> int:
+        """Confirm many groupings in one transaction. Returns the count confirmed.
+
+        Skips ids that no longer exist (e.g. removed by a meanwhile-running
+        re-scan), so a stale selection can never abort the whole batch.
+        """
+        confirmed = 0
+        for assignment_id in assignment_ids:
+            assignment = self._session.get(AutoAssignment, assignment_id)
+            if assignment is None:
+                continue
+            face = assignment.face
+            if face is not None and face.person_id == assignment.person_id:
+                face.assignment_source = DEEP_CONFIRMED_SOURCE
+                face.assignment_confidence = 1.0
+            assignment.status = AUTO_ASSIGN_STATUS_CONFIRMED
+            assignment.decided_at = _utcnow_naive()
+            confirmed += 1
+        self._session.commit()
+        log.info("Deep recognition: batch-confirmed %d assignments", confirmed)
+        return confirmed
+
     def correct_assignment(
         self, assignment_id: int, new_person_id: int
     ) -> AutoAssignment:
@@ -553,25 +575,13 @@ class DeepRecognitionService:
         vetoed from repeating the mistake and gain a confirmed example.
         """
         assignment = self._require_assignment(assignment_id)
-        face = assignment.face
-        if face is None:
+        if assignment.face is None:
             raise ValueError(f"Face for assignment {assignment_id} no longer exists")
         new_person = self._session.get(Person, new_person_id)
         if new_person is None:
             raise ValueError(f"Person id={new_person_id} not found")
 
-        wrong_person_id = assignment.person_id
-        face.person_id = new_person_id
-        face.assignment_source = "manual"
-        face.assignment_confidence = 1.0
-        face.assigned_at = _utcnow_naive()
-
-        self._record_correction_pair(face, wrong_person_id, same_person=False)
-        self._record_correction_pair(face, new_person_id, same_person=True)
-
-        assignment.status = AUTO_ASSIGN_STATUS_CORRECTED
-        assignment.corrected_person_id = new_person_id
-        assignment.decided_at = _utcnow_naive()
+        self._correct_one(assignment, new_person_id)
         self._delete_orphan_auto_persons()
         self._session.commit()
         return assignment
@@ -588,12 +598,83 @@ class DeepRecognitionService:
         self._session.flush()
         return self.correct_assignment(assignment_id, person.id)
 
+    def correct_assignments(
+        self, assignment_ids: List[int], new_person_id: int
+    ) -> int:
+        """Move many groupings to *new_person_id* in one transaction.
+
+        Skips ids whose row or face no longer exists. Returns the count moved.
+        """
+        new_person = self._session.get(Person, new_person_id)
+        if new_person is None:
+            raise ValueError(f"Person id={new_person_id} not found")
+        moved = 0
+        for assignment_id in assignment_ids:
+            assignment = self._session.get(AutoAssignment, assignment_id)
+            if assignment is None or assignment.face is None:
+                continue
+            self._correct_one(assignment, new_person_id)
+            moved += 1
+        self._delete_orphan_auto_persons()
+        self._session.commit()
+        log.info("Deep recognition: batch-corrected %d assignments", moved)
+        return moved
+
+    def correct_assignments_to_new_person(
+        self, assignment_ids: List[int], new_person_name: str
+    ) -> int:
+        """Batch correction that first creates a brand-new named person."""
+        name = new_person_name.strip()
+        if not name:
+            raise ValueError("New person name must not be empty")
+        person = Person(name=name, is_auto_named=False)
+        self._session.add(person)
+        self._session.flush()
+        return self.correct_assignments(assignment_ids, person.id)
+
+    def _correct_one(self, assignment: AutoAssignment, new_person_id: int) -> None:
+        """Shared correction core; caller validates the person and commits.
+
+        Records a "different person" judgement against the wrong person and a
+        "same person" judgement towards the right one, so future runs are
+        vetoed from repeating the mistake and gain a confirmed example.
+        """
+        face = assignment.face
+        wrong_person_id = assignment.person_id
+        face.person_id = new_person_id
+        face.assignment_source = "manual"
+        face.assignment_confidence = 1.0
+        face.assigned_at = _utcnow_naive()
+
+        self._record_correction_pair(face, wrong_person_id, same_person=False)
+        self._record_correction_pair(face, new_person_id, same_person=True)
+
+        assignment.status = AUTO_ASSIGN_STATUS_CORRECTED
+        assignment.corrected_person_id = new_person_id
+        assignment.decided_at = _utcnow_naive()
+
     def revert_assignment(self, assignment_id: int) -> AutoAssignment:
         """User sends the face back to where it was before the run."""
         assignment = self._require_assignment(assignment_id)
         self._revert_one(assignment)
         self._session.commit()
         return assignment
+
+    def revert_assignments(self, assignment_ids: List[int]) -> int:
+        """Reject (undo) many groupings in one transaction.
+
+        Skips ids that no longer exist. Returns the count reverted.
+        """
+        reverted = 0
+        for assignment_id in assignment_ids:
+            assignment = self._session.get(AutoAssignment, assignment_id)
+            if assignment is None:
+                continue
+            self._revert_one(assignment)
+            reverted += 1
+        self._session.commit()
+        log.info("Deep recognition: batch-reverted %d assignments", reverted)
+        return reverted
 
     def revert_all_open(self, run_id: Optional[int] = None) -> int:
         """Revert every still-open (auto) assignment of *run_id* in one go.

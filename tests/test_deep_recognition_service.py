@@ -276,6 +276,95 @@ class TestReviewActions:
             assert row.status == AUTO_ASSIGN_STATUS_CONFIRMED
             assert row.decided_at is not None
 
+    def test_confirm_assignments_batch_confirms_many(self, tmp_db, tmp_path):
+        """Batch confirm marks every selected grouping trusted in one go."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            anna, _ = _seed_two_persons(s, img)
+            for i in range(3):
+                _add_face(s, img, None, _vec(0, seed=910 + i), source=None)
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+        with session_scope() as s:
+            ids = [r.id for r in s.query(AutoAssignment).order_by(AutoAssignment.id)]
+            assert len(ids) == 3
+            # A stale/non-existent id is skipped, not fatal.
+            n = DeepRecognitionService(s, cfg).confirm_assignments(ids + [999999])
+
+        assert n == 3
+        with session_scope() as s:
+            for aid in ids:
+                row = s.get(AutoAssignment, aid)
+                assert row.status == AUTO_ASSIGN_STATUS_CONFIRMED
+                assert row.decided_at is not None
+                assert s.get(Face, row.face_id).assignment_source == \
+                    DEEP_CONFIRMED_SOURCE
+
+    def _setup_with_n_assignments(self, tmp_path, n=3, base_seed=910):
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            anna, bela = _seed_two_persons(s, img)
+            for i in range(n):
+                _add_face(s, img, None, _vec(0, seed=base_seed + i), source=None)
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+        with session_scope() as s:
+            ids = [r.id for r in s.query(AutoAssignment).order_by(AutoAssignment.id)]
+        return cfg, ids, anna, bela
+
+    def test_revert_assignments_batch_rejects_many(self, tmp_db, tmp_path):
+        """Batch reject undoes every selected grouping and vetoes the bad person."""
+        cfg, ids, _, _ = self._setup_with_n_assignments(tmp_path)
+        assert len(ids) == 3
+
+        with session_scope() as s:
+            n = DeepRecognitionService(s, cfg).revert_assignments(ids + [999999])
+
+        assert n == 3
+        with session_scope() as s:
+            for aid in ids:
+                row = s.get(AutoAssignment, aid)
+                assert row.status == AUTO_ASSIGN_STATUS_REVERTED
+                assert s.get(Face, row.face_id).person_id is None
+            assert s.query(FaceCorrection).filter_by(same_person=False).count() == 3
+
+    def test_correct_assignments_batch_moves_many(self, tmp_db, tmp_path):
+        """Batch correct moves every selected face to one chosen person."""
+        cfg, ids, _, bela = self._setup_with_n_assignments(tmp_path)
+        assert len(ids) == 3
+
+        with session_scope() as s:
+            n = DeepRecognitionService(s, cfg).correct_assignments(ids, bela)
+
+        assert n == 3
+        with session_scope() as s:
+            for aid in ids:
+                row = s.get(AutoAssignment, aid)
+                assert row.status == AUTO_ASSIGN_STATUS_CORRECTED
+                assert row.corrected_person_id == bela
+                face = s.get(Face, row.face_id)
+                assert face.person_id == bela
+                assert face.assignment_source == "manual"
+
+    def test_correct_assignments_to_new_person_batch(self, tmp_db, tmp_path):
+        """Batch correction can create a brand-new named person for all faces."""
+        cfg, ids, _, _ = self._setup_with_n_assignments(tmp_path)
+
+        with session_scope() as s:
+            n = DeepRecognitionService(s, cfg).correct_assignments_to_new_person(
+                ids, "Új Csapat"
+            )
+
+        assert n == len(ids)
+        with session_scope() as s:
+            person = s.query(Person).filter_by(name="Új Csapat").one()
+            assert not person.is_auto_named
+            for aid in ids:
+                row = s.get(AutoAssignment, aid)
+                assert s.get(Face, row.face_id).person_id == person.id
+
     def test_correct_moves_face_and_records_corrections(self, tmp_db, tmp_path):
         cfg, assignment_id, face_id, anna, bela = self._setup_with_assignment(tmp_path)
 
