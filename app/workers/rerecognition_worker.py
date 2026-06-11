@@ -56,6 +56,7 @@ class ReRecognitionWorker(QThread):
         *,
         auto_threshold: Optional[float] = None,
         suggest_threshold: Optional[float] = None,
+        engine: str = "classic",   # "classic" | "deep"
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -63,6 +64,7 @@ class ReRecognitionWorker(QThread):
         self._config = config
         self._auto_threshold = auto_threshold
         self._suggest_threshold = suggest_threshold
+        self._engine = engine
         self._token = CancellationToken()
         self._last_emit = 0.0
 
@@ -73,7 +75,7 @@ class ReRecognitionWorker(QThread):
 
     def run(self) -> None:  # noqa: D401 — QThread entry point
         try:
-            result = self._execute()
+            result = self._execute_deep() if self._engine == "deep" else self._execute()
         except OperationCancelled:
             log.info("Re-recognition cancelled by user")
             self.finished_result.emit(ReRecognitionResult(cancelled=True))
@@ -130,6 +132,90 @@ class ReRecognitionWorker(QThread):
                 svc.apply_auto_merges(auto_items, batch_id)
             log.info(
                 "Re-recognition done: %d examined, %d auto, %d to review, %d none",
+                result.n_examined, result.n_auto, result.n_suggest, result.n_none,
+            )
+            return result
+
+    def _execute_deep(self) -> ReRecognitionResult:
+        """Re-recognition using the deep learning (MLP ensemble) classifier."""
+        from pathlib import Path
+
+        from app.deep.classifier import DeepFaceClassifier
+        from app.services.rerecognition_service import FaceData, SuggestItem
+
+        with session_scope() as session:
+            svc = ReRecognitionService(
+                session,
+                self._config.recognition,
+                auto_threshold=self._auto_threshold,
+                suggest_threshold=self._suggest_threshold,
+            )
+            candidates = svc.extract_candidates(self._image_ids)
+            result = ReRecognitionResult(n_examined=len(candidates))
+            total = len(candidates)
+
+            if total == 0:
+                self.progress.emit(0, 0, 0, 0)
+                return result
+
+            # Load the saved deep model (no retraining — use whatever is on disk)
+            model_dir = Path(
+                self._config.resolve(self._config.deep_recognition.model_dir)
+            )
+            classifier = DeepFaceClassifier(self._config.deep_recognition)
+            if not classifier.load(model_dir / "deep_face_model.pkl"):
+                log.warning("Deep re-recognition: no trained model found")
+                self.progress.emit(total, total, 0, 0)
+                return result
+
+            auto_thr = self._auto_threshold or self._config.recognition.rerecognition_auto_threshold
+            suggest_thr = self._suggest_threshold or self._config.recognition.rerecognition_suggest_threshold
+
+            auto_items: List[AutoItem] = []
+            for i, face in enumerate(candidates, 1):
+                self._token.raise_if_cancelled()
+                pred = classifier.predict(face.embedding)
+
+                if pred.person_id is None:
+                    result.n_none += 1
+                elif pred.score >= auto_thr:
+                    auto_items.append(
+                        AutoItem(
+                            face=face,
+                            target_person_id=pred.person_id,
+                            target_name=pred.person_name or str(pred.person_id),
+                            score=pred.score,
+                        )
+                    )
+                    result.n_auto += 1
+                elif pred.score >= suggest_thr:
+                    from app.services.rerecognition_service import Candidate
+                    result.suggest_items.append(
+                        SuggestItem(
+                            face=face,
+                            candidates=[
+                                Candidate(
+                                    person_id=pred.person_id,
+                                    name=pred.person_name or str(pred.person_id),
+                                    score=pred.score,
+                                )
+                            ],
+                        )
+                    )
+                else:
+                    result.n_none += 1
+
+                self._emit_progress(i, total, result.n_auto, result.n_suggest)
+
+            self.progress.emit(total, total, result.n_auto, result.n_suggest)
+
+            batch_id = uuid.uuid4().hex
+            result.batch_id = batch_id
+            if auto_items:
+                svc.apply_auto_merges(auto_items, batch_id)
+
+            log.info(
+                "Deep re-recognition done: %d examined, %d auto, %d to review, %d none",
                 result.n_examined, result.n_auto, result.n_suggest, result.n_none,
             )
             return result

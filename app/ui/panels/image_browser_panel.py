@@ -2870,14 +2870,17 @@ class ImageBrowserPanel(QWidget):
         menu = QMenu(self)
 
         if image_ids:
-            if len(image_ids) == 1:
-                rerec_action = menu.addAction(t("rerec_ctx_one"))
-            else:
-                rerec_action = menu.addAction(
-                    t("rerec_ctx_many", n=len(image_ids))
-                )
-            rerec_action.triggered.connect(
-                lambda: self._start_rerecognition(image_ids)
+            n = len(image_ids)
+            rerec_menu = menu.addMenu(
+                t("rerec_ctx_one") if n == 1 else t("rerec_ctx_many", n=n)
+            )
+            classic_action = rerec_menu.addAction(t("rerec_ctx_engine_classic"))
+            classic_action.triggered.connect(
+                lambda: self._start_rerecognition(image_ids, engine="classic")
+            )
+            deep_action = rerec_menu.addAction(t("rerec_ctx_engine_deep"))
+            deep_action.triggered.connect(
+                lambda: self._start_rerecognition(image_ids, engine="deep")
             )
             menu.addSeparator()
 
@@ -2913,10 +2916,10 @@ class ImageBrowserPanel(QWidget):
             app_qsettings().value("rerecognition/enabled", default, type=bool)
         )
 
-    def _start_rerecognition(self, image_ids: List[int]) -> None:
+    def _start_rerecognition(self, image_ids: List[int], engine: str = "classic") -> None:
         if not image_ids or self._config is None:
             return
-        if not self._rerecognition_enabled():
+        if engine == "classic" and not self._rerecognition_enabled():
             QMessageBox.information(
                 self, t("rerec_progress_title"), t("rerec_disabled")
             )
@@ -2945,6 +2948,7 @@ class ImageBrowserPanel(QWidget):
             self._config,
             auto_threshold=auto_thr,
             suggest_threshold=suggest_thr,
+            engine=engine,
         )
         self._rerec_worker = worker
 
