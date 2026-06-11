@@ -48,6 +48,7 @@ class ScanModesDialog(QDialog):
         on_deep_rescan: Optional[Callable[[], None]] = None,
         on_deep_rebuild: Optional[Callable[[], None]] = None,
         on_deep_train: Optional[Callable[[], None]] = None,
+        on_deep_face_detect: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -64,6 +65,7 @@ class ScanModesDialog(QDialog):
         self._on_deep_rescan = on_deep_rescan
         self._on_deep_rebuild = on_deep_rebuild
         self._on_deep_train = on_deep_train
+        self._on_deep_face_detect = on_deep_face_detect
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -132,6 +134,15 @@ class ScanModesDialog(QDialog):
             callback=self._launch_deep_train,
             danger=False,
         ))
+        if self._on_deep_face_detect is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.deepFaceDetect.title"),
+                description=t("scanModes.deepFaceDetect.description"),
+                button_label=t("scanModes.deepFaceDetect.startButton"),
+                warning=t("scanModes.deepFaceDetect.warning"),
+                callback=self._launch_deep_face_detect,
+                danger=False,
+            ))
         cards_layout.addWidget(self._make_card(
             title=t("scanModes.deepRebuild.title"),
             description=t("scanModes.deepRebuild.description"),
@@ -314,6 +325,11 @@ class ScanModesDialog(QDialog):
         self.accept()
         if self._on_deep_train is not None:
             self._on_deep_train()
+
+    def _launch_deep_face_detect(self) -> None:
+        self.accept()
+        if self._on_deep_face_detect is not None:
+            self._on_deep_face_detect()
 
     def _launch_incremental(self) -> None:
         self.accept()

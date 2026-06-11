@@ -310,16 +310,82 @@ class DetectionService:
     # ------------------------------------------------------------------
 
     def _run_detection(self, img_bgr: np.ndarray) -> List[Detection]:
-        """Dispatch to fast or high-accuracy detection."""
-        if self._high_accuracy:
-            return self._detect_high_accuracy(img_bgr)
-        return self._detector.detect(
-            img_bgr,
-            confidence_threshold=self._config.detection.confidence_threshold,
-            min_face_size=self._config.detection.min_face_size,
-        )
+        """Dispatch to fast or high-accuracy detection.
 
-    def _detect_high_accuracy(self, img_bgr: np.ndarray) -> List[Detection]:
+        If the configured (strict) pass finds zero faces and adaptive
+        escalation is enabled, progressively relax the detector until at
+        least one face appears — see :meth:`_detect_adaptive`.
+        """
+        if self._high_accuracy:
+            detections = self._detect_high_accuracy(img_bgr)
+        else:
+            detections = self._detector.detect(
+                img_bgr,
+                confidence_threshold=self._config.detection.confidence_threshold,
+                min_face_size=self._config.detection.min_face_size,
+            )
+
+        if not detections and self._config.detection.adaptive_escalation:
+            detections = self._detect_adaptive(img_bgr)
+
+        return detections
+
+    def _detect_adaptive(self, img_bgr: np.ndarray) -> List[Detection]:
+        """Image-size-aware escalation for photos the strict pass misses.
+
+        Walks the configured ladder of (confidence, min_face_fraction) rungs,
+        from strictest to loosest, running multi-variant high-accuracy
+        detection at each.  ``min_face_size`` for a rung scales with the
+        image's short side, so the same fraction means a larger pixel floor on
+        big images (keeps tiny noise out) and a smaller one on thumbnails.
+
+        Stops at the FIRST rung that yields any faces — so a faded photo that
+        only needs a slightly lower threshold never reaches the loosest rung,
+        and normal photos (which already succeeded at level 0) never get here
+        at all.  Looser rungs only ever add detections, so once a rung hits,
+        no later rung would do better.  A safety cap rejects a rung whose count
+        is implausibly high (signalled false positives in testing) — since
+        lower rungs are looser still, we give up rather than descend further.
+        """
+        det_cfg = self._config.detection
+        short_side = min(img_bgr.shape[:2])
+
+        for conf, frac in det_cfg.adaptive_ladder:
+            min_size = max(det_cfg.adaptive_min_face_floor, round(short_side * frac))
+            result = self._detect_high_accuracy(
+                img_bgr, threshold=conf, min_size=min_size
+            )
+            count = len(result)
+            diag_log.debug(
+                "ADAPTIVE rung conf=%.2f min_size=%d (frac=%.3f, short=%d): %d face(s)",
+                conf, min_size, frac, short_side, count,
+            )
+            if count == 0:
+                continue
+
+            cap = det_cfg.adaptive_max_faces
+            if count > cap:
+                diag_log.warning(
+                    "ADAPTIVE stop: rung conf=%.2f produced %d face(s) (cap=%d) — "
+                    "implausibly high, likely false positives. Giving up.",
+                    conf, count, cap,
+                )
+                return []
+
+            log.info(
+                "Adaptive detection rescued image: conf=%.2f min_size=%d → %d face(s)",
+                conf, min_size, count,
+            )
+            return result
+
+        return []
+
+    def _detect_high_accuracy(
+        self,
+        img_bgr: np.ndarray,
+        threshold: Optional[float] = None,
+        min_size: Optional[int] = None,
+    ) -> List[Detection]:
         """Multi-variant detection with IoU-based deduplication.
 
         Preprocessing variants tried:
@@ -328,9 +394,14 @@ class DetectionService:
         3. Gamma-brightened (γ=0.7)
 
         All detections are merged using greedy IoU NMS.
+
+        ``threshold`` / ``min_size`` override the configured high-accuracy
+        defaults — used by the adaptive escalation ladder, which sweeps both.
         """
-        threshold = self._config.detection.high_accuracy_confidence_threshold
-        min_size = self._config.detection.min_face_size
+        if threshold is None:
+            threshold = self._config.detection.high_accuracy_confidence_threshold
+        if min_size is None:
+            min_size = self._config.detection.min_face_size
         iou_merge = self._config.detection.iou_merge_threshold
 
         all_dets: List[Detection] = []

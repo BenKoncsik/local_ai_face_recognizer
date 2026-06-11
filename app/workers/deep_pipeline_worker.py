@@ -16,6 +16,14 @@ modes exist, matching the two cards of the AI tab in Scan & Maintenance:
     assignments survive — they are the training data), every image is
     re-detected and re-embedded, then the same train + recognize flow runs.
 
+``train``
+    Embeds the missing faces, then retrains the model — nothing else.
+
+``detect_faces``
+    Analysis-only AI face detection over every image: stores where the
+    pretrained deep-learning detector sees faces (bounding box + confidence)
+    in the ``ai_face_detections`` table.  No Face row is created or changed.
+
 Accuracy is preferred over speed throughout: training may take minutes and
 is allowed to saturate every CPU core.
 """
@@ -58,6 +66,9 @@ log = logging.getLogger(__name__)
 MODE_RESCAN = "rescan"
 MODE_REBUILD = "rebuild"
 MODE_TRAIN = "train"
+# Analysis-only AI face detection (where are the faces + confidence); never
+# creates Face rows and never touches the classic recognition results.
+MODE_DETECT_FACES = "detect_faces"
 
 
 class DeepPipelineWorker(QThread):
@@ -96,7 +107,7 @@ class DeepPipelineWorker(QThread):
         ai_debug_log: bool = False,
     ) -> None:
         super().__init__(parent)
-        if mode not in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN):
+        if mode not in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN, MODE_DETECT_FACES):
             raise ValueError(f"Unknown deep pipeline mode: {mode!r}")
         self._root_folder = root_folder
         self._config = config
@@ -181,7 +192,11 @@ class DeepPipelineWorker(QThread):
             self._run_train_only_pipeline()
             return
 
-        n_stages = 9 if self._mode == MODE_REBUILD else 8
+        if self._mode == MODE_DETECT_FACES:
+            self._run_detect_only_pipeline()
+            return
+
+        n_stages = 10 if self._mode == MODE_REBUILD else 9
         stage = [0]
 
         def announce(message: str) -> None:
@@ -217,6 +232,13 @@ class DeepPipelineWorker(QThread):
         total_faces = self._run_detection(pending)
         if self._abort:
             self.finished.emit(False, "Aborted after detection")
+            return
+
+        # --- AI face detection (analysis only, best-effort) ---
+        announce(f"AI face detection on {len(pending)} image(s) …")
+        ai_stats = self._run_ai_face_detection(pending)
+        if self._abort:
+            self.finished.emit(False, "Aborted after AI face detection")
             return
 
         # --- Embedding ---
@@ -283,9 +305,16 @@ class DeepPipelineWorker(QThread):
             if train.validation_accuracy is not None
             else "n/a"
         )
+        ai_part = (
+            f"AI detect: {ai_stats.faces_found} face(s) on "
+            f"{ai_stats.images_processed} image(s)"
+            if ai_stats.available
+            else "AI detect: unavailable"
+        )
         summary = (
             f"Done ({self._mode}) — {len(new_ids)} new image(s), "
             f"{total_faces} face(s) detected, {embedded} embedded | "
+            f"{ai_part} | "
             f"model: {train.n_persons} person(s), {train.n_examples} example(s), "
             f"accuracy {acc}"
             f"{' (model reused — data unchanged)' if train.reused_existing_model else ''} | "
@@ -361,6 +390,98 @@ class DeepPipelineWorker(QThread):
         )
         self.log_message.emit(summary)
         self.finished.emit(True, summary)
+
+    # ------------------------------------------------------------------
+    # AI face detection (analysis only)
+    # ------------------------------------------------------------------
+
+    def _run_detect_only_pipeline(self) -> None:
+        """Run only the AI face-detection analysis, over every image.
+
+        Stores where the AI sees faces (bounding box + confidence) in the
+        ``ai_face_detections`` table; no Face row is created or modified, no
+        identity is assigned — the classic results stay untouched.
+        """
+        from app.services.ai_face_detection_service import (
+            SOURCE_MANUAL,
+            AiFaceDetectionService,
+        )
+
+        def cb(current, total, path):
+            self.progress.emit(current, total or 0, "AI Detect", Path(path).name)
+
+        with session_scope() as session:
+            svc = AiFaceDetectionService(session, self._config.ai_face_detection)
+            image_ids = svc.all_image_ids()
+            self.log_message.emit(
+                f"Stage 1/1: AI face detection on {len(image_ids)} image(s) …"
+            )
+            stats = svc.detect_images(
+                image_ids,
+                source=SOURCE_MANUAL,
+                progress_cb=cb,
+                cancel_check=lambda: self._abort,
+            )
+
+        if not stats.available:
+            self.error.emit(
+                f"AI face detection unavailable: {stats.error}"
+            )
+            self.finished.emit(False, f"AI face detection unavailable: {stats.error}")
+            return
+        if self._abort:
+            self.finished.emit(False, "Aborted during AI face detection")
+            return
+
+        summary = (
+            f"Done (AI face detection) — {stats.faces_found} face(s) found on "
+            f"{stats.images_processed} image(s) "
+            f"({stats.images_failed} unreadable) | detector: {stats.detector_name} | "
+            f"analysis only — no face was assigned, moved or deleted"
+        )
+        self.log_message.emit(summary)
+        self.finished.emit(True, summary)
+
+    def _run_ai_face_detection(self, image_ids: list):
+        """Best-effort AI face-detection stage inside rescan/rebuild.
+
+        Never raises: a missing model or any other failure is logged and an
+        empty/errored stats object is returned, so the rest of the pipeline
+        (the existing recognition flow) continues unaffected.
+        """
+        from app.services.ai_face_detection_service import (
+            SOURCE_PIPELINE,
+            AiFaceDetectionService,
+            AiFaceDetectionStats,
+        )
+
+        def cb(current, total, path):
+            self.progress.emit(current, total or 0, "AI Detect", Path(path).name)
+
+        try:
+            with session_scope() as session:
+                svc = AiFaceDetectionService(
+                    session, self._config.ai_face_detection
+                )
+                stats = svc.detect_images(
+                    image_ids,
+                    source=SOURCE_PIPELINE,
+                    progress_cb=cb,
+                    cancel_check=lambda: self._abort,
+                )
+            if stats.available:
+                self.log_message.emit(
+                    f"  AI detected {stats.faces_found} face(s) on "
+                    f"{stats.images_processed} image(s)."
+                )
+            else:
+                self.log_message.emit(
+                    f"  AI face detection skipped: {stats.error}"
+                )
+            return stats
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AI face detection stage failed: %s", exc)
+            return AiFaceDetectionStats(error=str(exc))
 
     # ------------------------------------------------------------------
     # Rebuild reset

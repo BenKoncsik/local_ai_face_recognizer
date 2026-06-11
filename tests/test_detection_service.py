@@ -245,3 +245,81 @@ def test_redetection_does_not_duplicate_manual_face(monkeypatch, tmp_path):
     auto = [f for f in faces if f.detector_backend == "dummy"]
     assert len(auto) == 1, "overlapping detection must be deduped against the manual face"
     assert len(faces) == 2
+
+
+class _ThresholdSensitiveDetector(FaceDetector):
+    """Simulates a faded photo: faces only surface below a confidence floor.
+
+    Returns two low-confidence (0.45) faces when the caller's threshold is
+    <= 0.45, otherwise nothing — mirroring how the YuNet/SSD models score
+    real faces in old group photos far below the strict 0.65 default.
+    """
+
+    @property
+    def backend_name(self) -> str:
+        return "yunet"
+
+    def detect(
+        self,
+        image_bgr: np.ndarray,
+        confidence_threshold: float = 0.5,
+        min_face_size: int = 50,
+    ):
+        if confidence_threshold > 0.45:
+            return []
+        return [
+            Detection(x=10, y=10, w=40, h=40, confidence=0.45),
+            Detection(x=200, y=20, w=40, h=40, confidence=0.45),
+        ]
+
+
+def test_adaptive_escalation_rescues_faded_photo(tmp_path):
+    """Strict pass finds nothing; adaptive escalation recovers the faces."""
+    cfg = AppConfig(base_dir=str(tmp_path))
+    cfg.storage.crops_dir = "crops"
+    assert cfg.detection.adaptive_escalation is True
+
+    img = np.full((659, 1056, 3), 200, np.uint8)
+
+    with session_scope() as session:
+        service = DetectionService(
+            session=session, detector=_ThresholdSensitiveDetector(), config=cfg
+        )
+        # Strict single pass at 0.65 → nothing; escalation kicks in.
+        dets = service._run_detection(img)
+
+    assert len(dets) == 2, "adaptive ladder should recover the low-confidence faces"
+
+
+def test_adaptive_escalation_disabled_stays_strict(tmp_path):
+    """With escalation off, a strict miss stays a miss — no relaxation."""
+    cfg = AppConfig(base_dir=str(tmp_path))
+    cfg.storage.crops_dir = "crops"
+    cfg.detection.adaptive_escalation = False
+
+    img = np.full((659, 1056, 3), 200, np.uint8)
+
+    with session_scope() as session:
+        service = DetectionService(
+            session=session, detector=_ThresholdSensitiveDetector(), config=cfg
+        )
+        dets = service._run_detection(img)
+
+    assert dets == []
+
+
+def test_adaptive_escalation_skipped_when_strict_succeeds(tmp_path):
+    """A detector that finds faces strictly must never trigger escalation."""
+    cfg = AppConfig(base_dir=str(tmp_path))
+    cfg.storage.crops_dir = "crops"
+
+    img = np.full((659, 1056, 3), 200, np.uint8)
+
+    with session_scope() as session:
+        service = DetectionService(
+            session=session, detector=_DummyDetector(), config=cfg
+        )
+        dets = service._run_detection(img)
+
+    # _DummyDetector returns 2 faces at any threshold → strict pass already wins.
+    assert len(dets) == 2

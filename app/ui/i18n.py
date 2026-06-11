@@ -1088,6 +1088,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                      "Automatikus találatok: {auto}\n"
                                      "Felhasználói jóváhagyást igényel: {suggest}\n"
                                      "Nem azonosítható: {none}"},
+    "rerec_summary_ai":       {"en": "AI face detection: {faces} face(s) found "
+                                     "on {images} image(s)",
+                               "hu": "AI arc detektálás: {faces} arc találva "
+                                     "{images} képen"},
     "rerec_summary_review":   {"en": "Review uncertain matches…",
                                "hu": "Bizonytalan találatok áttekintése…"},
     "rerec_summary_close":    {"en": "Close", "hu": "Bezárás"},
@@ -1711,6 +1715,30 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                "while and may use 100% CPU",
          "hu": "Biztonságos — az adataid egyáltalán nem módosulnak; a tanítás "
                "eltarthat egy ideig és 100%-on járathatja a processzort"},
+    "scanModes.deepFaceDetect.title":
+        {"en": "AI Face Detection",
+         "hu": "AI arc detektálás"},
+    "scanModes.deepFaceDetect.description":
+        {"en": "Analysis only, powered by a pretrained deep-learning detector: "
+               "checks every image for whether it contains faces, how many, "
+               "where they are (bounding boxes) and with what confidence. The "
+               "results are saved and can be looked up later. No identification "
+               "happens — no face is assigned, renamed, moved or deleted, and "
+               "the classic recognition results are not touched at all.",
+         "hu": "Csak elemzés, előtanított mélytanulásos detektorral: minden "
+               "képen megvizsgálja, van-e rajta arc, hány darab, hol "
+               "helyezkednek el (befoglaló keretek) és mekkora bizonyossággal. "
+               "Az eredmények mentésre kerülnek, később visszakereshetők. "
+               "Azonosítás nem történik — egyetlen arc sem kerül "
+               "hozzárendelésre, átnevezésre, áthelyezésre vagy törlésre, és a "
+               "klasszikus felismerés eredményeihez sem nyúl."},
+    "scanModes.deepFaceDetect.startButton":
+        {"en": "Start AI Face Detection",
+         "hu": "AI arc detektálás indítása"},
+    "scanModes.deepFaceDetect.warning":
+        {"en": "Safe — analysis only: nothing is assigned, modified or deleted",
+         "hu": "Biztonságos — csak elemzés: semmi sem kerül hozzárendelésre, "
+               "módosításra vagy törlésre"},
     "scanModes.deepRebuild.title":
         {"en": "AI Rebuild from Scratch",
          "hu": "AI újraépítés nulláról"},

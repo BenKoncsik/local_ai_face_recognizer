@@ -240,9 +240,11 @@ def test_get_image_faces_returns_tuples(db, tmp_path):
     assert len(faces) == 2
     face_ids = [fd[0] for fd in faces]
     assert f1.id in face_ids
-    # Tuple structure: (face_id, x, y, w, h, name_or_None, person_id_or_None)
+    # Tuple structure: (face_id, x, y, w, h, name_or_None, person_id_or_None, is_uncertain)
     for fd in faces:
-        assert len(fd) == 7
+        assert len(fd) == 8
+        assert isinstance(fd[7], bool)
+        assert fd[7] is False
 
 
 def test_get_image_faces_excludes_excluded(db, tmp_path):

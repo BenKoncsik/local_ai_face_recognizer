@@ -70,6 +70,38 @@ class DetectionConfig:
     # (intersection / smaller-box area); this catches that case.
     duplicate_unknown_containment_threshold: float = 0.80
 
+    # --- Adaptive escalation ---
+
+    # When the strict first pass finds ZERO faces, progressively relax the
+    # detector (multi-variant preprocessing + lower confidence + smaller min
+    # face size) until at least one face appears, then STOP.  This rescues
+    # group / old / faded photos where the strict pass is blind, WITHOUT
+    # loosening detection on normal photos that already succeed strictly —
+    # those never reach the ladder, so no extra false positives there.
+    adaptive_escalation: bool = True
+
+    # Escalation ladder, tried in order, each only if the previous found 0 faces.
+    # Each rung is (confidence_threshold, min_face_fraction).  The pixel min face
+    # size at a rung is max(adaptive_min_face_floor, round(short_side * fraction))
+    # where short_side = min(image_width, image_height).  Image-size aware: the
+    # same fraction yields a larger pixel floor on big images, keeping tiny noise
+    # blobs out.  We deliberately stop at 0.25 — lower thresholds produced false
+    # positives (bushes, shirt patterns) in testing on real group photos.
+    adaptive_ladder: tuple[tuple[float, float], ...] = (
+        (0.40, 0.045),
+        (0.30, 0.037),
+        (0.25, 0.037),
+    )
+
+    # Absolute floor for the dynamic min face size (pixels). Never go below this
+    # regardless of image size — guards against accepting sub-face noise.
+    adaptive_min_face_floor: int = 22
+
+    # Safety cap: if an escalation rung suddenly yields MORE detections than this
+    # multiple of the previous rung's count (or this absolute number from zero),
+    # treat the jump as likely false positives and keep the previous result.
+    adaptive_max_faces: int = 60
+
 
 @dataclass
 class EmbeddingConfig:
@@ -352,6 +384,35 @@ class DeepRecognitionConfig:
 
 
 @dataclass
+class AiFaceDetectionConfig:
+    """Parameters for the AI (deep learning) face-detection analysis pass.
+
+    A standalone, analysis-only step of the AI pipeline: it answers *whether*
+    there are faces on an image, *how many*, *where* (bounding boxes) and with
+    what confidence — using a pretrained deep-learning detector (YuNet ONNX).
+    It never assigns identities and never touches the classic detection /
+    recognition results; its findings are stored separately in the
+    ``ai_face_detections`` table.
+    """
+
+    enabled: bool = True
+
+    # Minimum detector confidence for a detection to be recorded.
+    confidence_threshold: float = 0.60
+
+    # Minimum face bounding-box width AND height in pixels.
+    min_face_size: int = 20
+
+    # Optional explicit path to the YuNet ``.onnx`` model.  None → the bundled
+    # default (models/face_detection_yunet_2023mar.onnx).
+    model_path: Optional[str] = None
+
+    # Also run this pass when the image browser's "re-recognize faces" action
+    # is used (best-effort: an AI failure never breaks re-recognition).
+    run_on_rerecognition: bool = True
+
+
+@dataclass
 class OverlapResolutionConfig:
     """Parameters for the same-image overlapping-box resolution pass.
 
@@ -545,6 +606,9 @@ class AppConfig:
     deep_recognition: DeepRecognitionConfig = field(
         default_factory=DeepRecognitionConfig
     )
+    ai_face_detection: AiFaceDetectionConfig = field(
+        default_factory=AiFaceDetectionConfig
+    )
     overlap_resolution: OverlapResolutionConfig = field(
         default_factory=OverlapResolutionConfig
     )
@@ -656,6 +720,22 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             duplicate_unknown_containment_threshold=det.get(
                 "duplicate_unknown_containment_threshold",
                 cfg.detection.duplicate_unknown_containment_threshold,
+            ),
+            adaptive_escalation=det.get(
+                "adaptive_escalation", cfg.detection.adaptive_escalation
+            ),
+            adaptive_ladder=tuple(
+                tuple(rung)
+                for rung in det.get(
+                    "adaptive_ladder",
+                    [list(r) for r in cfg.detection.adaptive_ladder],
+                )
+            ),
+            adaptive_min_face_floor=det.get(
+                "adaptive_min_face_floor", cfg.detection.adaptive_min_face_floor
+            ),
+            adaptive_max_faces=det.get(
+                "adaptive_max_faces", cfg.detection.adaptive_max_faces
             ),
         )
 
@@ -853,6 +933,21 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             high_accuracy_detection=deep.get(
                 "high_accuracy_detection",
                 cfg.deep_recognition.high_accuracy_detection,
+            ),
+        )
+
+        aifd = raw.get("ai_face_detection", {})
+        cfg.ai_face_detection = AiFaceDetectionConfig(
+            enabled=aifd.get("enabled", cfg.ai_face_detection.enabled),
+            confidence_threshold=aifd.get(
+                "confidence_threshold", cfg.ai_face_detection.confidence_threshold
+            ),
+            min_face_size=aifd.get(
+                "min_face_size", cfg.ai_face_detection.min_face_size
+            ),
+            model_path=aifd.get("model_path", cfg.ai_face_detection.model_path),
+            run_on_rerecognition=aifd.get(
+                "run_on_rerecognition", cfg.ai_face_detection.run_on_rerecognition
             ),
         )
 

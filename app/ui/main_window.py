@@ -74,6 +74,7 @@ from app.ui.panels.sidebar_panel import SidebarPanel
 from app.ui.widgets.flow_layout import FlowContainer
 from app.workers.match_job_worker import MatchJobWorker
 from app.workers.deep_pipeline_worker import (
+    MODE_DETECT_FACES,
     MODE_REBUILD,
     MODE_RESCAN,
     MODE_TRAIN,
@@ -938,6 +939,7 @@ class MainWindow(QMainWindow):
             on_deep_rescan=self._on_deep_rescan,
             on_deep_rebuild=self._on_deep_rebuild,
             on_deep_train=self._on_deep_train,
+            on_deep_face_detect=self._on_deep_face_detect,
             parent=self,
         )
         dlg.exec()
@@ -975,6 +977,12 @@ class MainWindow(QMainWindow):
         if not self._deep_pipeline_guard():
             return
         self._start_deep_pipeline(MODE_TRAIN)
+
+    @Slot()
+    def _on_deep_face_detect(self) -> None:
+        if not self._deep_pipeline_guard():
+            return
+        self._start_deep_pipeline(MODE_DETECT_FACES)
 
     @Slot()
     def _on_deep_rebuild(self) -> None:

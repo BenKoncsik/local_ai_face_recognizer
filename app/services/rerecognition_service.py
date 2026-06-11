@@ -107,6 +107,13 @@ class ReRecognitionResult:
     n_none: int = 0
     cancelled: bool = False
 
+    # Outcome of the optional AI face-detection pass that piggybacks on
+    # re-recognition (analysis only — boxes + confidences, no assignments).
+    # Both stay None when the pass did not run (disabled / model unavailable),
+    # keeping older consumers of this result untouched.
+    ai_images_scanned: Optional[int] = None
+    ai_faces_found: Optional[int] = None
+
     @property
     def n_suggest(self) -> int:
         return len(self.suggest_items)

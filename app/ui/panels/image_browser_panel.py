@@ -3004,15 +3004,22 @@ class ImageBrowserPanel(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
         box.setWindowTitle(t("rerec_summary_title"))
-        box.setText(
-            t(
-                "rerec_summary_body",
-                examined=result.n_examined,
-                auto=result.n_auto,
-                suggest=result.n_suggest,
-                none=result.n_none,
-            )
+        summary_text = t(
+            "rerec_summary_body",
+            examined=result.n_examined,
+            auto=result.n_auto,
+            suggest=result.n_suggest,
+            none=result.n_none,
         )
+        # The optional AI face-detection pass (analysis only) reports its
+        # counts here; older results without the fields are shown unchanged.
+        if getattr(result, "ai_faces_found", None) is not None:
+            summary_text += "\n" + t(
+                "rerec_summary_ai",
+                faces=result.ai_faces_found,
+                images=result.ai_images_scanned or 0,
+            )
+        box.setText(summary_text)
         review_btn = None
         if result.suggest_items:
             review_btn = box.addButton(

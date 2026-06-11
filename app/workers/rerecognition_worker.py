@@ -84,7 +84,42 @@ class ReRecognitionWorker(QThread):
             log.exception("Re-recognition worker failed")
             self.failed.emit(str(exc))
             return
+        self._run_ai_face_detection(result)
         self.finished_result.emit(result)
+
+    def _run_ai_face_detection(self, result: ReRecognitionResult) -> None:
+        """Best-effort AI face-detection pass on the re-recognized images.
+
+        Analysis only: stores where the pretrained deep-learning detector sees
+        faces (``ai_face_detections`` table) without touching the classic
+        re-recognition outcome.  Never raises — if the AI model is missing or
+        anything fails, the error is logged and re-recognition completes
+        exactly as before.
+        """
+        try:
+            cfg = getattr(self._config, "ai_face_detection", None)
+            if cfg is None or not cfg.enabled or not cfg.run_on_rerecognition:
+                return
+
+            from app.services.ai_face_detection_service import (
+                SOURCE_RERECOGNITION,
+                AiFaceDetectionService,
+            )
+
+            with session_scope() as session:
+                svc = AiFaceDetectionService(session, cfg)
+                stats = svc.detect_images(
+                    self._image_ids,
+                    source=SOURCE_RERECOGNITION,
+                    cancel_check=lambda: self._token.cancelled,
+                )
+            if not stats.available:
+                log.warning("AI face detection skipped: %s", stats.error)
+                return
+            result.ai_images_scanned = stats.images_processed
+            result.ai_faces_found = stats.faces_found
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AI face detection after re-recognition failed: %s", exc)
 
     def _execute(self) -> ReRecognitionResult:
         with session_scope() as session:

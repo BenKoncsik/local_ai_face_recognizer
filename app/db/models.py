@@ -1505,3 +1505,65 @@ class RecognitionMergeLog(Base):
             f"{self.prev_person_name!r}→{self.matched_person_name!r} "
             f"score={self.score:.3f}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# AI face detection (analysis-only)
+# ---------------------------------------------------------------------------
+
+class AiFaceDetection(Base):
+    """One face found by the AI (deep learning) face-detection analysis pass.
+
+    Pure analysis output — *is* there a face, *where*, and with what
+    confidence.  Rows are written by
+    :class:`~app.services.ai_face_detection_service.AiFaceDetectionService`
+    and are completely independent of the ``faces`` table: no identity is
+    assigned and the classic detection/recognition results are never touched.
+    Each new run replaces the previous rows of the processed images, so the
+    table always holds the latest AI detection result per image.
+
+    Created automatically by ``Base.metadata.create_all`` — no separate
+    migration.
+    """
+
+    __tablename__ = "ai_face_detections"
+    __table_args__ = (
+        Index("ix_aifd_image", "image_id"),
+        Index("ix_aifd_run", "run_id"),
+        Index("ix_aifd_detected_at", "detected_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    image_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("images.id", ondelete="CASCADE"), nullable=False
+    )
+    # Path snapshot at detection time, so results stay readable even if the
+    # image row is later re-pathed or removed.
+    image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Bounding box (image pixels) ---
+    bbox_x: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_y: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_w: Mapped[int] = mapped_column(Integer, nullable=False)
+    bbox_h: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # Which deep-learning detector produced this row (e.g. "yunet").
+    detector_name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Groups all rows produced by one detection run.
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # What triggered the run: "manual" (AI tab), "pipeline" (deep pipeline
+    # stage) or "rerecognition" (image-browser re-recognize action).
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+
+    detected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<AiFaceDetection image={self.image_id} "
+            f"bbox=({self.bbox_x},{self.bbox_y},{self.bbox_w},{self.bbox_h}) "
+            f"conf={self.confidence:.3f} detector={self.detector_name!r}>"
+        )

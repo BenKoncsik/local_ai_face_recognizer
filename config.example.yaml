@@ -213,6 +213,26 @@ deep_recognition:
   # Use the slower high-accuracy detector pass in the AI pipeline.
   high_accuracy_detection: false
 
+ai_face_detection:
+  # AI (deep learning) face detection — analysis only. Part of the AI pipeline
+  # and launchable from Scan & Maintenance → AI tab; it records whether an
+  # image contains faces, how many, where (bounding boxes) and with what
+  # confidence, using a pretrained YuNet ONNX detector. Results are stored in
+  # the ai_face_detections table. It never assigns identities and never
+  # modifies the classic detection/recognition results; if the model is
+  # missing the rest of the app keeps working unaffected.
+  enabled: true
+  # Minimum detector confidence for a detection to be recorded.
+  confidence_threshold: 0.60
+  # Minimum face bounding-box width AND height in pixels.
+  min_face_size: 20
+  # Optional explicit path to the YuNet .onnx model; null → the bundled
+  # default (models/face_detection_yunet_2023mar.onnx).
+  model_path: null
+  # Also run this pass when the image browser's "re-recognize faces" action
+  # is used (best-effort: an AI failure never breaks re-recognition).
+  run_on_rerecognition: true
+
 overlap_resolution:
   # Same-image overlapping-box cleanup in the AI pipeline. When the same
   # physical face carries several boxes, one survives: an assigned/manual box
