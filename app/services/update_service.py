@@ -7,7 +7,6 @@ import os
 import platform
 import re
 import sys
-import tempfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,6 +115,22 @@ def _updater_log_file() -> Path:
     return log_dir / "face_local_updater.log"
 
 
+def _update_download_dir() -> Path:
+    """Return an app-owned, writable directory for update downloads.
+
+    Downloading into (and extracting from) a per-user app folder under
+    %LOCALAPPDATA% instead of the shared system %TEMP% avoids the Windows
+    "Unable to execute file in the temporary directory ... Error 5" failure
+    on machines where antivirus, Software Restriction Policies or AppLocker
+    block execution from %TEMP%.
+    """
+    from app.paths import user_data_dir
+
+    d = user_data_dir() / "updates"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _ps_single_quote(value: Path | str) -> str:
     """Quote a value as a PowerShell single-quoted string."""
     return "'" + str(value).replace("'", "''") + "'"
@@ -130,12 +145,16 @@ def download_asset(
     progress_cb(downloaded_bytes, total_bytes) is called periodically.
     """
     name = release.asset_name
-    suffix = ".tar.gz" if name.endswith(".tar.gz") else Path(name).suffix
-    tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=suffix, prefix="face-local-update-"
-    )
-    tmp.close()
-    dest = Path(tmp.name)
+    dest = _update_download_dir() / name
+    # Remove a stale copy from a previous run so a partial/locked file does
+    # not block the write; fall back to a unique name if it cannot be deleted.
+    try:
+        if dest.exists():
+            dest.unlink()
+    except OSError:
+        suffix = ".tar.gz" if name.endswith(".tar.gz") else Path(name).suffix
+        stem = name[: -len(suffix)] if suffix else name
+        dest = dest.with_name(f"{stem}-{os.getpid()}{suffix}")
     log.info(
         "Update download started: asset=%s size=%s url=%s dest=%s",
         release.asset_name,
@@ -258,11 +277,26 @@ def _apply_windows_exe(exe_path: Path) -> None:
 
     log_file = _updater_log_file()
     installer_log = log_file.with_name("face_local_installer.log")
+
+    # Redirect the Inno Setup installer's self-extraction away from the system
+    # %TEMP%.  When the installer launches it unpacks helper files into the
+    # directory named by TMP/TEMP and runs them; on machines where antivirus,
+    # SRP or AppLocker block execution from %TEMP% this fails before the wizard
+    # appears with "Unable to execute file in the temporary directory ...
+    # Error 5".  An app-owned folder under %LOCALAPPDATA% is writable and
+    # policy-allowed.  Setting os.environ here propagates to both the
+    # ShellExecuteW child and the subprocess fallback below.
+    installer_tmp = _update_download_dir() / "installer-tmp"
+    installer_tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMP"] = str(installer_tmp)
+    os.environ["TEMP"] = str(installer_tmp)
+
     log.info(
-        "Starting Windows installer update: installer=%s updater_log=%s installer_log=%s",
+        "Starting Windows installer update: installer=%s updater_log=%s installer_log=%s tmp=%s",
         exe_path,
         log_file,
         installer_log,
+        installer_tmp,
     )
     # The installer uses PrivilegesRequired=lowest (per-user install), so no
     # UAC elevation is needed.  "open" lets the installer handle its own
@@ -365,8 +399,9 @@ def _apply_windows_zip(zip_path: Path) -> None:
         Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force
     """)
 
-    import tempfile
-    tmp = Path(tempfile.mktemp(suffix=".ps1", prefix="face-local-update-"))
+    # Write the helper into the app-owned updates folder rather than %TEMP%, so
+    # it survives SRP/AppLocker policies that restrict the system temp dir.
+    tmp = _update_download_dir() / f"face-local-update-{pid}.ps1"
     tmp.write_text(script, encoding="utf-8")
     log.info("Windows ZIP updater helper script written: %s", tmp)
     subprocess.Popen(
