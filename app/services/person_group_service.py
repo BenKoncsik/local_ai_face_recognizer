@@ -131,6 +131,42 @@ class PersonGroupService:
         self._session.flush()
         return group
 
+    def update_group(
+        self,
+        group_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        color: Optional[str] = None,
+    ) -> PersonGroup:
+        """Update a group's name, description and/or color.
+
+        Only the arguments that are not ``None`` are applied, so callers can
+        update just the note without touching the name. Pass an empty string
+        for *description*/*color* to clear them.
+
+        Raises:
+            ValueError: if the group does not exist, *name* is given but empty,
+                        or another group already uses *name*.
+        """
+        group = self._session.get(PersonGroup, group_id)
+        if group is None:
+            raise ValueError(f"Group id={group_id} not found.")
+        if name is not None:
+            name = name.strip()
+            if not name:
+                raise ValueError("Group name cannot be empty.")
+            conflict = self.find_by_name(name)
+            if conflict is not None and conflict.id != group_id:
+                raise ValueError(f"Group '{name}' already exists.")
+            group.name = name
+        if description is not None:
+            group.description = description.strip() or None
+        if color is not None:
+            group.color = color.strip() or None
+        self._session.flush()
+        log.info("Updated person group id=%d", group_id)
+        return group
+
     def delete_group(self, group_id: int) -> None:
         """Delete a group and all its memberships (cascade).
 

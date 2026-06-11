@@ -64,6 +64,7 @@ from app.ui.i18n import t
 from app.ui.panels.cluster_panel import ClusterPanel
 from app.ui.panels.collage_panel import CollagePanel
 from app.ui.panels.family_search_panel import FamilySearchPanel
+from app.ui.panels.groups_panel import GroupsPanel
 from app.ui.panels.image_browser_panel import ImageBrowserPanel
 from app.ui.panels.locations_panel import LocationsPanel
 from app.ui.panels.log_panel import LogPanel
@@ -188,13 +189,22 @@ class MainWindow(QMainWindow):
         0: "faces",    # Arcfelismerés
         1: "image",    # Képböngésző
         4: "faces",    # Személyek
-        6: "collage",  # Kollázs
+        # 6: Társaságok — no page-specific shortcuts ("other")
+        7: "collage",  # Kollázs
     }
 
     def _on_tab_context_changed(self, index: int) -> None:
         from app.services.shortcut_service import get_shortcut_service
         context = self._TAB_CONTEXT.get(index, "other")
         get_shortcut_service().set_active_context(context)
+
+        # Refresh the groups tab so groups created elsewhere (e.g. the person
+        # dialog) show up without restarting.
+        if (
+            hasattr(self, "_groups_panel")
+            and self._tabs.widget(index) is self._groups_panel
+        ):
+            self._groups_panel.reload()
 
     def _toggle_log_panel(self) -> None:
         if hasattr(self, "_log_dock"):
@@ -410,7 +420,11 @@ class MainWindow(QMainWindow):
         )
         self._tabs.addTab(self._objects_panel, t("tab_objects"))
 
-        # --- Tab 6: Kollázs nézet ---
+        # --- Tab 6: Társaságok / közösségek ---
+        self._groups_panel = GroupsPanel()
+        self._tabs.addTab(self._groups_panel, t("tab_groups"))
+
+        # --- Tab 7: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, t("tab_collage"))
 
@@ -694,7 +708,8 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(3, t("tab_locations"))
         self._tabs.setTabText(4, t("tab_persons"))
         self._tabs.setTabText(5, t("tab_objects"))
-        self._tabs.setTabText(6, t("tab_collage"))
+        self._tabs.setTabText(6, t("tab_groups"))
+        self._tabs.setTabText(7, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_image_browser"):
@@ -3244,7 +3259,7 @@ class MainWindow(QMainWindow):
 
         # Switch to collage tab and refresh
         self._collage_panel.refresh_collage_list()
-        self._tabs.setCurrentIndex(5)
+        self._tabs.setCurrentIndex(self._tabs.indexOf(self._collage_panel))
 
         msg = t("collages_imported", n=imported)
         if errors:

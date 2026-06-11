@@ -231,9 +231,24 @@ class GroupChipSelect(QWidget):
         sep.setFrameShadow(QFrame.Sunken)
         outer.addWidget(sep)
 
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
         self._available_label = QLabel("Meglévő csoportok:")
         self._available_label.setStyleSheet("color: #666; font-size: 11px;")
-        outer.addWidget(self._available_label)
+        header_row.addWidget(self._available_label)
+        header_row.addStretch()
+
+        from app.ui.i18n import t as _t
+        self._manage_btn = QPushButton(_t("manage_groups"))
+        self._manage_btn.setFlat(True)
+        self._manage_btn.setCursor(Qt.PointingHandCursor)
+        self._manage_btn.setStyleSheet(
+            "QPushButton { color: #4a90d9; border: none; font-size: 11px; }"
+            "QPushButton:hover { text-decoration: underline; }"
+        )
+        self._manage_btn.clicked.connect(self._open_group_manager)
+        header_row.addWidget(self._manage_btn)
+        outer.addLayout(header_row)
 
         self._available_container = _FlowContainer(h_spacing=4, v_spacing=4)
         self._available_layout = self._available_container.layout()
@@ -436,3 +451,45 @@ class GroupChipSelect(QWidget):
             self.group_created.emit(gid, gname)
 
         self._select_group(gid, gname)
+
+    # ------------------------------------------------------------------
+    # Group manager
+    # ------------------------------------------------------------------
+
+    def _open_group_manager(self) -> None:
+        """Open the group manager dialog, then refresh from the DB if changed."""
+        from app.ui.dialogs.group_manager_dialog import GroupManagerDialog
+
+        dlg = GroupManagerDialog(self)
+        dlg.exec()
+        if dlg.groups_changed:
+            self._reload_from_db()
+
+    def _reload_from_db(self) -> None:
+        """Re-read the full group list from the DB after external edits.
+
+        Renames are reflected in the selected chips; groups deleted elsewhere
+        are dropped from the selection.
+        """
+        from app.db.database import session_scope
+        from app.db.models import PersonGroup as _PG
+
+        try:
+            with session_scope() as session:
+                groups = [
+                    (g.id, g.name)
+                    for g in session.query(_PG).order_by(_PG.name).all()
+                ]
+        except Exception:
+            log.exception("Failed to reload groups from DB")
+            return
+
+        names = {gid: name for gid, name in groups}
+        # Keep only still-existing selections, updating their (possibly renamed) names.
+        self._selected = {
+            gid: names[gid] for gid in self._selected if gid in names
+        }
+        self._all_groups = sorted(groups, key=lambda g: g[1].lower())
+        self._refresh_selected()
+        self._refresh_available()
+        self.groups_changed.emit(self.selected_group_ids())

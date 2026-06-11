@@ -114,6 +114,69 @@ class TestCreateGroup:
             second = PersonGroupService(s).get_or_create("Unique")
         assert first.id == second.id
 
+    def test_update_group_renames_and_adds_note(self, db):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Koruss").id
+        with session_scope() as s:
+            PersonGroupService(s).update_group(
+                gid, name="Kórus", description="  Vasárnapi próba  "
+            )
+        with session_scope() as s:
+            g = s.get(PersonGroup, gid)
+            assert g.name == "Kórus"
+            assert g.description == "Vasárnapi próba"
+
+    def test_update_group_note_only_keeps_name(self, db):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Munkahely").id
+        with session_scope() as s:
+            PersonGroupService(s).update_group(gid, description="Iroda")
+        with session_scope() as s:
+            g = s.get(PersonGroup, gid)
+            assert g.name == "Munkahely"
+            assert g.description == "Iroda"
+
+    def test_update_group_empty_description_clears_it(self, db):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("X", description="note").id
+        with session_scope() as s:
+            PersonGroupService(s).update_group(gid, description="   ")
+        with session_scope() as s:
+            assert s.get(PersonGroup, gid).description is None
+
+    def test_update_group_empty_name_raises(self, db):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Valid").id
+        with pytest.raises(ValueError, match="empty"):
+            with session_scope() as s:
+                PersonGroupService(s).update_group(gid, name="   ")
+
+    def test_update_group_duplicate_name_raises(self, db):
+        with session_scope() as s:
+            svc = PersonGroupService(s)
+            gid = svc.create_group("First").id
+            svc.create_group("Second")
+        with pytest.raises(ValueError, match="already exists"):
+            with session_scope() as s:
+                PersonGroupService(s).update_group(gid, name="Second")
+
+    def test_update_group_same_name_allowed(self, db):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Stable").id
+        with session_scope() as s:
+            PersonGroupService(s).update_group(
+                gid, name="Stable", description="note"
+            )
+        with session_scope() as s:
+            g = s.get(PersonGroup, gid)
+            assert g.name == "Stable"
+            assert g.description == "note"
+
+    def test_update_group_missing_raises(self, db):
+        with pytest.raises(ValueError, match="not found"):
+            with session_scope() as s:
+                PersonGroupService(s).update_group(9999, name="Nope")
+
 
 # ---------------------------------------------------------------------------
 # Membership

@@ -771,6 +771,44 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "A védett 'Ismeretlen' személyhez nem rendelhető kategória.",
     },
 
+    # ── Group manager dialog ─────────────────────────────────────────────
+    "tab_groups":        {"en": "Groups", "hu": "Társaságok"},
+    "manage_groups":     {"en": "Manage groups …", "hu": "Társaságok kezelése …"},
+    "manage_groups_title": {"en": "Manage groups / communities",
+                            "hu": "Társaságok / közösségek kezelése"},
+    "group_manager_hint": {
+        "en": "Edit the selectable groups here — fix a typo or add a note.",
+        "hu": "Itt szerkesztheted a választható társaságokat — javíthatsz "
+              "elgépelést vagy megjegyzést fűzhetsz hozzájuk.",
+    },
+    "group_name":        {"en": "Name:", "hu": "Név:"},
+    "group_note":        {"en": "Note:", "hu": "Megjegyzés:"},
+    "group_note_placeholder": {
+        "en": "Optional note about this group …",
+        "hu": "Tetszőleges megjegyzés a társasághoz…",
+    },
+    "group_members_count": {"en": "{n} member(s)", "hu": "{n} tag"},
+    "group_new":         {"en": "New group", "hu": "Új társaság"},
+    "group_new_name":    {"en": "New group name:", "hu": "Új társaság neve:"},
+    "group_new_title":   {"en": "New group", "hu": "Új társaság"},
+    "group_save":        {"en": "Save", "hu": "Mentés"},
+    "group_delete":      {"en": "Delete", "hu": "Törlés"},
+    "group_delete_confirm_title": {"en": "Delete group", "hu": "Társaság törlése"},
+    "group_delete_confirm": {
+        "en": "Delete group '{name}'? It is removed from {n} person(s); "
+              "the persons themselves are kept.",
+        "hu": "Törlöd a(z) '{name}' társaságot? {n} személyről kerül le; "
+              "maguk a személyek megmaradnak.",
+    },
+    "group_select_prompt": {
+        "en": "Select a group on the left to edit it.",
+        "hu": "Válassz egy társaságot a bal oldalon a szerkesztéshez.",
+    },
+    "group_save_error_title": {"en": "Could not save group",
+                               "hu": "A társaság mentése nem sikerült"},
+    "group_none_yet":    {"en": "(no groups created yet)",
+                          "hu": "(még nincs létrehozva társaság)"},
+
     # ── Collage ──────────────────────────────────────────────────────────
     "collage_label":     {"en": "Collage:", "hu": "Kollázs:"},
     "fit":               {"en": "Fit", "hu": "Illeszkedés"},
