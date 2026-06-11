@@ -240,6 +240,29 @@ class DeepFaceClassifier:
             return self._predict_prototype(vec, sims)
         return self._predict_ensemble(vec, sims)
 
+    def class_probabilities(self, embedding: Optional[np.ndarray]) -> Dict[int, float]:
+        """Return ``{person_id: ensemble probability}`` for *embedding*.
+
+        This is the calibrated open-set softmax the AI engine itself uses to
+        decide assignments — useful for showing a real "AI probability" next to
+        each candidate in person-selector popups.
+
+        Only the **ensemble** mode produces meaningful probabilities; prototype
+        mode (too few people/examples for a discriminative network) has no
+        softmax, so an empty mapping is returned and callers fall back to plain
+        similarity ordering.  An empty mapping is likewise returned for a
+        missing / degenerate embedding or an untrained model.
+        """
+        state = self._state
+        vec = self._unit(embedding)
+        if vec is None or state.mode != "ensemble" or not state.members:
+            return {}
+        probs = self._ensemble_proba(vec.reshape(1, -1))[0]
+        return {
+            int(state.classes[i]): float(p)
+            for i, p in enumerate(probs)
+        }
+
     def predict_debug(
         self,
         embedding: Optional[np.ndarray],

@@ -102,6 +102,30 @@ class DetectionConfig:
     # treat the jump as likely false positives and keep the previous result.
     adaptive_max_faces: int = 60
 
+    # --- Detection verification (false-positive gate) ---
+
+    # Re-check uncertain detections by re-running the landmark-capable YuNet
+    # detector on the enlarged, upscaled face crop.  A real face is re-found in
+    # its own centered crop with a high score, while ears / hair / walls /
+    # fabric / objects are not — this removes exactly the false positives that
+    # the low-threshold multi-variant and adaptive-escalation passes let
+    # through.  When no YuNet model is available the gate silently disables.
+    verification_enabled: bool = True
+
+    # Detections at/above this confidence skip verification (trusted as-is).
+    verification_confidence_exempt: float = 0.80
+
+    # Minimum verifier (YuNet) score on the crop for a detection to survive.
+    verification_threshold: float = 0.55
+
+    # Margin added around the bbox before cropping, as a fraction of the box
+    # size on each side (0.45 → the crop is ~1.9× the box).
+    verification_margin: float = 0.45
+
+    # The crop is upscaled so its short side is at least this many pixels —
+    # rescues tiny faces the verifier could not score at native resolution.
+    verification_min_crop: int = 160
+
 
 @dataclass
 class EmbeddingConfig:
@@ -736,6 +760,22 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
             adaptive_max_faces=det.get(
                 "adaptive_max_faces", cfg.detection.adaptive_max_faces
+            ),
+            verification_enabled=det.get(
+                "verification_enabled", cfg.detection.verification_enabled
+            ),
+            verification_confidence_exempt=det.get(
+                "verification_confidence_exempt",
+                cfg.detection.verification_confidence_exempt,
+            ),
+            verification_threshold=det.get(
+                "verification_threshold", cfg.detection.verification_threshold
+            ),
+            verification_margin=det.get(
+                "verification_margin", cfg.detection.verification_margin
+            ),
+            verification_min_crop=det.get(
+                "verification_min_crop", cfg.detection.verification_min_crop
             ),
         )
 

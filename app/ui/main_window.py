@@ -2860,7 +2860,9 @@ class MainWindow(QMainWindow):
             # MergeDialog's person selector can show probabilistic name
             # suggestions (same shared logic as every other selector popup).
             recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = match_scores_for_person(session, source, recognition_cfg)
+            match_scores = match_scores_for_person(
+                session, source, recognition_cfg, config=self._config
+            )
 
             dlg = MergeDialog(source, persons, parent=self, match_scores=match_scores)
             if dlg.exec() != MergeDialog.Accepted:
@@ -3062,7 +3064,9 @@ class MainWindow(QMainWindow):
                 src_name = src.name if src is not None else ""
             persons = session.query(Person).order_by(Person.name).all()
             recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = match_scores_for_faces(session, face_ids, recognition_cfg)
+            match_scores = match_scores_for_faces(
+                session, face_ids, recognition_cfg, config=self._config
+            )
             dlg = MoveFacesDialog(
                 face_count=len(face_ids),
                 persons=persons,

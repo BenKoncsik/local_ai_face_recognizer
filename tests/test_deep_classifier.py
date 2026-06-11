@@ -139,6 +139,33 @@ class TestPrediction:
         assert prediction.person_id is None
 
 
+class TestClassProbabilities:
+    def test_distribution_covers_all_people_and_sums_to_one(self, trained):
+        probs = trained.class_probabilities(_person_vec(0, seed=321))
+        assert set(probs) == {1, 2, 3}
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+
+    def test_winner_matches_prediction(self, trained):
+        for axis, expected in ((0, 1), (20, 2), (40, 3)):
+            probs = trained.class_probabilities(_person_vec(axis, seed=axis + 5))
+            assert max(probs, key=probs.get) == expected
+            assert probs[expected] > 0.5
+
+    def test_untrained_returns_empty(self):
+        clf = DeepFaceClassifier(StubConfig())
+        assert clf.class_probabilities(_person_vec(0)) == {}
+
+    def test_missing_embedding_returns_empty(self, trained):
+        assert trained.class_probabilities(None) == {}
+
+    def test_prototype_mode_returns_empty(self):
+        # A single-person cohort stays in prototype mode — no calibrated softmax.
+        persons = {7: [_person_vec(5, seed=i) for i in range(4)]}
+        clf = DeepFaceClassifier(StubConfig())
+        clf.train(_dataset(persons))
+        assert clf.class_probabilities(_person_vec(5)) == {}
+
+
 class TestPersistence:
     def test_save_and_load_roundtrip(self, trained, tmp_path):
         path = tmp_path / "model.pkl"

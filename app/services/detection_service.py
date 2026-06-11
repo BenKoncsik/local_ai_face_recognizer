@@ -29,6 +29,7 @@ from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
 from app.services.face_crop_service import face_debug_state
 from app.services.face_quality_service import FaceQualityEvaluator
+from app.services.face_verification_service import FaceVerifier
 from app.services.image_library_service import resolve_image_path
 from app.utils.image_utils import (
     apply_bilateral,
@@ -98,10 +99,12 @@ class DetectionService:
         config: AppConfig,
         progress_cb: Optional[Callable[[int, Optional[int], str], None]] = None,
         high_accuracy: bool = False,
+        verifier: Optional[FaceVerifier] = None,
     ) -> None:
         self._session = session
         self._detector = detector
         self._config = config
+        self._verifier = verifier
         self._crops_dir = config.crops_dir_resolved
         self._crops_dir.mkdir(parents=True, exist_ok=True)
         self._progress_cb = progress_cb or (lambda *_: None)
@@ -325,10 +328,66 @@ class DetectionService:
                 min_face_size=self._config.detection.min_face_size,
             )
 
+        detections = self._filter_verified(img_bgr, detections)
+
         if not detections and self._config.detection.adaptive_escalation:
             detections = self._detect_adaptive(img_bgr)
 
         return detections
+
+    # ------------------------------------------------------------------
+    # Verification gate (false-positive filter)
+    # ------------------------------------------------------------------
+
+    def _get_verifier(self) -> Optional[FaceVerifier]:
+        """Lazily create the crop-level verifier; None when disabled/unavailable."""
+        if not self._config.detection.verification_enabled:
+            return None
+        if self._verifier is None:
+            from app.detectors.yunet_detector import YuNetDetector
+
+            # Reuse the primary detector when it is already a YuNet instance —
+            # no point loading the same model twice.
+            primary = self._detector if isinstance(self._detector, YuNetDetector) else None
+            self._verifier = FaceVerifier(self._config.detection, detector=primary)
+        return self._verifier if self._verifier.available else None
+
+    def _filter_verified(
+        self, img_bgr: np.ndarray, detections: List[Detection]
+    ) -> List[Detection]:
+        """Drop detections that fail crop-level re-detection.
+
+        Detections at/above ``verification_confidence_exempt`` are trusted
+        as-is; the uncertain rest (low-threshold passes, adaptive rungs,
+        landmark-less SSD backends) must be re-found by the verifier inside
+        their own enlarged crop, or they are discarded as non-faces.
+        """
+        if not detections:
+            return detections
+        verifier = self._get_verifier()
+        if verifier is None:
+            return detections
+
+        exempt = self._config.detection.verification_confidence_exempt
+        kept: List[Detection] = []
+        for det in detections:
+            if det.confidence >= exempt:
+                kept.append(det)
+                continue
+            refined = verifier.verify(img_bgr, det)
+            if refined is not None:
+                kept.append(refined)
+            else:
+                diag_log.debug(
+                    "VERIFY drop: bbox=(%d,%d,%d,%d) conf=%.2f — not re-found in crop",
+                    det.x, det.y, det.w, det.h, det.confidence,
+                )
+        if len(kept) != len(detections):
+            diag_log.debug(
+                "VERIFY: %d detection(s) → %d after crop-level verification",
+                len(detections), len(kept),
+            )
+        return kept
 
     def _detect_adaptive(self, img_bgr: np.ndarray) -> List[Detection]:
         """Image-size-aware escalation for photos the strict pass misses.
@@ -355,6 +414,9 @@ class DetectionService:
             result = self._detect_high_accuracy(
                 img_bgr, threshold=conf, min_size=min_size
             )
+            # The looser the rung, the more junk it pulls in — every rescued
+            # box must survive crop-level verification before the rung counts.
+            result = self._filter_verified(img_bgr, result)
             count = len(result)
             diag_log.debug(
                 "ADAPTIVE rung conf=%.2f min_size=%d (frac=%.3f, short=%d): %d face(s)",

@@ -77,6 +77,88 @@ def _fallback_scores(session, query_centroid: np.ndarray) -> Dict[int, float]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Deep (AI ensemble) probability overlay
+# ──────────────────────────────────────────────────────────────────────────
+
+# The trained deep model is loaded lazily and cached so opening a popup does
+# not re-read the (potentially large) pickle every time.  The cache is keyed on
+# the model file's path + modification time, so a freshly retrained model is
+# picked up automatically on the next lookup.
+_deep_cache: Dict[str, object] = {"key": None, "clf": None}
+
+
+def _load_deep_classifier(deep_cfg):
+    """Return a loaded, trained ``DeepFaceClassifier`` or ``None``.
+
+    Cached by (model path, mtime); a missing/corrupt/untrained model caches a
+    ``None`` result so repeated misses stay cheap.
+    """
+    from pathlib import Path
+
+    model_path = Path(deep_cfg.model_dir) / "deep_face_model.pkl"
+    try:
+        mtime = model_path.stat().st_mtime_ns
+    except OSError:
+        _deep_cache["key"] = None
+        _deep_cache["clf"] = None
+        return None
+
+    key = (str(model_path), mtime)
+    if _deep_cache["key"] == key:
+        return _deep_cache["clf"]
+
+    from app.deep.classifier import DeepFaceClassifier
+
+    clf = DeepFaceClassifier(deep_cfg)
+    loaded = clf.load(model_path) and clf.is_trained
+    _deep_cache["key"] = key
+    _deep_cache["clf"] = clf if loaded else None
+    return _deep_cache["clf"]
+
+
+def _deep_probabilities(embedding: Optional[np.ndarray], config) -> Dict[int, float]:
+    """``{person_id: AI ensemble probability}`` for *embedding*, or ``{}``.
+
+    Best-effort: an absent/untrained model, a disabled deep engine, or any error
+    yields ``{}``, so callers transparently fall back to similarity ordering.
+    """
+    if embedding is None:
+        return {}
+    deep_cfg = getattr(config, "deep_recognition", None) if config is not None else None
+    if deep_cfg is None:
+        from app.config import DeepRecognitionConfig
+
+        deep_cfg = DeepRecognitionConfig()
+    if not getattr(deep_cfg, "enabled", True):
+        return {}
+    try:
+        clf = _load_deep_classifier(deep_cfg)
+        if clf is None:
+            return {}
+        return clf.class_probabilities(np.asarray(embedding, dtype=np.float32))
+    except Exception:  # noqa: BLE001 — probabilities are best-effort, never fatal
+        log.exception("Deep match probabilities failed; using similarity order")
+        return {}
+
+
+def _overlay_deep(
+    scores: Dict[int, float],
+    embedding: Optional[np.ndarray],
+    config,
+) -> Dict[int, float]:
+    """Replace each deep-known person's similarity with its AI probability.
+
+    People the deep model does not know keep their similarity score, so the
+    ordering never loses candidates (unknown / auto-named people, or everyone
+    when the model is untrained).
+    """
+    deep = _deep_probabilities(embedding, config)
+    if not deep:
+        return scores
+    return {**scores, **deep}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Public API — one entry point per kind of query
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -85,10 +167,13 @@ def match_scores_for_embedding(
     session,
     embedding: Optional[np.ndarray],
     recognition_cfg: Optional[RecognitionConfig] = None,
+    config=None,
 ) -> Dict[int, float]:
     """Score *embedding* against known people; ``{}`` when scoring is impossible.
 
-    Tries recognition profiles first, then the per-person centroid fallback.
+    Tries recognition profiles first, then the per-person centroid fallback, and
+    finally overlays the deep engine's calibrated AI probability for every
+    person it recognises (when *config* carries a trained deep model).
     """
     if embedding is None:
         return {}
@@ -99,17 +184,19 @@ def match_scores_for_embedding(
     except Exception:  # noqa: BLE001 — scoring is best-effort, never fatal
         log.exception("Face-match scoring failed; using default order")
         scores = {}
-    if scores:
-        return scores
 
-    query = _normalised(embedding)
-    if query is None:
-        return {}
-    try:
-        return _fallback_scores(session, query)
-    except Exception:  # noqa: BLE001
-        log.exception("Fallback face-match scoring failed; continuing without scores")
-        return {}
+    if not scores:
+        query = _normalised(embedding)
+        if query is not None:
+            try:
+                scores = _fallback_scores(session, query)
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "Fallback face-match scoring failed; continuing without scores"
+                )
+                scores = {}
+
+    return _overlay_deep(scores, embedding, config)
 
 
 def match_scores_for_face(
@@ -134,7 +221,9 @@ def match_scores_for_face(
 
             if embed_manual_face(session, face, config):
                 embedding = face.get_embedding()
-        return match_scores_for_embedding(session, embedding, recognition_cfg)
+        return match_scores_for_embedding(
+            session, embedding, recognition_cfg, config=config
+        )
     except Exception:  # noqa: BLE001
         log.exception("Face-match scoring failed; using default order")
         return {}
@@ -144,6 +233,7 @@ def match_scores_for_faces(
     session,
     face_ids: Iterable[int],
     recognition_cfg: Optional[RecognitionConfig] = None,
+    config=None,
 ) -> Dict[int, float]:
     """Score a *batch* of faces (e.g. a multi-select move) against known people.
 
@@ -164,7 +254,9 @@ def match_scores_for_faces(
         centroid = _normalised(np.mean(vecs, axis=0))
         if centroid is None:
             return {}
-        return match_scores_for_embedding(session, centroid, recognition_cfg)
+        return match_scores_for_embedding(
+            session, centroid, recognition_cfg, config=config
+        )
     except Exception:  # noqa: BLE001
         log.exception("Batch face-match scoring failed; using default order")
         return {}
@@ -174,12 +266,14 @@ def match_scores_for_person(
     session,
     person: Person,
     recognition_cfg: Optional[RecognitionConfig] = None,
+    config=None,
 ) -> Dict[int, float]:
     """Score everyone against *person* (a merge source); ``{}`` on any failure.
 
     Prefers *person*'s recognition-profile centroid (matching what automatic
     recognition would compare), falling back to a centroid built from the
     person's own face embeddings when no profile exists (auto-named / unknown).
+    The deep engine's AI probability is overlaid for recognised people.
     """
     try:
         svc = RecognitionService(session, recognition_cfg)
@@ -187,7 +281,7 @@ def match_scores_for_person(
         if profile is not None:
             scores = svc.score_persons(profile.centroid) or {}
             if scores:
-                return scores
+                return _overlay_deep(scores, profile.centroid, config)
     except Exception:  # noqa: BLE001
         log.exception("Profile-based match scoring failed; trying centroid fallback")
 
@@ -195,7 +289,7 @@ def match_scores_for_person(
     if src_centroid is None:
         return {}
     try:
-        return _fallback_scores(session, src_centroid)
+        return _overlay_deep(_fallback_scores(session, src_centroid), src_centroid, config)
     except Exception:  # noqa: BLE001
         log.exception("Fallback face-match scoring failed; continuing without scores")
         return {}

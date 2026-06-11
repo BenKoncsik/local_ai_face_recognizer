@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from app.detectors.base import Detection, FaceDetector
+from app.detectors.base import Detection, FaceDetector, greedy_nms
 
 log = logging.getLogger(__name__)
 
@@ -174,8 +174,19 @@ class CoralDetector(FaceDetector):
         results: List[Detection] = []
         for x, y, w, h, conf in raw:
             det = Detection(x=x, y=y, w=w, h=h, confidence=conf).clamp(img_w, img_h)
-            if det.w >= min_face_size and det.h >= min_face_size:
-                results.append(det)
+            if det.w < min_face_size or det.h < min_face_size:
+                continue
+            # The quantized SSD model regularly emits implausibly elongated
+            # boxes over background structures — same plausibility window as
+            # the CPU detectors.
+            aspect = det.w / det.h if det.h > 0 else 0.0
+            if not 0.4 <= aspect <= 2.5:
+                continue
+            results.append(det)
+
+        # The SSD postprocess op leaves overlapping duplicates in; collapse
+        # them so the same physical face never yields nested boxes.
+        results = greedy_nms(results, iou_threshold=0.4)
 
         log.debug("Coral detected %d face(s)", len(results))
         return results

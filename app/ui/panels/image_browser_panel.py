@@ -492,6 +492,8 @@ class _InlineFaceEditor(QFrame):
         self._name_lbl.setStyleSheet(
             "color: #88ee88; font-weight: bold; font-size: 11px;"
         )
+        # The header doubles as a drag handle — hint it with a move cursor.
+        self._name_lbl.setCursor(Qt.SizeAllCursor)
         hdr.addWidget(self._name_lbl, stretch=1)
         close_btn = QPushButton("×")
         close_btn.setFixedSize(16, 16)
@@ -527,6 +529,11 @@ class _InlineFaceEditor(QFrame):
 
         self.adjustSize()
         self.hide()
+
+        # Drag-to-move state. The popup can be repositioned by grabbing its
+        # header strip (anything above the person search) so it never has to
+        # cover the face the user is trying to look at.
+        self._drag_origin: Optional[QPoint] = None
 
     def retranslate(self) -> None:
         self._assign_btn.setText(t("ibp_assign_btn"))
@@ -579,6 +586,41 @@ class _InlineFaceEditor(QFrame):
             self.closed.emit()
         else:
             super().keyPressEvent(event)
+
+    # ── Drag-to-move (grab the header strip) ─────────────────────────────
+    def _in_drag_handle(self, pos: QPoint) -> bool:
+        # The header is everything above the person search widget. The close
+        # button lives there too, but it consumes its own clicks before they
+        # reach the frame, so grabbing the header never closes the popup.
+        return pos.y() < self._person_search.y()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._in_drag_handle(
+            event.position().toPoint()
+        ):
+            self._drag_origin = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_origin is not None:
+            new_pos = self.mapToParent(event.position().toPoint() - self._drag_origin)
+            parent = self.parentWidget()
+            if parent is not None:
+                new_pos.setX(max(0, min(new_pos.x(), parent.width() - self.width())))
+                new_pos.setY(max(0, min(new_pos.y(), parent.height() - self.height())))
+            self.move(new_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag_origin is not None and event.button() == Qt.LeftButton:
+            self._drag_origin = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event) -> None:
         # The inner list scrolls itself; when it reaches its top/bottom Qt
@@ -4824,7 +4866,7 @@ class ImageBrowserPanel(QWidget):
             return
         # The inline person picker and the pending action bar must not overlap.
         self._pending_bar.hide()
-        _, bx, by, bw, bh, person_name, person_id = entry
+        _, bx, by, bw, bh, person_name, person_id, *_ = entry
 
         self._inline_editor.populate(
             person_name,
@@ -4901,7 +4943,7 @@ class ImageBrowserPanel(QWidget):
         if entry is None:
             self._pending_bar.hide()
             return
-        _, bx, by, bw, bh, _, _ = entry
+        _, bx, by, bw, bh, *_ = entry
         self._pending_bar.adjustSize()
         bar_w = self._pending_bar.width()
         bar_h = self._pending_bar.height()
@@ -5046,7 +5088,7 @@ class ImageBrowserPanel(QWidget):
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         if entry is None:
             return
-        _, _, _, _, _, person_name, _ = entry
+        _, _, _, _, _, person_name, _, *_ = entry
         self.active_person_changed.emit(person_name)
         self._assign_btn.setEnabled(True)
         self._create_btn.setEnabled(True)

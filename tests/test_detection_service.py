@@ -277,6 +277,9 @@ def test_adaptive_escalation_rescues_faded_photo(tmp_path):
     """Strict pass finds nothing; adaptive escalation recovers the faces."""
     cfg = AppConfig(base_dir=str(tmp_path))
     cfg.storage.crops_dir = "crops"
+    # Escalation mechanics tested in isolation — the verification gate has
+    # its own tests below (the synthetic image holds no verifiable face).
+    cfg.detection.verification_enabled = False
     assert cfg.detection.adaptive_escalation is True
 
     img = np.full((659, 1056, 3), 200, np.uint8)
@@ -295,6 +298,7 @@ def test_adaptive_escalation_disabled_stays_strict(tmp_path):
     """With escalation off, a strict miss stays a miss — no relaxation."""
     cfg = AppConfig(base_dir=str(tmp_path))
     cfg.storage.crops_dir = "crops"
+    cfg.detection.verification_enabled = False
     cfg.detection.adaptive_escalation = False
 
     img = np.full((659, 1056, 3), 200, np.uint8)

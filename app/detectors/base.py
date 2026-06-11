@@ -65,6 +65,29 @@ class Detection:
         )
 
 
+def detection_iou(a: Detection, b: Detection) -> float:
+    """Intersection-over-Union of two detections' bounding boxes."""
+    iw = max(0, min(a.x2, b.x2) - max(a.x, b.x))
+    ih = max(0, min(a.y2, b.y2) - max(a.y, b.y))
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    union = a.w * a.h + b.w * b.h - inter
+    return inter / union if union > 0 else 0.0
+
+
+def greedy_nms(detections: List[Detection], iou_threshold: float = 0.4) -> List[Detection]:
+    """Greedy non-maximum suppression: keep the highest-confidence box of each
+    overlapping group, suppress the rest."""
+    if len(detections) <= 1:
+        return list(detections)
+    kept: List[Detection] = []
+    for det in sorted(detections, key=lambda d: d.confidence, reverse=True):
+        if all(detection_iou(det, k) < iou_threshold for k in kept):
+            kept.append(det)
+    return kept
+
+
 class FaceDetector(ABC):
     """Interface that all face detectors must implement."""
 
