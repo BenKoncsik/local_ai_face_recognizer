@@ -22,6 +22,15 @@ This pass runs after embeddings exist and combines two independent signals:
 Requiring *both* keeps it safe: a genuine second appearance of the same person
 elsewhere in the frame does not overlap, so it is never deleted.
 
+Two passes run per image:
+
+* **anchor pass** — a candidate is removed when it overlaps and matches a
+  *retained* (assigned or manual) face; and
+* **candidate pass** — among the still-unassigned auto faces, the best box per
+  physical face is kept and overlapping near-identical duplicates dropped.  This
+  catches the common case of one face auto-detected *twice* where both copies
+  are still Unknown, so neither is an anchor for the first pass.
+
 Only unassigned, auto-detected faces are ever removed.  Manually drawn faces,
 assigned faces and protected faces are anchors, never victims — mirroring the
 guarantees of the intra-image *consistency* pass.
@@ -102,11 +111,10 @@ class IntraImageDuplicateService:
             return stats
 
         to_delete: List[int] = []
+        deleted: set[int] = set()
         try:
             for image_id, candidates in candidates_by_image.items():
                 anchors = self._load_anchor_faces(image_id)
-                if not anchors:
-                    continue
                 if len(candidates) + len(anchors) > self._config.max_faces_per_image:
                     log.debug(
                         "Skipping image %d: %d face(s) exceeds max_faces_per_image",
@@ -115,6 +123,7 @@ class IntraImageDuplicateService:
                     continue
                 stats.images_examined += 1
 
+                # --- Pass 1: candidate vs retained anchor (assigned/manual) ---
                 anchor_vecs = {a.id: self._unit(a) for a in anchors}
                 for cand in candidates:
                     cvec = self._unit(cand)
@@ -130,12 +139,51 @@ class IntraImageDuplicateService:
                         if _iou(cand, anchor) < self._config.min_overlap:
                             continue
                         to_delete.append(cand.id)
+                        deleted.add(cand.id)
                         log.debug(
                             "Image %d: face %d is a duplicate of retained face %d "
                             "(sim=%.3f, iou=%.3f) — removing",
                             image_id, cand.id, anchor.id, sim, _iou(cand, anchor),
                         )
                         break
+
+                # --- Pass 2: candidate vs candidate (both still Unknown) ---
+                # The anchor pass cannot catch the case the user reported: one
+                # face auto-detected *twice* where both copies are unassigned, so
+                # neither is an anchor.  Greedily keep the best box per face and
+                # drop overlapping, embedding-near-identical worse boxes.
+                survivors = [c for c in candidates if c.id not in deleted]
+                kept: List[Face] = []
+                kept_vecs: Dict[int, np.ndarray] = {}
+                for cand in sorted(survivors, key=self._keep_rank, reverse=True):
+                    cvec = self._unit(cand)
+                    if cvec is None:
+                        kept.append(cand)
+                        continue
+                    duplicate_of: Optional[Face] = None
+                    for keeper in kept:
+                        kvec = kept_vecs.get(keeper.id)
+                        if kvec is None:
+                            continue
+                        sim = float(np.dot(cvec, kvec))
+                        if sim < self._config.duplicate_similarity:
+                            continue
+                        if _iou(cand, keeper) < self._config.min_overlap:
+                            continue
+                        duplicate_of = keeper
+                        break
+                    if duplicate_of is not None:
+                        to_delete.append(cand.id)
+                        deleted.add(cand.id)
+                        log.debug(
+                            "Image %d: face %d duplicates unassigned face %d "
+                            "(sim=%.3f, iou=%.3f) — removing",
+                            image_id, cand.id, duplicate_of.id, sim,
+                            _iou(cand, duplicate_of),
+                        )
+                    else:
+                        kept.append(cand)
+                        kept_vecs[cand.id] = cvec
 
             if to_delete:
                 self._session.query(Face).filter(Face.id.in_(to_delete)).delete(
@@ -186,6 +234,20 @@ class IntraImageDuplicateService:
                 (Face.detector_backend == "manual") | (Face.person_id.isnot(None)),
             )
             .all()
+        )
+
+    @staticmethod
+    def _keep_rank(face: Face) -> tuple:
+        """Sort key (higher = better) for choosing which duplicate to keep.
+
+        Prefers, in order: a face not flagged low-quality, higher quality
+        score, higher detector confidence, then the larger box.
+        """
+        return (
+            0 if face.is_low_quality else 1,
+            face.quality_score if face.quality_score is not None else -1.0,
+            face.confidence if face.confidence is not None else -1.0,
+            face.bbox_w * face.bbox_h,
         )
 
     @staticmethod

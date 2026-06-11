@@ -41,6 +41,7 @@ class ScanModesDialog(QDialog):
         on_face_rescan_accurate: Callable[[], None],
         on_reset_unknown_persons: Callable[[], None],
         on_find_overlapping_unknown_faces: Callable[[], None],
+        on_find_embedding_duplicate_faces: Optional[Callable[[], None]] = None,
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
         on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
         on_manage_ignored_faces: Optional[Callable[[], None]] = None,
@@ -56,6 +57,7 @@ class ScanModesDialog(QDialog):
         self._on_face_rescan_accurate = on_face_rescan_accurate
         self._on_reset_unknown_persons = on_reset_unknown_persons
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
+        self._on_find_embedding_duplicate_faces = on_find_embedding_duplicate_faces
         self._on_identity_repair_scan = on_identity_repair_scan
         self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
         self._on_manage_ignored_faces = on_manage_ignored_faces
@@ -188,6 +190,15 @@ class ScanModesDialog(QDialog):
             callback=self._launch_overlapping_unknown_cleanup,
             danger=False,
         ))
+        if self._on_find_embedding_duplicate_faces is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.embeddingDuplicates.title"),
+                description=t("scanModes.embeddingDuplicates.description"),
+                button_label=t("scanModes.embeddingDuplicates.startButton"),
+                warning=t("scanModes.embeddingDuplicates.warning"),
+                callback=self._launch_embedding_duplicate_cleanup,
+                danger=False,
+            ))
         if self._on_identity_repair_scan is not None:
             cards_layout.addWidget(self._make_card(
                 title=t("scanModes.identityRepair.title"),
@@ -323,6 +334,11 @@ class ScanModesDialog(QDialog):
     def _launch_overlapping_unknown_cleanup(self) -> None:
         self.accept()
         self._on_find_overlapping_unknown_faces()
+
+    def _launch_embedding_duplicate_cleanup(self) -> None:
+        self.accept()
+        if self._on_find_embedding_duplicate_faces is not None:
+            self._on_find_embedding_duplicate_faces()
 
     def _launch_reset_unknown_persons(self) -> None:
         self.accept()

@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Optional
 
+import numpy as np
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Face, Image
@@ -193,6 +194,141 @@ class DuplicateUnknownFaceFinder:
             len(self._same_person_duplicate_ids),
         )
         return matches
+
+    def find_embedding_duplicates(
+        self,
+        similarity_threshold: float = 0.90,
+        min_overlap: float = 0.10,
+    ) -> list[OverlappingUnknownFaceMatch]:
+        """Embedding-based duplicate finder: the *same physical face* detected
+        twice on one image, even when the two boxes landed in **different**
+        Unknown clusters (the "two labels for one face" symptom).
+
+        The geometric :meth:`find` only compares an unknown box against named
+        faces (pass 1) or against siblings sharing one ``person_id`` (pass 2),
+        so it misses the case where one face is split across two distinct
+        Unknown identities. This pass pairs any two faces on the same image
+        when BOTH:
+
+        * cosine similarity of their embeddings ≥ *similarity_threshold*, and
+        * bounding-box IoU ≥ *min_overlap* (or containment ≥ the configured
+          containment threshold, catching a small box nested in a larger one).
+
+        The deletable side is always the *unknown* face (unassigned, auto-named
+        or placeholder); the better-ranked face is kept as the reference. A pair
+        where neither side is unknown is skipped — named faces are never removed
+        here.
+
+        Returns one match per duplicate face, ready for the same review dialog
+        and :meth:`delete_unknown_faces` path as :meth:`find`.
+        """
+        self._same_person_duplicate_ids = set()
+        self.images_examined = self._session.query(Image).count()
+        images = (
+            self._session.query(Image)
+            .options(selectinload(Image.faces).selectinload(Face.person))
+            .filter(Image.faces.any())
+            .order_by(Image.id)
+            .all()
+        )
+
+        matches: list[OverlappingUnknownFaceMatch] = []
+        reported: set[int] = set()
+
+        for image in images:
+            faces = [f for f in image.faces if not f.is_excluded]
+            units: dict[int, np.ndarray] = {}
+            for face in faces:
+                vec = self._unit_vec(face)
+                if vec is not None:
+                    units[face.id] = vec
+            embedded = [f for f in faces if f.id in units]
+            if len(embedded) < 2:
+                continue
+
+            for i, fa in enumerate(embedded):
+                ua = units[fa.id]
+                for fb in embedded[i + 1:]:
+                    sim = float(np.dot(ua, units[fb.id]))
+                    if sim < similarity_threshold:
+                        continue
+                    iou, containment = face_overlap_metrics(fa, fb)
+                    if iou < min_overlap and containment < self._containment_threshold:
+                        continue
+                    keeper, victim = self._pick_victim(fa, fb)
+                    if victim is None or victim.id in reported:
+                        continue
+                    person_name = (
+                        keeper.person.name if keeper.person is not None else ""
+                    )
+                    matches.append(
+                        OverlappingUnknownFaceMatch(
+                            image_id=image.id,
+                            image_path=image.file_path,
+                            image_relative_path=image.relative_path,
+                            unknown_face_id=victim.id,
+                            known_face_id=keeper.id,
+                            known_person_name=person_name,
+                            overlap=max(iou, containment),
+                            unknown_bbox=_bbox_tuple(victim),
+                            known_bbox=_bbox_tuple(keeper),
+                        )
+                    )
+                    reported.add(victim.id)
+
+        log.info(
+            "Embedding duplicate search: examined %d image(s), found %d candidate(s) "
+            "(sim>=%.2f, overlap>=%.2f)",
+            self.images_examined,
+            len(matches),
+            similarity_threshold,
+            min_overlap,
+        )
+        return matches
+
+    def _pick_victim(self, fa: Face, fb: Face) -> tuple[Optional[Face], Optional[Face]]:
+        """Choose which face of a duplicate pair to keep vs. delete.
+
+        Returns ``(keeper, victim)`` where *victim* is always an unknown face
+        (so :meth:`delete_unknown_faces` will allow its removal), or
+        ``(None, None)`` when neither face is unknown.
+        """
+        a_unknown = self._is_unknown(fa)
+        b_unknown = self._is_unknown(fb)
+        if not a_unknown and not b_unknown:
+            return None, None
+        if a_unknown and not b_unknown:
+            return fb, fa
+        if b_unknown and not a_unknown:
+            return fa, fb
+        # Both unknown — keep the better-ranked box, delete the other.
+        if self._keep_rank(fa) >= self._keep_rank(fb):
+            return fa, fb
+        return fb, fa
+
+    @staticmethod
+    def _keep_rank(face: Face) -> tuple:
+        """Sort key (higher = better) for choosing which duplicate to keep:
+        not-low-quality, then higher quality score, confidence, then larger box.
+        """
+        return (
+            0 if face.is_low_quality else 1,
+            face.quality_score if face.quality_score is not None else -1.0,
+            face.confidence if face.confidence is not None else -1.0,
+            max(0, face.bbox_w) * max(0, face.bbox_h),
+        )
+
+    @staticmethod
+    def _unit_vec(face: Face) -> Optional[np.ndarray]:
+        """Unit-normalised embedding for *face*, or None when unavailable."""
+        emb = face.get_embedding()
+        if emb is None:
+            return None
+        vec = np.asarray(emb, dtype=np.float32)
+        norm = float(np.linalg.norm(vec))
+        if norm < 1e-8:
+            return None
+        return vec / norm
 
     def delete_unknown_faces(
         self,

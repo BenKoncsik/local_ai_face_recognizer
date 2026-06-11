@@ -171,6 +171,53 @@ def test_duplicate_across_different_images_is_kept(tmp_db):
         assert session.get(Face, collage_id) is not None
 
 
+def test_two_unassigned_duplicates_keeps_the_better_box(tmp_db):
+    """The reported bug: one face auto-detected twice, both still Unknown.
+
+    Neither is an anchor, yet the embedding-identical overlapping pair must
+    collapse to a single face — and the larger/higher-confidence box survives.
+    """
+    with session_scope() as session:
+        image_id = _add_image(session, "/p.jpg")
+        emb = _unit(8, 0)
+        # Larger box (the keeper) and a smaller differently-sized box (low IoU
+        # vs detection's 0.35 bar) over the same face.
+        big_id = _add_face(
+            session, image_id, emb, person_id=None, bbox=(0, 0, 120, 120)
+        )
+        small_id = _add_face(
+            session, image_id, emb, person_id=None, bbox=(20, 20, 70, 70)
+        )
+
+    with session_scope() as session:
+        stats = IntraImageDuplicateService(session).remove_duplicates()
+
+    assert stats.faces_removed == 1
+    with session_scope() as session:
+        assert session.get(Face, big_id) is not None
+        assert session.get(Face, small_id) is None
+
+
+def test_two_unassigned_different_people_overlap_are_kept(tmp_db):
+    """Two distinct, unassigned faces that happen to overlap are both kept."""
+    with session_scope() as session:
+        image_id = _add_image(session, "/p.jpg")
+        a_id = _add_face(
+            session, image_id, _unit(8, 0), person_id=None, bbox=(0, 0, 100, 100)
+        )
+        b_id = _add_face(
+            session, image_id, _unit(8, 5), person_id=None, bbox=(40, 0, 100, 100)
+        )
+
+    with session_scope() as session:
+        stats = IntraImageDuplicateService(session).remove_duplicates()
+
+    assert stats.faces_removed == 0
+    with session_scope() as session:
+        assert session.get(Face, a_id) is not None
+        assert session.get(Face, b_id) is not None
+
+
 def test_disabled_config_is_a_noop(tmp_db):
     with session_scope() as session:
         person = Person(name="Anna", is_auto_named=False)

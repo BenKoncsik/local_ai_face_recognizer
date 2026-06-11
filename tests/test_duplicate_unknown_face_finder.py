@@ -292,3 +292,112 @@ def test_same_person_non_overlapping_not_listed(tmp_db):
         matches = DuplicateUnknownFaceFinder(session, iou_threshold=0.30).find()
 
     assert matches == []
+
+
+# ---------------------------------------------------------------------------
+# Embedding-based duplicate finder (find_embedding_duplicates)
+# ---------------------------------------------------------------------------
+
+import numpy as np
+
+
+def _emb(index: int, dim: int = 8) -> np.ndarray:
+    v = np.zeros(dim, dtype=np.float32)
+    v[index] = 1.0
+    return v
+
+
+def _add_face_emb(
+    session,
+    image: Image,
+    bbox: tuple[int, int, int, int],
+    embedding: np.ndarray,
+    person: Person | None = None,
+    *,
+    confidence: float = 0.9,
+) -> Face:
+    x, y, w, h = bbox
+    face = Face(
+        image_id=image.id,
+        person_id=person.id if person is not None else None,
+        bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
+        confidence=confidence,
+        detector_backend="cpu",
+    )
+    face.set_embedding(embedding)
+    session.add(face)
+    session.flush()
+    return face
+
+
+def test_embedding_same_face_two_unknown_clusters_is_found(tmp_db):
+    """The reported case: one face split across two different 'Unknown N'
+    people. Geometric pass-2 (same person_id) misses it; embeddings catch it."""
+    with session_scope() as session:
+        image = _add_image(session)
+        u1 = _add_person(session, "Unknown 1", auto=True)
+        u2 = _add_person(session, "Unknown 2", auto=True)
+        emb = _emb(0)
+        # Larger, higher-confidence box should be kept.
+        big = _add_face_emb(session, image, (0, 0, 120, 120), emb, u1, confidence=0.95)
+        small = _add_face_emb(session, image, (20, 20, 70, 70), emb, u2, confidence=0.80)
+
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session)
+        matches = finder.find_embedding_duplicates(similarity_threshold=0.90, min_overlap=0.10)
+
+    assert len(matches) == 1
+    assert matches[0].unknown_face_id == small.id
+    assert matches[0].known_face_id == big.id
+
+
+def test_embedding_overlapping_different_people_kept(tmp_db):
+    """Overlapping boxes with dissimilar embeddings are different people."""
+    with session_scope() as session:
+        image = _add_image(session)
+        _add_face_emb(session, image, (0, 0, 100, 100), _emb(0))
+        _add_face_emb(session, image, (30, 0, 100, 100), _emb(5))
+
+    with session_scope() as session:
+        matches = DuplicateUnknownFaceFinder(session).find_embedding_duplicates()
+
+    assert matches == []
+
+
+def test_embedding_same_face_no_overlap_kept(tmp_db):
+    """Identical embedding but no spatial overlap = genuine second appearance."""
+    with session_scope() as session:
+        image = _add_image(session)
+        emb = _emb(0)
+        _add_face_emb(session, image, (0, 0, 100, 100), emb)
+        _add_face_emb(session, image, (400, 400, 100, 100), emb)
+
+    with session_scope() as session:
+        matches = DuplicateUnknownFaceFinder(session).find_embedding_duplicates()
+
+    assert matches == []
+
+
+def test_embedding_named_face_is_kept_as_reference(tmp_db):
+    """When one box is a named person, it is the reference and the unknown
+    duplicate is the deletable victim — the named face is never the victim."""
+    with session_scope() as session:
+        image = _add_image(session)
+        alice = _add_person(session, "Alice")
+        emb = _emb(0)
+        named = _add_face_emb(session, image, (0, 0, 100, 100), emb, alice)
+        unknown = _add_face_emb(session, image, (20, 20, 90, 90), emb)
+
+    with session_scope() as session:
+        finder = DuplicateUnknownFaceFinder(session)
+        matches = finder.find_embedding_duplicates()
+        assert len(matches) == 1
+        assert matches[0].unknown_face_id == unknown.id
+        assert matches[0].known_face_id == named.id
+        # The named face must survive the delete path.
+        result = finder.delete_unknown_faces([m.unknown_face_id for m in matches])
+        assert result.deleted == 1
+
+    with session_scope() as session:
+        assert session.get(Face, named.id) is not None
+        assert session.get(Face, unknown.id) is None

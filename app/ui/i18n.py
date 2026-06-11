@@ -2007,6 +2007,29 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Review step included — known named faces are never deleted",
          "hu": "Átnézési lépéssel — az ismert, elnevezett arcokat soha nem törli"},
 
+    # ── Embedding-based duplicate cleanup ─────────────────────────────────
+    "scanModes.embeddingDuplicates.title":
+        {"en": "Find Duplicate Detections (by face similarity)",
+         "hu": "Dupla detektálások keresése (arc-hasonlóság alapján)"},
+    "scanModes.embeddingDuplicates.description":
+        {"en": "Finds the same physical face detected twice on one image — even "
+               "when the two boxes are differently sized or landed in two "
+               "different 'Unknown' people — by comparing face embeddings, not "
+               "just box overlap. The geometric search above misses this case. "
+               "Nothing is deleted until you review the list and confirm.",
+         "hu": "Megkeresi azokat az eseteket, amikor ugyanazt az arcot egy képen "
+               "kétszer detektálta a rendszer — akkor is, ha a két keret eltérő "
+               "méretű, vagy két külön „Ismeretlen” személyhez került —, a "
+               "puszta keret-átfedés helyett az arc-beágyazások összevetésével. "
+               "A fenti geometriai keresés ezt nem fogja meg. Semmit nem töröl, "
+               "amíg át nem nézed a listát és meg nem erősíted."},
+    "scanModes.embeddingDuplicates.startButton":
+        {"en": "Find Duplicate Detections",
+         "hu": "Dupla detektálások keresése"},
+    "scanModes.embeddingDuplicates.warning":
+        {"en": "Review step included — known named faces are never deleted",
+         "hu": "Átnézési lépéssel — az ismert, elnevezett arcokat soha nem törli"},
+
     # ── Identity repair scan ──────────────────────────────────────────────
     "scanModes.identityRepair.title":
         {"en": "Identity Repair Scan",

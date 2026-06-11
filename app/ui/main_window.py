@@ -931,6 +931,7 @@ class MainWindow(QMainWindow):
             on_face_rescan_accurate=self._on_redetect_accurate,
             on_reset_unknown_persons=self._on_reset_unknown_persons,
             on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
+            on_find_embedding_duplicate_faces=self._on_find_embedding_duplicate_faces,
             on_identity_repair_scan=self._on_identity_repair_scan,
             on_cleanup_empty_unknown_persons=self._on_cleanup_empty_unknown_persons,
             on_manage_ignored_faces=self._on_manage_ignored_faces,
@@ -1246,6 +1247,60 @@ class MainWindow(QMainWindow):
             images_examined,
             len(matches),
         )
+        self._review_and_delete_overlap_matches(
+            matches=matches,
+            images_examined=images_examined,
+            iou_threshold=threshold,
+            containment_threshold=containment,
+        )
+
+    @Slot()
+    def _on_find_embedding_duplicate_faces(self) -> None:
+        """Embedding-based duplicate finder — catches the same face split across
+        two different Unknown clusters, which the geometric search misses."""
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        containment = self._config.detection.duplicate_unknown_containment_threshold
+        dup_cfg = self._config.intra_image_duplicate
+        try:
+            with session_scope() as session:
+                finder = DuplicateUnknownFaceFinder(
+                    session,
+                    containment_threshold=containment,
+                )
+                matches = finder.find_embedding_duplicates(
+                    similarity_threshold=dup_cfg.duplicate_similarity,
+                    min_overlap=dup_cfg.min_overlap,
+                )
+                images_examined = finder.images_examined
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Embedding duplicate search failed")
+            QMessageBox.critical(self, t("error"), t("overlap_search_error", error=exc))
+            return
+
+        log.info(
+            "Beágyazás-alapú duplikátum-keresés: %d kép vizsgálva, %d találat.",
+            images_examined,
+            len(matches),
+        )
+        self._review_and_delete_overlap_matches(
+            matches=matches,
+            images_examined=images_examined,
+            iou_threshold=self._config.detection.duplicate_unknown_iou_threshold,
+            containment_threshold=containment,
+        )
+
+    def _review_and_delete_overlap_matches(
+        self,
+        matches: list,
+        images_examined: int,
+        iou_threshold: float,
+        containment_threshold: float,
+    ) -> None:
+        """Shared review-dialog + confirm + delete flow for both the geometric
+        and embedding-based overlapping-face finders."""
         self._status_label.setText(
             t("overlap_status_found", images=images_examined, matches=len(matches))
         )
@@ -1291,8 +1346,8 @@ class MainWindow(QMainWindow):
             with session_scope() as session:
                 finder = DuplicateUnknownFaceFinder(
                     session,
-                    iou_threshold=threshold,
-                    containment_threshold=containment,
+                    iou_threshold=iou_threshold,
+                    containment_threshold=containment_threshold,
                 )
                 result = finder.delete_unknown_faces(selected_ids)
         except Exception as exc:  # noqa: BLE001
