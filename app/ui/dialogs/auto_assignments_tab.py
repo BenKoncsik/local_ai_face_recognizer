@@ -67,7 +67,9 @@ def _open_decision_graph(
         except Exception:  # noqa: BLE001
             log.exception("Failed to recompute decision graph for face %s", dto.face_id)
             decision = None
-    DeepDecisionGraphDialog(decision, parent).exec()
+    DeepDecisionGraphDialog(
+        decision, parent, face_id=dto.face_id, deep_config=deep_config
+    ).exec()
 
 
 class _DecidedAssignmentRow(QFrame):

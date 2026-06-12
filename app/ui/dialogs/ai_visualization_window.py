@@ -439,6 +439,9 @@ class NeuralNetworkGraphWidget(QWidget):
         # Each entry: (title, vals_ndarray, labels_list, is_output)
         self._layers: List[tuple] = []
         self._winner: str = ""
+        # Decision-path overlay: active labels per column + edges per boundary
+        self._path_node_cols: List[set] = []
+        self._path_edge_gaps: List[List[tuple]] = []
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(_NN_TOTAL_H)
         self.setMinimumWidth(400)
@@ -451,6 +454,7 @@ class NeuralNetworkGraphWidget(QWidget):
         all_similarities: Optional[Dict[str, float]] = None,
         embedding_dim: int = 192,
         winner: str = "",
+        path: Optional[dict] = None,
     ) -> None:
         layers = []
 
@@ -483,6 +487,19 @@ class NeuralNetworkGraphWidget(QWidget):
 
         self._layers = layers
         self._winner = winner
+        # The overlay only applies when its column structure matches the
+        # rendered one (input + hidden layers + output) exactly.
+        node_cols = (path or {}).get("nodes") or []
+        edge_gaps = (path or {}).get("edges") or []
+        if len(node_cols) == len(layers) and len(edge_gaps) == len(layers) - 1:
+            self._path_node_cols = [set(map(str, col)) for col in node_cols]
+            self._path_edge_gaps = [
+                [(str(e[0]), str(e[1]), float(e[2])) for e in gap if len(e) >= 3]
+                for gap in edge_gaps
+            ]
+        else:
+            self._path_node_cols = []
+            self._path_edge_gaps = []
 
         n = len(layers)
         has_out = n > 0 and layers[-1][3]
@@ -530,7 +547,11 @@ class NeuralNetworkGraphWidget(QWidget):
         for i in range(len(self._layers) - 1):
             self._draw_connections(p, i)
 
-        # 2. Node columns on top
+        # 2. Decision-path edges in green, over the generic connections
+        for i in range(len(self._layers) - 1):
+            self._draw_path_edges(p, i)
+
+        # 3. Node columns on top
         for i, (title, vals, labels, is_out) in enumerate(self._layers):
             self._draw_column(p, i, title, vals, labels, is_out)
 
@@ -578,21 +599,29 @@ class NeuralNetworkGraphWidget(QWidget):
             color = _nn_color(frac)
             is_win = is_out and (labels[rank] == self._winner)
 
-            # Glow ring behind winner node
-            if is_win:
+            on_path = (
+                col_idx < len(self._path_node_cols)
+                and labels[rank] in self._path_node_cols[col_idx]
+            )
+
+            # Glow ring behind winner / decision-path nodes
+            if is_win or on_path:
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(60, 190, 120, 45))
                 p.drawEllipse(cx - _NN_NODE_R - 5, cy - _NN_NODE_R - 5,
                               _NN_NODE_DIA + 10, _NN_NODE_DIA + 10)
 
             # Node circle
-            border = _C_ASSIGN if is_win else (color if frac > 0.15 else _C_NODE_BORDER)
+            if is_win or on_path:
+                border = _C_ASSIGN
+            else:
+                border = color if frac > 0.15 else _C_NODE_BORDER
             fill   = QColor(
                 int(_C_NODE_BG.red()   + frac * (color.red()   - _C_NODE_BG.red())),
                 int(_C_NODE_BG.green() + frac * (color.green() - _C_NODE_BG.green())),
                 int(_C_NODE_BG.blue()  + frac * (color.blue()  - _C_NODE_BG.blue())),
             )
-            p.setPen(QPen(border, 1.5))
+            p.setPen(QPen(border, 2.5 if (is_win or on_path) else 1.5))
             p.setBrush(fill)
             p.drawEllipse(cx - _NN_NODE_R, cy - _NN_NODE_R,
                           _NN_NODE_DIA, _NN_NODE_DIA)
@@ -677,6 +706,41 @@ class NeuralNetworkGraphWidget(QWidget):
                 path.moveTo(x1, y1)
                 path.cubicTo(cx1, y1, cx2, y2, x2, y2)
                 p.drawPath(path)
+
+    def _draw_path_edges(self, p: QPainter, layer_idx: int) -> None:
+        """Overlay the decision-path edges between columns i and i+1 in green."""
+        if layer_idx >= len(self._path_edge_gaps):
+            return
+        gap_edges = self._path_edge_gaps[layer_idx]
+        if not gap_edges:
+            return
+        src_labels = self._layers[layer_idx][2]
+        dst_labels = self._layers[layer_idx + 1][2]
+        src_rank = {label: r for r, label in enumerate(src_labels)}
+        dst_rank = {label: r for r, label in enumerate(dst_labels)}
+
+        src_cx = self._node_cx(layer_idx)
+        dst_cx = self._node_cx(layer_idx + 1)
+        x1  = src_cx + _NN_NODE_R
+        x2  = dst_cx - _NN_NODE_R
+        cx1 = x1 + (x2 - x1) // 3
+        cx2 = x2 - (x2 - x1) // 3
+
+        p.setBrush(Qt.NoBrush)
+        for src, dst, strength in gap_edges:
+            if src not in src_rank or dst not in dst_rank:
+                continue
+            y1 = self._node_cy(src_rank[src])
+            y2 = self._node_cy(dst_rank[dst])
+            color = QColor(_C_ASSIGN)
+            color.setAlpha(110 + int(max(0.0, min(1.0, strength)) * 145))
+            pen = QPen(color, 1.5 + 1.5 * strength)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            path = QPainterPath()
+            path.moveTo(x1, y1)
+            path.cubicTo(cx1, y1, cx2, y2, x2, y2)
+            p.drawPath(path)
 
 
 _NN_CACHE_FILE = Path("data/nn_graph_last.json")
@@ -770,6 +834,7 @@ class NeuralNetworkGraphDialog(QDialog):
             output_probs=output_probs,
             all_similarities=all_similarities,
             winner=winner,
+            path=data.get("decision_path"),
         )
 
     # ── Public update ─────────────────────────────────────────────────────
@@ -792,6 +857,7 @@ class NeuralNetworkGraphDialog(QDialog):
             "layer_activations": [a.tolist() for a in (info.layer_activations or [])],
             "output_probs":      {k: float(v) for k, v in (info.output_probs or {}).items()},
             "all_similarities":  {k: float(v) for k, v in (info.all_similarities or {}).items()},
+            "decision_path":     info.decision_path,
         }
         self._save_cache(cache)
         self._render_from_dict(cache)

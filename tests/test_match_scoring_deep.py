@@ -88,8 +88,11 @@ class TestDeepProbabilities:
         assert set(probs) == {1, 2, 3}
         assert max(probs, key=probs.get) == 1
 
-    def test_no_config_uses_default_dir_and_misses(self):
-        # No model at the default model_dir → empty, never raises.
+    def test_no_config_uses_default_dir_and_misses(self, tmp_path, monkeypatch):
+        # No model at the default model_dir → empty, never raises.  The default
+        # dir is cwd-relative, so run from an empty tmp dir — the repo's own
+        # data/ may hold a real model on a dev machine.
+        monkeypatch.chdir(tmp_path)
         match_scoring._deep_cache["key"] = None
         assert match_scoring._deep_probabilities(_person_vec(0), None) == {}
 
@@ -109,7 +112,9 @@ class TestOverlay:
         assert max((1, 2, 3), key=merged.get) == 1      # AI winner re-ranks to top
         assert merged[1] > 0.5                           # real probability, not cosine
 
-    def test_no_model_returns_scores_unchanged(self):
+    def test_no_model_returns_scores_unchanged(self, tmp_path, monkeypatch):
+        # See test_no_config_uses_default_dir_and_misses for the chdir reason.
+        monkeypatch.chdir(tmp_path)
         match_scoring._deep_cache["key"] = None
         base = {1: 0.3, 2: 0.7}
         assert match_scoring._overlay_deep(base, _person_vec(0), None) == base

@@ -166,6 +166,33 @@ class TestClassProbabilities:
         assert clf.class_probabilities(_person_vec(5)) == {}
 
 
+class TestDecisionPath:
+    def test_debug_info_carries_winner_path(self, trained):
+        pred, info = trained.predict_debug(_person_vec(0, seed=777), face_id=1)
+        assert pred.person_name == "Person 1"
+        path = info.decision_path
+        assert path is not None
+        assert path["winner"] == "Person 1"
+        # Columns: input + one per hidden layer + output; gaps between them.
+        n_cols = 1 + len(info.layer_activations) + 1
+        assert len(path["nodes"]) == n_cols
+        assert len(path["edges"]) == n_cols - 1
+        assert path["nodes"][-1] == ["Person 1"]
+        for gap in path["edges"]:
+            for src, dst, strength in gap:
+                assert 0.0 <= strength <= 1.0
+        # JSON-safe (the live visualizer caches it to disk).
+        import json
+        json.dumps(path)
+
+    def test_prototype_mode_has_no_path(self):
+        persons = {7: [_person_vec(5, seed=i) for i in range(4)]}
+        clf = DeepFaceClassifier(StubConfig())
+        clf.train(_dataset(persons))
+        _pred, info = clf.predict_debug(_person_vec(5, seed=9))
+        assert info.decision_path is None
+
+
 class TestPersistence:
     def test_save_and_load_roundtrip(self, trained, tmp_path):
         path = tmp_path / "model.pkl"

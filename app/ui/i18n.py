@@ -782,6 +782,48 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                  "Sérült vagy inkompatibilis verzióból származhat."},
     "deep_model_title":         {"en": "AI Model", "hu": "AI modell"},
 
+    # ── AI model tab (Settings) ───────────────────────────────────────────
+    "settings_tab_ai_model":    {"en": "AI Model", "hu": "AI modell"},
+    "ai_model_layers_group":    {"en": "Neural network architecture",
+                                 "hu": "Neurális háló felépítése"},
+    "ai_model_layers_desc":     {"en": "The face recognizer is an ensemble of neural "
+                                 "networks. Each network receives the 192-dimensional "
+                                 "face embedding as input, passes it through the hidden "
+                                 "layers configured below, and a final output layer "
+                                 "(the actual inference) produces a probability for "
+                                 "every known person. More / larger hidden layers give "
+                                 "the model more capacity — useful with many people and "
+                                 "many confirmed faces — but training becomes slower "
+                                 "and, with little training data, the model can overfit "
+                                 "(it memorizes the examples instead of generalizing). "
+                                 "With few labeled faces, fewer / smaller layers are "
+                                 "usually more accurate.",
+                                 "hu": "Az arcfelismerő több neurális hálóból álló "
+                                 "együttes. Minden háló bemenete a 192 dimenziós "
+                                 "arc-beágyazás, ezt az alább beállított rejtett "
+                                 "rétegeken vezeti át, majd egy záró kimeneti réteg "
+                                 "(a tényleges következtetés) ad valószínűséget minden "
+                                 "ismert személyre. Több / nagyobb rejtett réteg "
+                                 "nagyobb kapacitást ad — sok személynél és sok "
+                                 "megerősített arcnál hasznos —, viszont a tanítás "
+                                 "lassabb lesz, és kevés tanítóadatnál a modell "
+                                 "túltanulhat (bemagolja a példákat ahelyett, hogy "
+                                 "általánosítana). Kevés címkézett arcnál általában a "
+                                 "kevesebb / kisebb réteg pontosabb."},
+    "ai_model_layer_count":     {"en": "Number of hidden layers:",
+                                 "hu": "Rejtett rétegek száma:"},
+    "ai_model_layer_n":         {"en": "Layer {n} size (neurons):",
+                                 "hu": "{n}. réteg mérete (neuron):"},
+    "ai_model_reset_btn":       {"en": "Restore defaults (256, 192, 128, 64)",
+                                 "hu": "Alapértelmezés visszaállítása (256, 192, 128, 64)"},
+    "ai_model_rebuild_note":    {"en": "Changes take effect after the next AI model "
+                                 "training (AI rescan or model rebuild). The layer "
+                                 "sizes usually taper from input towards the output.",
+                                 "hu": "A módosítás a következő AI-modell tanításnál "
+                                 "lép életbe (AI beolvasás vagy modell-újraépítés). "
+                                 "A rétegméretek jellemzően a bemenettől a kimenet "
+                                 "felé csökkennek."},
+
     # ── Debug tab (Settings) ──────────────────────────────────────────────
     "settings_tab_debug":       {"en": "Debug", "hu": "Debug"},
     "debug_ai_viz_group":       {"en": "AI Visualization", "hu": "AI vizualizáció"},
@@ -2275,6 +2317,29 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "autoAssign.graph_title":
         {"en": "AI decision graph",
          "hu": "AI döntési gráf"},
+    "autoAssign.graph_tab_flow":
+        {"en": "Decision flow",
+         "hu": "Döntési folyamat"},
+    "autoAssign.graph_tab_nn":
+        {"en": "Neural network",
+         "hu": "Neurális háló"},
+    "autoAssign.graph_nn_legend":
+        {"en": "Green: the neurons that fired the strongest and the path "
+               "through which their signal reached the final decision "
+               "(the winning person). Orange intensity shows the raw "
+               "activation of each neuron.",
+         "hu": "Zöld: a legerősebben aktiválódott neuronok és az az út, "
+               "amelyen a jelük a végső döntésig (a nyertes személyig) "
+               "eljutott. A narancs árnyalat az egyes neuronok nyers "
+               "aktivációját mutatja."},
+    "autoAssign.graph_nn_unavailable":
+        {"en": "The neural-network view cannot be computed: no trained model, "
+               "no stored embedding for this face, or the model runs in "
+               "prototype mode (too few people/examples for the network).",
+         "hu": "A neurális háló nézet nem számítható ki: nincs betanított "
+               "modell, nincs mentett beágyazás ehhez az archoz, vagy a "
+               "modell prototípus módban fut (túl kevés személy/példa a "
+               "hálóhoz)."},
     "autoAssign.revert_all":
         {"en": "Undo all",
          "hu": "Mind visszavonása"},

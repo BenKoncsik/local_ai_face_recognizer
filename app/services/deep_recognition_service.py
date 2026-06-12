@@ -162,8 +162,23 @@ class DeepRecognitionService:
         Returns None — never raises — when there is no trained model, no face,
         or no embedding, so the caller can show a friendly "no graph" notice.
         """
-        from app.deep.classifier import DeepFaceClassifier
         from app.deep.debug_info import decision_to_dict
+
+        info = self.debug_info_for_face(face_id)
+        if info is None:
+            return None
+        decision = decision_to_dict(info)
+        decision["recomputed"] = True
+        return decision
+
+    def debug_info_for_face(self, face_id: int):
+        """Run a debug forward pass for *face_id* on the saved model.
+
+        Returns the full :class:`~app.deep.debug_info.DeepDebugInfo` (layer
+        activations, decision path, gates) or None — never raises — when there
+        is no trained model, no face, or no embedding.
+        """
+        from app.deep.classifier import DeepFaceClassifier
 
         try:
             face = self._session.get(Face, face_id)
@@ -179,11 +194,9 @@ class DeepRecognitionService:
             _pred, info = classifier.predict_debug(
                 embedding, face_id=face.id, crop_path=crop_path
             )
-            decision = decision_to_dict(info)
-            decision["recomputed"] = True
-            return decision
+            return info
         except Exception:  # noqa: BLE001
-            log.warning("Could not recompute decision graph for face %s", face_id)
+            log.warning("Could not recompute debug info for face %s", face_id)
             return None
 
     # ------------------------------------------------------------------
@@ -273,6 +286,7 @@ class DeepRecognitionService:
             and self._config.skip_unchanged
             and classifier.load(self.model_path)
             and classifier.fingerprint == fingerprint
+            and self._architecture_unchanged(classifier)
         ):
             stats.reused_existing_model = True
             report = classifier.report
@@ -300,6 +314,13 @@ class DeepRecognitionService:
         run.model_path = str(self.model_path)
         self._session.commit()
         return run, stats, classifier
+
+    def _architecture_unchanged(self, classifier: DeepFaceClassifier) -> bool:
+        """False when the saved ensemble was trained with a different layer
+        layout than the current config — the model must then be rebuilt even
+        though the labeled data is unchanged."""
+        trained = classifier.trained_hidden_layers
+        return trained is None or trained == tuple(self._config.hidden_layers)
 
     # ------------------------------------------------------------------
     # Recognition

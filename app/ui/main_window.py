@@ -1811,7 +1811,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_settings(self) -> None:
-        dlg = SettingsDialog(current_db_path=self._db_path, parent=self)
+        dlg = SettingsDialog(
+            current_db_path=self._db_path, parent=self, app_config=self._config
+        )
         # Wire up the Drive prefs-changed signal so the chip/button refresh.
         if hasattr(dlg, "_gdrive_tab"):
             dlg._gdrive_tab.prefs_changed.connect(self._on_drive_prefs_changed)

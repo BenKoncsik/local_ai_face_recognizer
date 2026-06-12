@@ -273,6 +273,27 @@ class TestTrainAndRecognize:
             r2 = s.get(TrainingRun, run2.id)
             assert r1.data_fingerprint == r2.data_fingerprint
 
+    def test_changed_hidden_layers_force_retrain(self, tmp_db, tmp_path):
+        cfg = _fast_config(tmp_path)
+        cfg.min_persons_for_ensemble = 2
+        cfg.min_examples_for_ensemble = 4
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+
+        with session_scope() as s:
+            _, stats1, _ = DeepRecognitionService(s, cfg).train()
+        with session_scope() as s:
+            _, stats2, _ = DeepRecognitionService(s, cfg).train()
+        cfg.hidden_layers = (24, 16, 8)
+        with session_scope() as s:
+            _, stats3, _ = DeepRecognitionService(s, cfg).train()
+
+        assert not stats1.reused_existing_model
+        assert stats2.reused_existing_model
+        # Same data, different architecture — the saved model must not be reused.
+        assert not stats3.reused_existing_model
+
 
 class TestReviewActions:
     def _setup_with_assignment(self, tmp_path):

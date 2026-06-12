@@ -52,7 +52,7 @@ class _TpuProbeThread(QThread):
 class SettingsDialog(QDialog):
     """Settings dialog: language, database management, and TPU status."""
 
-    def __init__(self, current_db_path: str, parent=None) -> None:
+    def __init__(self, current_db_path: str, parent=None, app_config=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("settings_title"))
         self.setMinimumWidth(540)
@@ -61,6 +61,10 @@ class SettingsDialog(QDialog):
         # Open the settings dialog maximised (full screen working area).
         self.setWindowState(self.windowState() | Qt.WindowMaximized)
         self._current_db_path = current_db_path
+        if app_config is None:
+            from app.config import load_config
+            app_config = load_config()
+        self._app_config = app_config
         self._new_db_path: Optional[str] = None
         self._language_changed = False
         self._probe_thread: Optional[_TpuProbeThread] = None
@@ -75,6 +79,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
+        tabs.addTab(self._build_tab_ai_model(), t("settings_tab_ai_model"))
         tabs.addTab(self._build_tab_shortcuts(), t("settings_tab_shortcuts"))
         tabs.addTab(self._build_tab_recording(), t("settings_tab_recording"))
         tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
@@ -731,6 +736,98 @@ class SettingsDialog(QDialog):
         return scroll
 
     # ------------------------------------------------------------------
+    # AI model tab
+    # ------------------------------------------------------------------
+
+    _AI_MAX_LAYERS = 6
+    _AI_DEFAULT_LAYERS = (256, 192, 128, 64)
+
+    def _build_tab_ai_model(self) -> QWidget:
+        """Build the AI Model tab — neural-network layer configuration."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setSpacing(14)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        group = QGroupBox(t("ai_model_layers_group"))
+        group_layout = QVBoxLayout(group)
+
+        desc = QLabel(t("ai_model_layers_desc"))
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        group_layout.addWidget(desc)
+
+        current = list(self._app_config.deep_recognition.hidden_layers)
+        if not current:
+            current = list(self._AI_DEFAULT_LAYERS)
+
+        form = QFormLayout()
+        self._ai_layer_count_spin = QSpinBox()
+        self._ai_layer_count_spin.setRange(1, self._AI_MAX_LAYERS)
+        self._ai_layer_count_spin.setValue(
+            min(len(current), self._AI_MAX_LAYERS)
+        )
+        self._ai_layer_count_spin.valueChanged.connect(
+            self._on_ai_layer_count_changed
+        )
+        form.addRow(t("ai_model_layer_count"), self._ai_layer_count_spin)
+
+        # Sizes for layers beyond the currently configured ones, shown when
+        # the user raises the layer count.
+        fallback = [256, 192, 128, 64, 48, 32]
+        self._ai_layer_rows: list[tuple[QLabel, QSpinBox]] = []
+        for i in range(self._AI_MAX_LAYERS):
+            spin = QSpinBox()
+            spin.setRange(8, 2048)
+            spin.setSingleStep(8)
+            spin.setValue(current[i] if i < len(current) else fallback[i])
+            label = QLabel(t("ai_model_layer_n").format(n=i + 1))
+            form.addRow(label, spin)
+            self._ai_layer_rows.append((label, spin))
+        group_layout.addLayout(form)
+
+        reset_row = QHBoxLayout()
+        reset_btn = QPushButton(t("ai_model_reset_btn"))
+        reset_btn.clicked.connect(self._on_ai_layers_reset)
+        reset_row.addWidget(reset_btn)
+        reset_row.addStretch()
+        group_layout.addLayout(reset_row)
+
+        note = QLabel(t("ai_model_rebuild_note"))
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #aaa; font-size: 11px;")
+        group_layout.addWidget(note)
+
+        layout.addWidget(group)
+        layout.addStretch()
+        scroll.setWidget(inner)
+
+        self._on_ai_layer_count_changed(self._ai_layer_count_spin.value())
+        return scroll
+
+    def _on_ai_layer_count_changed(self, count: int) -> None:
+        for i, (label, spin) in enumerate(self._ai_layer_rows):
+            visible = i < count
+            label.setVisible(visible)
+            spin.setVisible(visible)
+
+    def _on_ai_layers_reset(self) -> None:
+        self._ai_layer_count_spin.setValue(len(self._AI_DEFAULT_LAYERS))
+        for (label, spin), size in zip(
+            self._ai_layer_rows, self._AI_DEFAULT_LAYERS
+        ):
+            spin.setValue(size)
+
+    def _selected_hidden_layers(self) -> tuple:
+        count = self._ai_layer_count_spin.value()
+        return tuple(spin.value() for _, spin in self._ai_layer_rows[:count])
+
+    # ------------------------------------------------------------------
     # TPU
     # ------------------------------------------------------------------
 
@@ -1069,6 +1166,13 @@ class SettingsDialog(QDialog):
         # otherwise only persist on destruction, which is unreliable on
         # Windows and can silently drop the writes.
         qs.sync()
+        # Persist a changed neural-network layout into the YAML config and the
+        # live config object; the model itself retrains on the next AI run.
+        new_layers = self._selected_hidden_layers()
+        if new_layers != tuple(self._app_config.deep_recognition.hidden_layers):
+            from app.config import save_deep_recognition_values
+            self._app_config.deep_recognition.hidden_layers = new_layers
+            save_deep_recognition_values({"hidden_layers": list(new_layers)})
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)

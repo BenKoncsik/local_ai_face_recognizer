@@ -356,8 +356,9 @@ class DeepRecognitionConfig:
     # --- Training ---
     # Number of independently seeded networks in the ensemble.
     ensemble_size: int = 5
-    # Hidden layer sizes of each member network.
-    hidden_layers: tuple = (256, 128)
+    # Hidden layer sizes of each member network (the output softmax layer —
+    # the final inference — is added automatically on top of these).
+    hidden_layers: tuple = (256, 192, 128, 64)
     # Maximum optimiser iterations per network.
     max_iter: int = 600
     # Small classes are augmented (jitter + interpolation) up to this size.
@@ -1162,6 +1163,19 @@ def _user_config_file() -> Path:
 
 def save_db_path(new_db_path: str, config_path: Optional[str] = None) -> None:
     """Persist *new_db_path* into the storage.db_path field of the YAML config."""
+    _update_config_section("storage", {"db_path": new_db_path}, config_path)
+
+
+def save_deep_recognition_values(
+    values: dict, config_path: Optional[str] = None
+) -> None:
+    """Persist selected deep_recognition fields into the YAML config."""
+    _update_config_section("deep_recognition", values, config_path)
+
+
+def _update_config_section(
+    section: str, values: dict, config_path: Optional[str] = None
+) -> None:
     path = Path(config_path) if config_path else _user_config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1170,7 +1184,7 @@ def save_db_path(new_db_path: str, config_path: Optional[str] = None) -> None:
         with open(path, "r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh) or {}
 
-    raw.setdefault("storage", {})["db_path"] = new_db_path
+    raw.setdefault(section, {}).update(values)
 
     with open(path, "w", encoding="utf-8") as fh:
         yaml.dump(raw, fh, allow_unicode=True, default_flow_style=False, sort_keys=False)

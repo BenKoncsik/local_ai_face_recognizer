@@ -116,6 +116,18 @@ class DeepFaceClassifier:
         return self._state.fingerprint
 
     @property
+    def trained_hidden_layers(self) -> Optional[tuple]:
+        """Hidden-layer layout of the persisted ensemble (None without MLPs)."""
+        if not self._state.members:
+            return None
+        sizes = getattr(self._state.members[0], "hidden_layer_sizes", None)
+        if sizes is None:
+            return None
+        if isinstance(sizes, (list, tuple)):
+            return tuple(int(s) for s in sizes)
+        return (int(sizes),)
+
+    @property
     def report(self) -> Optional[DeepTrainingReport]:
         return self._state.report
 
@@ -277,6 +289,7 @@ class DeepFaceClassifier:
         from app.deep.debug_info import (
             DeepDebugInfo,
             GateResult,
+            compute_decision_path,
             compute_layer_activations,
         )
 
@@ -346,6 +359,17 @@ class DeepFaceClassifier:
         top_idx_arr = np.argsort(np.abs(emb_arr))[::-1][:10]
         emb_top = [(int(i), float(emb_arr[i])) for i in top_idx_arr]
 
+        # Contribution path to the winning output (green overlay in the NN graph)
+        decision_path = None
+        if state.mode == "ensemble" and state.members and layer_activations:
+            member = state.members[0]
+            class_names = [
+                state.person_names.get(int(c), str(c)) for c in member.classes_
+            ]
+            decision_path = compute_decision_path(
+                member, vec, layer_activations, emb_top, output_probs, class_names
+            )
+
         pred = self.predict(embedding)
         info = DeepDebugInfo(
             face_id=face_id,
@@ -358,6 +382,7 @@ class DeepFaceClassifier:
             gates=gates,
             prediction=pred,
             mode=state.mode,
+            decision_path=decision_path,
         )
         return pred, info
 

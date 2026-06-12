@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -219,20 +220,31 @@ class _FlowPrediction:
 class DeepDecisionGraphDialog(QDialog):
     """Show the stored deep-engine decision graph for one auto-assignment.
 
-    Reconstructs the open-set rejection gate flow from the JSON captured at
-    recognition time and renders it with the very same widget as the live AI
-    debug view (:class:`_DecisionFlowWidget`).
+    Two tabs:
+
+    * **Decision flow** — the open-set rejection gate flow reconstructed from
+      the JSON captured at recognition time, rendered with the very same
+      widget as the live AI debug view (:class:`_DecisionFlowWidget`).
+    * **Neural network** — the activation graph with the strongest
+      contribution path to the winning output highlighted in green.  The
+      per-neuron activations are not persisted, so this view is recomputed
+      from the saved model on first open (needs *face_id* + *deep_config*).
     """
 
     def __init__(
         self,
         decision: Optional[Dict[str, Any]],
         parent: Optional[QWidget] = None,
+        face_id: Optional[int] = None,
+        deep_config=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("autoAssign.graph_title"))
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
-        self.resize(640, 720)
+        self.resize(760, 720)
+        self._face_id = face_id
+        self._deep_config = deep_config
+        self._nn_loaded = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -245,45 +257,147 @@ class DeepDecisionGraphDialog(QDialog):
             msg.setStyleSheet("color:#bbb; font-style:italic; padding:24px;")
             layout.addWidget(msg, stretch=1)
         else:
-            header = QLabel(self._header_html(decision))
-            header.setWordWrap(True)
-            header.setStyleSheet("font-family: monospace; font-size: 11px; color:#ddd;")
-            layout.addWidget(header)
-
-            gates = [
-                GateResult(
-                    name=str(g.get("name", "?")),
-                    passed=bool(g.get("passed", False)),
-                    value=float(g.get("value", 0.0)),
-                    threshold=float(g.get("threshold", 0.0)),
-                )
-                for g in decision.get("gates", []) or []
-            ]
-            pred = _FlowPrediction(
-                reason=decision.get("reason", "assigned"),
-                person_name=decision.get("person_name") or "?",
-                score=float(decision.get("score", 0.0) or 0.0),
-                similarity=float(decision.get("similarity", 0.0) or 0.0),
+            self._tabs = QTabWidget()
+            self._tabs.addTab(
+                self._build_flow_tab(decision), t("autoAssign.graph_tab_flow")
             )
-
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.NoFrame)
-            flow = _DecisionFlowWidget()
-            flow.set_data(gates, pred, mode=decision.get("mode", "ensemble"))
-            scroll.setWidget(flow)
-            layout.addWidget(scroll, stretch=1)
-
-            persons = decision.get("top_persons") or []
-            if persons:
-                lbl = QLabel(self._persons_html(persons))
-                lbl.setWordWrap(True)
-                lbl.setStyleSheet("font-family: monospace; font-size: 11px; color:#bbb;")
-                layout.addWidget(lbl)
+            self._nn_tab = self._build_nn_tab_placeholder()
+            self._tabs.addTab(self._nn_tab, t("autoAssign.graph_tab_nn"))
+            self._tabs.currentChanged.connect(self._on_tab_changed)
+            layout.addWidget(self._tabs, stretch=1)
 
         close_btn = QPushButton(t("close"))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+    # -- tab 1: gate flow ------------------------------------------------------
+
+    def _build_flow_tab(self, decision: Dict[str, Any]) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(8)
+
+        header = QLabel(self._header_html(decision))
+        header.setWordWrap(True)
+        header.setStyleSheet("font-family: monospace; font-size: 11px; color:#ddd;")
+        layout.addWidget(header)
+
+        gates = [
+            GateResult(
+                name=str(g.get("name", "?")),
+                passed=bool(g.get("passed", False)),
+                value=float(g.get("value", 0.0)),
+                threshold=float(g.get("threshold", 0.0)),
+            )
+            for g in decision.get("gates", []) or []
+        ]
+        pred = _FlowPrediction(
+            reason=decision.get("reason", "assigned"),
+            person_name=decision.get("person_name") or "?",
+            score=float(decision.get("score", 0.0) or 0.0),
+            similarity=float(decision.get("similarity", 0.0) or 0.0),
+        )
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        flow = _DecisionFlowWidget()
+        flow.set_data(gates, pred, mode=decision.get("mode", "ensemble"))
+        scroll.setWidget(flow)
+        layout.addWidget(scroll, stretch=1)
+
+        persons = decision.get("top_persons") or []
+        if persons:
+            lbl = QLabel(self._persons_html(persons))
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet("font-family: monospace; font-size: 11px; color:#bbb;")
+            layout.addWidget(lbl)
+        return tab
+
+    # -- tab 2: neural network graph (lazy) ------------------------------------
+
+    def _build_nn_tab_placeholder(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(8)
+        loading = QLabel("⏳")
+        loading.setAlignment(Qt.AlignCenter)
+        loading.setStyleSheet("color:#888; font-size:24px;")
+        layout.addWidget(loading, stretch=1)
+        return tab
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self._tabs.widget(index) is self._nn_tab and not self._nn_loaded:
+            self._nn_loaded = True
+            self._populate_nn_tab()
+
+    def _clear_nn_tab(self) -> QVBoxLayout:
+        layout = self._nn_tab.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        return layout
+
+    def _populate_nn_tab(self) -> None:
+        """Recompute the forward pass from the saved model and render it."""
+        info = self._compute_debug_info()
+        layout = self._clear_nn_tab()
+
+        has_columns = info is not None and (
+            getattr(info, "output_probs", None)
+            or getattr(info, "all_similarities", None)
+        )
+        if not has_columns:
+            msg = QLabel(t("autoAssign.graph_nn_unavailable"))
+            msg.setWordWrap(True)
+            msg.setAlignment(Qt.AlignCenter)
+            msg.setStyleSheet("color:#bbb; font-style:italic; padding:24px;")
+            layout.addWidget(msg, stretch=1)
+            return
+
+        from app.ui.dialogs.ai_visualization_window import NeuralNetworkGraphWidget
+
+        pred = info.prediction
+        winner = pred.person_name if pred and pred.person_name else ""
+
+        legend = QLabel("🟢 " + t("autoAssign.graph_nn_legend"))
+        legend.setWordWrap(True)
+        legend.setStyleSheet("color:#aaa; font-size:11px;")
+        layout.addWidget(legend)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        scroll.setFrameShape(QFrame.NoFrame)
+        graph = NeuralNetworkGraphWidget()
+        graph.set_data(
+            embedding_top_dims=info.embedding_top_dims or [],
+            layer_activations=info.layer_activations or [],
+            output_probs=info.output_probs or {},
+            all_similarities=info.all_similarities or {},
+            winner=winner,
+            path=info.decision_path,
+        )
+        scroll.setWidget(graph)
+        layout.addWidget(scroll, stretch=1)
+
+    def _compute_debug_info(self):
+        if self._face_id is None:
+            return None
+        try:
+            from app.db.database import session_scope
+            from app.services.deep_recognition_service import DeepRecognitionService
+
+            with session_scope() as session:
+                return DeepRecognitionService(
+                    session, self._deep_config
+                ).debug_info_for_face(self._face_id)
+        except Exception:  # noqa: BLE001
+            log.warning("Could not compute NN graph for face %s", self._face_id)
+            return None
 
     @staticmethod
     def _header_html(decision: Dict[str, Any]) -> str:

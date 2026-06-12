@@ -166,8 +166,10 @@ deep_recognition:
   # --- Training ---
   # Independently seeded networks in the ensemble (more → steadier, slower).
   ensemble_size: 5
-  # Hidden layer sizes of each member network.
-  hidden_layers: [256, 128]
+  # Hidden layer sizes of each member network (the output softmax layer —
+  # the final inference — is added automatically on top of these).
+  # Editable in Settings → AI Model.
+  hidden_layers: [256, 192, 128, 64]
   # Maximum optimiser iterations per network.
   max_iter: 600
   # People with fewer faces are augmented (jitter + interpolation) up to this.
