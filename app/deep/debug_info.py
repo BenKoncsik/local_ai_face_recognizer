@@ -59,6 +59,51 @@ class DeepDebugInfo:
     mode: str   # "ensemble" | "prototype" | "empty"
 
 
+# Schema version of the dict produced by :func:`decision_to_dict`.
+DECISION_VERSION = 1
+
+
+def decision_to_dict(info: "DeepDebugInfo") -> Dict:
+    """Serialize a :class:`DeepDebugInfo` into a compact, JSON-safe dict.
+
+    Keeps only what the stored decision graph needs (the gate flow + winner
+    summary + the top ranked persons) — NOT the heavy per-neuron layer
+    activations or the full 192-dim embedding.  The result is small enough to
+    persist on every auto-assignment row and round-trips back into the same
+    flow-chart widget as the live AI debug view.
+    """
+    pred = info.prediction
+    top_persons = sorted(
+        (info.output_probs or {}).items(), key=lambda kv: -kv[1]
+    )[:8]
+    top_sims = sorted(
+        (info.all_similarities or {}).items(), key=lambda kv: -kv[1]
+    )[:8]
+    return {
+        "version": DECISION_VERSION,
+        "engine": "deep",
+        "mode": info.mode,
+        "reason": pred.reason,
+        "person_name": pred.person_name,
+        "score": float(pred.score),
+        "similarity": float(pred.similarity),
+        "probability": float(pred.probability),
+        "margin": float(pred.margin),
+        "embedding_norm": float(info.embedding_norm),
+        "gates": [
+            {
+                "name": g.name,
+                "passed": bool(g.passed),
+                "value": float(g.value),
+                "threshold": float(g.threshold),
+            }
+            for g in info.gates
+        ],
+        "top_persons": [[str(n), float(p)] for n, p in top_persons],
+        "top_similarities": [[str(n), float(s)] for n, s in top_sims],
+    }
+
+
 def compute_layer_activations(mlp, vec: np.ndarray) -> List[np.ndarray]:
     """Run a forward pass through *mlp* and return hidden-layer activations.
 

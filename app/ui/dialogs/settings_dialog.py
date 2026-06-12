@@ -593,9 +593,34 @@ class SettingsDialog(QDialog):
         log_layout.addLayout(btn_row)
         layout.addWidget(log_group)
 
+        # ── Neural Network Graph ─────────────────────────────────────────────
+        nn_group = QGroupBox(t("debug_nn_group"))
+        nn_layout = QVBoxLayout(nn_group)
+
+        nn_desc = QLabel(t("debug_nn_group_desc"))
+        nn_desc.setWordWrap(True)
+        nn_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        nn_layout.addWidget(nn_desc)
+
+        open_nn_btn = QPushButton(t("debug_nn_open_btn"))
+        open_nn_btn.clicked.connect(self._on_open_nn_graph)
+        nn_layout.addWidget(open_nn_btn)
+        layout.addWidget(nn_group)
+
         layout.addStretch()
         scroll.setWidget(inner)
         return scroll
+
+    def _on_open_nn_graph(self) -> None:
+        # Settings runs exec() → application-modal on macOS, any new window is blocked.
+        # Solution: mark the main window to open the graph AFTER this dialog closes,
+        # then accept (save) settings now.
+        from PySide6.QtWidgets import QApplication
+        for w in QApplication.topLevelWidgets():
+            if hasattr(w, "_open_nn_graph_window"):
+                w._pending_open_nn_graph = True
+                break
+        self.accept()
 
     def _on_open_debug_log(self) -> None:
         import subprocess

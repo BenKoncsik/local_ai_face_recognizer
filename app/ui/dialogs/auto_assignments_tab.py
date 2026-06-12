@@ -46,6 +46,30 @@ log = logging.getLogger(__name__)
 _ROW_STYLE = "QFrame { background: #232323; border-radius: 6px; }"
 
 
+def _open_decision_graph(
+    dto: AutoAssignmentDTO, parent: QWidget, deep_config=None
+) -> None:
+    """Open the deep-engine decision graph for *dto* (or a "no graph" notice).
+
+    Rows assigned before the per-row decision was persisted carry no stored
+    graph; for those we recompute it on demand from the saved model so the
+    button still works.  Only when that also fails do we show "no graph".
+    """
+    from app.ui.dialogs.merge_decision_graph_dialog import DeepDecisionGraphDialog
+
+    decision = dto.decision
+    if decision is None:
+        try:
+            with session_scope() as session:
+                decision = DeepRecognitionService(
+                    session, deep_config
+                ).decision_for_face(dto.face_id)
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to recompute decision graph for face %s", dto.face_id)
+            decision = None
+    DeepDecisionGraphDialog(decision, parent).exec()
+
+
 class _DecidedAssignmentRow(QFrame):
     """One already-reviewed automatic grouping.
 
@@ -56,10 +80,14 @@ class _DecidedAssignmentRow(QFrame):
     reverted = Signal(int)  # assignment_id
 
     def __init__(
-        self, dto: AutoAssignmentDTO, parent: Optional[QWidget] = None
+        self,
+        dto: AutoAssignmentDTO,
+        parent: Optional[QWidget] = None,
+        deep_config=None,
     ) -> None:
         super().__init__(parent)
         self._dto = dto
+        self._deep_config = deep_config
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("QFrame { background: #1d1d1d; border-radius: 6px; }")
 
@@ -113,6 +141,14 @@ class _DecidedAssignmentRow(QFrame):
             when.setStyleSheet("color: #666; border: none; font-size: 10px;")
             row.addWidget(when)
 
+        graph_btn = QPushButton("📊")
+        graph_btn.setToolTip(t("autoAssign.graph"))
+        graph_btn.setFixedWidth(40)
+        graph_btn.clicked.connect(
+            lambda: _open_decision_graph(dto, self, self._deep_config)
+        )
+        row.addWidget(graph_btn)
+
         # Let the user reverse a confirm/correct after the fact. A row that is
         # already reverted has nothing left to undo.
         if dto.status != AUTO_ASSIGN_STATUS_REVERTED:
@@ -134,10 +170,14 @@ class _AutoAssignmentRow(QFrame):
     selection_changed = Signal()   # any checkbox toggled
 
     def __init__(
-        self, dto: AutoAssignmentDTO, parent: Optional[QWidget] = None
+        self,
+        dto: AutoAssignmentDTO,
+        parent: Optional[QWidget] = None,
+        deep_config=None,
     ) -> None:
         super().__init__(parent)
         self._dto = dto
+        self._deep_config = deep_config
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(_ROW_STYLE)
 
@@ -190,6 +230,14 @@ class _AutoAssignmentRow(QFrame):
             "font-size: 13px; font-weight: bold; color: #88ee88; border: none;"
         )
         row.addWidget(score)
+
+        graph_btn = QPushButton("📊")
+        graph_btn.setToolTip(t("autoAssign.graph"))
+        graph_btn.setFixedWidth(40)
+        graph_btn.clicked.connect(
+            lambda: _open_decision_graph(dto, self, self._deep_config)
+        )
+        row.addWidget(graph_btn)
 
         confirm_btn = QPushButton(t("autoAssign.confirm"))
         confirm_btn.setStyleSheet("QPushButton { color: #88ee88; }")
@@ -368,7 +416,7 @@ class AutoAssignmentsTab(QWidget):
         self._rows = []
 
         for dto in dtos:
-            row = _AutoAssignmentRow(dto)
+            row = _AutoAssignmentRow(dto, deep_config=self._deep_config)
             row.confirmed.connect(self._on_confirm)
             row.corrected.connect(self._on_correct)
             row.reverted.connect(self._on_revert)
@@ -429,7 +477,7 @@ class AutoAssignmentsTab(QWidget):
             empty.setAlignment(Qt.AlignCenter)
             self._decided_layout.insertWidget(0, empty)
         for i, dto in enumerate(decided):
-            drow = _DecidedAssignmentRow(dto)
+            drow = _DecidedAssignmentRow(dto, deep_config=self._deep_config)
             drow.reverted.connect(self._on_revert)
             self._decided_layout.insertWidget(i, drow)
 

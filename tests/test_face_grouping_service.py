@@ -61,3 +61,52 @@ def test_threshold_controls_granularity():
     # Loose threshold merges them; strict keeps them apart.
     assert len(group_faces([_face(1, a), _face(2, c)], threshold=0.7)) == 1
     assert len(group_faces([_face(1, a), _face(2, c)], threshold=0.92)) == 2
+
+
+def _pair_face(fid, vec, path):
+    from types import SimpleNamespace
+    f = _face(fid, vec)
+    f.image = SimpleNamespace(id=fid, file_path=path)
+    return f
+
+
+def test_deoldified_variants_stack_despite_embedding_drift():
+    from app.services.face_grouping_service import deoldified_pair_key
+    # B&W original + a colorized variant of the SAME photo, embeddings drifted
+    # below the normal merge threshold (cos ≈ 0.8).
+    bw = _pair_face(1, [1.0, 0.0, 0.0], "/p/album/IMG_2.jpg")
+    color = _pair_face(2, [0.8, 0.6, 0.0], "/p/colorized/IMG_2-deoldified.jpg")
+
+    def pk(face):
+        return deoldified_pair_key(face.image.file_path)
+
+    # Without pairing the drift keeps them apart...
+    assert len(group_faces([bw, color], threshold=0.92)) == 2
+    # ...with pairing they collapse into one variant stack.
+    groups = group_faces([bw, color], threshold=0.92, pair_key_fn=pk)
+    assert len(groups) == 1
+    assert set(groups[0].member_ids) == {1, 2}
+
+
+def test_same_photo_different_people_not_merged_by_pairing():
+    from app.services.face_grouping_service import deoldified_pair_key
+    # Two DIFFERENT instances in the same photo (orthogonal embeddings) share a
+    # pair key but must not be force-merged — the relaxed bar is still a bar.
+    p1 = _pair_face(1, [1.0, 0.0, 0.0], "/p/IMG_9.jpg")
+    p2 = _pair_face(2, [0.0, 1.0, 0.0], "/p/IMG_9.jpg")
+
+    def pk(face):
+        return deoldified_pair_key(face.image.file_path)
+
+    groups = group_faces([p1, p2], threshold=0.92, pair_key_fn=pk)
+    assert len(groups) == 2
+
+
+def test_pair_key_matches_browser_pairing():
+    from app.services.face_grouping_service import deoldified_pair_key
+    # A deoldified variant resolves to the original's basename, folder-independent.
+    assert deoldified_pair_key("/a/b/IMG_5.jpg") == "img_5.jpg"
+    assert (
+        deoldified_pair_key("/x/IMG_5-deoldified.jpg")
+        == deoldified_pair_key("/y/IMG_5.jpg")
+    )

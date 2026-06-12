@@ -24,6 +24,7 @@ Safety rules
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -108,6 +109,19 @@ class AutoAssignmentDTO:
     run_finished_at: Optional[datetime] = None
     corrected_person_name: Optional[str] = None
     decided_at: Optional[datetime] = None
+    # Parsed deep-engine decision graph (None for rows predating capture).
+    decision: Optional[Dict] = None
+
+
+def _parse_decision_json(raw: Optional[str]) -> Optional[Dict]:
+    """Parse a stored decision JSON, tolerating missing/corrupt values."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 @dataclass
@@ -139,6 +153,38 @@ class DeepRecognitionService:
     @property
     def model_path(self) -> Path:
         return self._model_dir / _MODEL_FILENAME
+
+    def decision_for_face(self, face_id: int) -> Optional[Dict]:
+        """Recompute the deep decision graph for *face_id* from the saved model.
+
+        Used by the review tab to show a graph for assignments made *before*
+        the per-row decision was persisted (their ``decision_json`` is NULL).
+        Returns None — never raises — when there is no trained model, no face,
+        or no embedding, so the caller can show a friendly "no graph" notice.
+        """
+        from app.deep.classifier import DeepFaceClassifier
+        from app.deep.debug_info import decision_to_dict
+
+        try:
+            face = self._session.get(Face, face_id)
+            if face is None:
+                return None
+            embedding = face.get_embedding()
+            if embedding is None or not self.model_path.exists():
+                return None
+            classifier = DeepFaceClassifier(self._config)
+            if not classifier.load(self.model_path) or not classifier.is_trained:
+                return None
+            crop_path = str(face.crop_path) if face.crop_path else None
+            _pred, info = classifier.predict_debug(
+                embedding, face_id=face.id, crop_path=crop_path
+            )
+            decision = decision_to_dict(info)
+            decision["recomputed"] = True
+            return decision
+        except Exception:  # noqa: BLE001
+            log.warning("Could not recompute decision graph for face %s", face_id)
+            return None
 
     # ------------------------------------------------------------------
     # Model export / import
@@ -297,6 +343,7 @@ class DeepRecognitionService:
                 stats.n_skipped_low_confidence += 1
                 continue
 
+            debug_info = None
             if debug_cb is not None:
                 crop_path = str(face.crop_path) if face.crop_path else None
                 prediction, debug_info = classifier.predict_debug(
@@ -331,6 +378,14 @@ class DeepRecognitionService:
             face.assignment_confidence = prediction.score
             face.assigned_at = now
 
+            # Capture the decision graph for this assignment so the review tab
+            # can explain it later.  Reuse the debug info already computed for
+            # the live viz; otherwise compute it once for this assigned face
+            # (rejected faces stay on the cheap predict() path).
+            decision_json = self._serialize_decision(
+                classifier, face, debug_info
+            )
+
             self._session.add(
                 AutoAssignment(
                     training_run=training_run,
@@ -340,6 +395,7 @@ class DeepRecognitionService:
                     previous_person_name=previous_person_name,
                     score=prediction.score,
                     status=AUTO_ASSIGN_STATUS_AUTO,
+                    decision_json=decision_json,
                     created_at=now,
                 )
             )
@@ -357,6 +413,29 @@ class DeepRecognitionService:
             stats.n_no_embedding,
         )
         return stats
+
+    @staticmethod
+    def _serialize_decision(
+        classifier: DeepFaceClassifier, face, debug_info
+    ) -> Optional[str]:
+        """JSON for *face*'s assignment decision graph, or None on failure.
+
+        Reuses *debug_info* when it was already computed for the live viz;
+        otherwise runs ``predict_debug`` once for this single assigned face.
+        Never raises — a diagnostics blob must not abort a recognition run.
+        """
+        from app.deep.debug_info import DeepDebugInfo, decision_to_dict
+
+        try:
+            if not isinstance(debug_info, DeepDebugInfo):
+                crop_path = str(face.crop_path) if face.crop_path else None
+                _pred, debug_info = classifier.predict_debug(
+                    face.get_embedding(), face_id=face.id, crop_path=crop_path
+                )
+            return json.dumps(decision_to_dict(debug_info), ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            log.warning("Could not serialize decision graph for face %s", face.id)
+            return None
 
     def train_and_recognize(
         self,
@@ -459,6 +538,7 @@ class DeepRecognitionService:
                         if assignment.training_run
                         else None
                     ),
+                    decision=_parse_decision_json(assignment.decision_json),
                 )
             )
         return dtos
@@ -515,6 +595,7 @@ class DeepRecognitionService:
                         else None
                     ),
                     decided_at=assignment.decided_at,
+                    decision=_parse_decision_json(assignment.decision_json),
                 )
             )
         return dtos

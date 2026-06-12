@@ -840,6 +840,19 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "debug_viz_nav_live_tooltip":   {"en": "Jump to latest face (live follow mode)",
                                      "hu": "Ugrás a legutóbbi archoz (élő követési mód)"},
 
+    # ── Neural network graph window ───────────────────────────────────────
+    "debug_nn_title":         {"en": "Neural Network Graph", "hu": "Neurális háló gráf"},
+    "debug_nn_open_btn":      {"en": "Neural Graph", "hu": "Neurális gráf"},
+    "debug_nn_open_tooltip":  {"en": "Open full neural-network activation graph",
+                               "hu": "Megnyitja a teljes neurális háló aktiváció gráfot"},
+    "debug_nn_no_data":       {"en": "No activation data available.\nRun an AI scan with debug mode enabled.",
+                               "hu": "Nincs aktivációs adat.\nFuttass AI szkennelést debug módban."},
+    "debug_nn_waiting":       {"en": "Waiting for activation data — run an AI scan with debug mode enabled.",
+                               "hu": "Aktivációs adatra vár — futtass AI szkennelést debug módban."},
+    "debug_nn_group":         {"en": "Neural Network Graph", "hu": "Neurális háló gráf"},
+    "debug_nn_group_desc":    {"en": "Open a live graph of the neural network's layer activations. Updates during an AI scan when debug mode is enabled.",
+                               "hu": "Megnyitja a neurális háló rétegaktivációinak élő gráfját. AI szkennelés közben frissül, ha a debug mód be van kapcsolva."},
+
     "export_scope":             {"en": "Scope", "hu": "Hatókör"},
     "export_all_persons": {"en": "All persons", "hu": "Összes személy"},
     "export_selected_person": {"en": "Selected person only: {name}",
@@ -2256,6 +2269,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                "where it was before the run",
          "hu": "Döntés felülbírálása: visszavonás, az arc visszakerül oda, ahol "
                "a futás előtt volt"},
+    "autoAssign.graph":
+        {"en": "Decision graph — why the AI suggested this",
+         "hu": "Döntési gráf — mi alapján javasolta az AI"},
+    "autoAssign.graph_title":
+        {"en": "AI decision graph",
+         "hu": "AI döntési gráf"},
     "autoAssign.revert_all":
         {"en": "Undo all",
          "hu": "Mind visszavonása"},

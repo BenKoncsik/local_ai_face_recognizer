@@ -202,6 +202,120 @@ class MergeDecisionGraphDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Deep-engine decision graph (AI auto-grouping tab)
+# ---------------------------------------------------------------------------
+
+class _FlowPrediction:
+    """Stand-in carrying the attributes ``_DecisionFlowWidget`` reads from a
+    prediction (``reason`` / ``person_name`` / ``score`` / ``similarity``)."""
+
+    def __init__(self, reason: str, person_name: str, score: float, similarity: float) -> None:
+        self.reason = reason
+        self.person_name = person_name
+        self.score = score
+        self.similarity = similarity
+
+
+class DeepDecisionGraphDialog(QDialog):
+    """Show the stored deep-engine decision graph for one auto-assignment.
+
+    Reconstructs the open-set rejection gate flow from the JSON captured at
+    recognition time and renders it with the very same widget as the live AI
+    debug view (:class:`_DecisionFlowWidget`).
+    """
+
+    def __init__(
+        self,
+        decision: Optional[Dict[str, Any]],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(t("autoAssign.graph_title"))
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
+        self.resize(640, 720)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        if not decision:
+            msg = QLabel(t("amerge_no_graph"))
+            msg.setWordWrap(True)
+            msg.setAlignment(Qt.AlignCenter)
+            msg.setStyleSheet("color:#bbb; font-style:italic; padding:24px;")
+            layout.addWidget(msg, stretch=1)
+        else:
+            header = QLabel(self._header_html(decision))
+            header.setWordWrap(True)
+            header.setStyleSheet("font-family: monospace; font-size: 11px; color:#ddd;")
+            layout.addWidget(header)
+
+            gates = [
+                GateResult(
+                    name=str(g.get("name", "?")),
+                    passed=bool(g.get("passed", False)),
+                    value=float(g.get("value", 0.0)),
+                    threshold=float(g.get("threshold", 0.0)),
+                )
+                for g in decision.get("gates", []) or []
+            ]
+            pred = _FlowPrediction(
+                reason=decision.get("reason", "assigned"),
+                person_name=decision.get("person_name") or "?",
+                score=float(decision.get("score", 0.0) or 0.0),
+                similarity=float(decision.get("similarity", 0.0) or 0.0),
+            )
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            flow = _DecisionFlowWidget()
+            flow.set_data(gates, pred, mode=decision.get("mode", "ensemble"))
+            scroll.setWidget(flow)
+            layout.addWidget(scroll, stretch=1)
+
+            persons = decision.get("top_persons") or []
+            if persons:
+                lbl = QLabel(self._persons_html(persons))
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet("font-family: monospace; font-size: 11px; color:#bbb;")
+                layout.addWidget(lbl)
+
+        close_btn = QPushButton(t("close"))
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+    @staticmethod
+    def _header_html(decision: Dict[str, Any]) -> str:
+        name = decision.get("person_name") or "?"
+        score = decision.get("score")
+        sim = decision.get("similarity")
+        prob = decision.get("probability")
+        score_txt = f"{score:.3f}" if isinstance(score, (int, float)) else "—"
+        sim_txt = f"{sim:.3f}" if isinstance(sim, (int, float)) else "—"
+        prob_txt = f"{prob:.3f}" if isinstance(prob, (int, float)) else "—"
+        return (
+            f"<b>{t('amerge_why_target')}:</b> {name}<br>"
+            f"<b>{t('amerge_score')}:</b> {score_txt} &nbsp; "
+            f"sim: {sim_txt} &nbsp; prob: {prob_txt} &nbsp; "
+            f"<b>{t('debug_viz_mode')}:</b> {decision.get('mode', '—')}"
+        )
+
+    @staticmethod
+    def _persons_html(persons: List) -> str:
+        rows = []
+        for entry in persons[:8]:
+            try:
+                name, prob = entry[0], float(entry[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            rows.append(f"&nbsp;&nbsp;{name}: {prob:.3f}")
+        if not rows:
+            return ""
+        return f"<b>{t('amerge_ranked')}:</b><br>" + "<br>".join(rows)
+
+
+# ---------------------------------------------------------------------------
 # MergeReviewDetailDialog
 # ---------------------------------------------------------------------------
 

@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, Signal
+from PySide6.QtGui import QCursor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -73,8 +73,10 @@ class _ZoomPopup(QLabel):
             "border-radius: 6px; padding: 4px; }"
         )
         self.setFixedSize(_ZOOM_SIZE + 8, _ZOOM_SIZE + 8)
+        self._source: Optional[QWidget] = None
+        self._filter_active: bool = False
 
-    def show_for(self, crop_path: Optional[str], global_pos) -> None:
+    def show_for(self, crop_path: Optional[str], global_pos, source: Optional[QWidget] = None) -> None:
         pixmap = _load_crop_pixmap(crop_path, _ZOOM_SIZE)
         if pixmap is not None:
             self.setPixmap(pixmap)
@@ -91,7 +93,28 @@ class _ZoomPopup(QLabel):
         if y + self.height() > screen.bottom():
             y = screen.bottom() - self.height() - 4
         self.move(x, y)
+        self._source = source
         self.show()
+        if source is not None and not self._filter_active:
+            QApplication.instance().installEventFilter(self)
+            self._filter_active = True
+
+    def hide(self) -> None:
+        if self._filter_active:
+            QApplication.instance().removeEventFilter(self)
+            self._filter_active = False
+        self._source = None
+        super().hide()
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseMove and self._source is not None:
+            try:
+                tl = self._source.mapToGlobal(QPoint(0, 0))
+                if not QRect(tl, self._source.size()).contains(QCursor.pos()):
+                    self.hide()
+            except RuntimeError:
+                self.hide()
+        return False
 
 
 _zoom_popup = None
@@ -250,7 +273,7 @@ class FaceThumbnail(QLabel):
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
         popup = _get_zoom_popup()
-        popup.show_for(self._crop_path, self.mapToGlobal(self.rect().center()))
+        popup.show_for(self._crop_path, self.mapToGlobal(self.rect().center()), self)
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
@@ -336,6 +359,8 @@ class _GroupPreviewPopup(QWidget):
         self._row.setContentsMargins(6, 6, 6, 6)
         self._row.setSpacing(4)
         self._labels: list[QLabel] = []
+        self._source: Optional[QWidget] = None
+        self._filter_active: bool = False
 
     def _clear(self) -> None:
         while self._row.count():
@@ -345,7 +370,7 @@ class _GroupPreviewPopup(QWidget):
                 w.deleteLater()
         self._labels = []
 
-    def show_for(self, crop_paths: list[str], global_pos) -> None:
+    def show_for(self, crop_paths: list[str], global_pos, source: Optional[QWidget] = None) -> None:
         self._clear()
         shown = crop_paths[:_GROUP_PREVIEW_MAX]
         for cp in shown:
@@ -375,7 +400,28 @@ class _GroupPreviewPopup(QWidget):
         if y + self.height() > screen.bottom():
             y = global_pos.y() - self.height() - 16
         self.move(x, y)
+        self._source = source
         self.show()
+        if source is not None and not self._filter_active:
+            QApplication.instance().installEventFilter(self)
+            self._filter_active = True
+
+    def hide(self) -> None:
+        if self._filter_active:
+            QApplication.instance().removeEventFilter(self)
+            self._filter_active = False
+        self._source = None
+        super().hide()
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseMove and self._source is not None:
+            try:
+                tl = self._source.mapToGlobal(QPoint(0, 0))
+                if not QRect(tl, self._source.size()).contains(QCursor.pos()):
+                    self.hide()
+            except RuntimeError:
+                self.hide()
+        return False
 
 
 _group_popup = None
@@ -437,7 +483,7 @@ class FaceGroupTile(QLabel):
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
         _get_group_popup().show_for(
-            self._member_crops, self.mapToGlobal(self.rect().center())
+            self._member_crops, self.mapToGlobal(self.rect().center()), self
         )
 
     def leaveEvent(self, event) -> None:
@@ -739,9 +785,16 @@ class ClusterPanel(QWidget):
     def _ensure_groups(self) -> None:
         if self._groups:
             return
-        from app.services.face_grouping_service import group_faces
+        from app.services.face_grouping_service import deoldified_pair_key, group_faces
+
+        def _pair_key(face: Face):
+            img = getattr(face, "image", None)
+            return deoldified_pair_key(img.file_path) if img else None
+
         # Group in incoming order; ordering for display is applied separately.
-        self._groups = group_faces(self._faces)
+        # ``pair_key_fn`` forces colorized/B&W variants of the same photo into
+        # one stack, matching the image browser's comparison grouping.
+        self._groups = group_faces(self._faces, pair_key_fn=_pair_key)
 
     def _ordered_groups(self) -> list:
         """Return the merged groups ordered to match the active sort mode."""

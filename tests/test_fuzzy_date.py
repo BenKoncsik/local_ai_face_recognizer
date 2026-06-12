@@ -32,6 +32,12 @@ from app.utils.fuzzy_date import FuzzyDate, Precision
         # Open-ended
         ("1945 előtt", Precision.BEFORE, None, date(1945, 12, 31), False),
         ("1945 után", Precision.AFTER, date(1945, 1, 1), None, False),
+        # Date + clock time (EXIF / filename) → exact date, time ignored, not estimated
+        ("2008.05.03 14:22:01", Precision.EXACT, date(2008, 5, 3), date(2008, 5, 3), False),
+        ("2008:05:03 14:22:01", Precision.EXACT, date(2008, 5, 3), date(2008, 5, 3), False),
+        ("2008.05.03 14.22.01", Precision.EXACT, date(2008, 5, 3), date(2008, 5, 3), False),
+        ("2008:05:03", Precision.EXACT, date(2008, 5, 3), date(2008, 5, 3), False),
+        ("1954-03-12T09:30", Precision.EXACT, date(1954, 3, 12), date(1954, 3, 12), False),
     ],
 )
 def test_parse_matrix(raw, precision, earliest, latest, estimated):

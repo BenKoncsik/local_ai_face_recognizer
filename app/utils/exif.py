@@ -208,16 +208,21 @@ _DATE_PATTERNS: list[tuple[str, str]] = [
 def parse_flexible_date(date_str: str) -> Optional[datetime]:
     """Parse a flexible date string into a :class:`datetime`, or return ``None``.
 
-    Handles: "1954.03.12", "1954-03-12", "1954/03/12", "1954.03", "1954".
-    Year-only → Jan 1st; year-month-only → 1st of that month.
+    Handles: "1954.03.12", "1954-03-12", "1954/03/12", "1954:03:12", "1954.03",
+    "1954", and any of those followed by a clock time (EXIF
+    ``"1954:03:12 14:22:01"`` / filename ``"1954.03.12 14.22.01"``); the time is
+    ignored.  Year-only → Jan 1st; year-month-only → 1st of that month.
     """
     if not date_str:
         return None
 
     s = date_str.strip()
 
-    # Normalise separators to "-"
-    normalised = re.sub(r"[./]", "-", s)
+    # Keep only the date portion: drop anything from the first space or "T".
+    s = re.split(r"[ T]", s, maxsplit=1)[0]
+
+    # Normalise separators (including EXIF colons) to "-"
+    normalised = re.sub(r"[.:/]", "-", s)
 
     formats = ["%Y-%m-%d", "%Y-%m", "%Y"]
     for fmt in formats:

@@ -176,6 +176,9 @@ class FuzzyDate:
             is_estimated = True
             s = s.replace("?", " ")
         s = re.sub(r"\s+", " ", s).strip(" .,-–—")
+        # Drop a trailing clock time (EXIF "… 14:22:01" / filename "… 14.22.01")
+        # so precision is judged on the date alone, not the time digits.
+        s = re.sub(r"[ T]\d{1,2}[:.]\d{2}(?:[:.]\d{2})?$", "", s).strip()
 
         if not s:
             return cls.unknown(raw)

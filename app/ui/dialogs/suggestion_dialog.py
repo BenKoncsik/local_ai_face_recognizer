@@ -19,8 +19,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, Signal, Slot
+from PySide6.QtGui import QCursor, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -82,47 +82,76 @@ def _crop_pixmap(path: Optional[str]) -> Optional[QPixmap]:
 
 
 # Singleton zoom popup shared across all suggestion rows
-_zoom_popup: Optional[QLabel] = None
-
-
-def _get_zoom_popup() -> QLabel:
-    global _zoom_popup
-    if _zoom_popup is None:
-        lbl = QLabel(None, Qt.ToolTip | Qt.FramelessWindowHint)
-        lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(
+class _ZoomPopup(QLabel):
+    def __init__(self) -> None:
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
             "QLabel { background: #1a1a1a; border: 2px solid #88aaff; "
             "border-radius: 6px; padding: 4px; }"
         )
-        lbl.setFixedSize(_ZOOM_POPUP_SIZE + 8, _ZOOM_POPUP_SIZE + 8)
-        _zoom_popup = lbl
+        self.setFixedSize(_ZOOM_POPUP_SIZE + 8, _ZOOM_POPUP_SIZE + 8)
+        self._source: Optional[QWidget] = None
+        self._filter_active: bool = False
+
+    def show_for(self, crop_path: Optional[str], global_pos, source: Optional[QWidget] = None) -> None:
+        if crop_path and Path(crop_path).exists():
+            from app.utils.image_utils import load_pixmap_exif
+            pix = load_pixmap_exif(crop_path).scaled(
+                _ZOOM_POPUP_SIZE, _ZOOM_POPUP_SIZE,
+                Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            )
+            self.setPixmap(pix)
+        else:
+            self.setText("?")
+
+        screen = QApplication.primaryScreen().geometry()
+        x = global_pos.x() + 16
+        y = global_pos.y() - self.height() // 2
+        if x + self.width() > screen.right():
+            x = global_pos.x() - self.width() - 16
+        if y < screen.top():
+            y = screen.top() + 4
+        if y + self.height() > screen.bottom():
+            y = screen.bottom() - self.height() - 4
+        self.move(x, y)
+        self._source = source
+        self.show()
+        if source is not None and not self._filter_active:
+            QApplication.instance().installEventFilter(self)
+            self._filter_active = True
+
+    def hide(self) -> None:
+        if self._filter_active:
+            QApplication.instance().removeEventFilter(self)
+            self._filter_active = False
+        self._source = None
+        super().hide()
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseMove and self._source is not None:
+            try:
+                tl = self._source.mapToGlobal(QPoint(0, 0))
+                if not QRect(tl, self._source.size()).contains(QCursor.pos()):
+                    self.hide()
+            except RuntimeError:
+                self.hide()
+        return False
+
+
+_zoom_popup: Optional[_ZoomPopup] = None
+
+
+def _get_zoom_popup() -> _ZoomPopup:
+    global _zoom_popup
+    if _zoom_popup is None:
+        _zoom_popup = _ZoomPopup()
     return _zoom_popup
 
 
-def _show_zoom_popup(crop_path: Optional[str], global_pos) -> None:
-    popup = _get_zoom_popup()
-    if crop_path and Path(crop_path).exists():
-        from app.utils.image_utils import load_pixmap_exif
-        pix = load_pixmap_exif(crop_path).scaled(
-            _ZOOM_POPUP_SIZE, _ZOOM_POPUP_SIZE,
-            Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        )
-        popup.setPixmap(pix)
-    else:
-        popup.setText("?")
-
-    screen = QApplication.primaryScreen().geometry()
-    x = global_pos.x() + 16
-    y = global_pos.y() - popup.height() // 2
-    if x + popup.width() > screen.right():
-        x = global_pos.x() - popup.width() - 16
-    if y < screen.top():
-        y = screen.top() + 4
-    if y + popup.height() > screen.bottom():
-        y = screen.bottom() - popup.height() - 4
-    popup.move(x, y)
-    popup.show()
+def _show_zoom_popup(crop_path: Optional[str], global_pos, source: Optional[QWidget] = None) -> None:
+    _get_zoom_popup().show_for(crop_path, global_pos, source)
 
 
 def _hide_zoom_popup() -> None:
@@ -176,7 +205,7 @@ class _ClickableCrop(QLabel):
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
-        _show_zoom_popup(self._crop_path, self.mapToGlobal(self.rect().center()))
+        _show_zoom_popup(self._crop_path, self.mapToGlobal(self.rect().center()), self)
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
@@ -648,6 +677,10 @@ class SuggestionDialog(QDialog):
         self._tabs.addTab(suggestions_tab, t("suggestions_tab_matches"))
 
         self._tabs.currentChanged.connect(self._on_tab_changed)
+        # The initially-current tab never emits ``currentChanged``, so its
+        # lazy ``ensure_loaded`` would never fire until the user switched tabs
+        # and came back.  Load whatever tab is shown first, right now.
+        self._on_tab_changed(self._tabs.currentIndex())
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)

@@ -13,11 +13,16 @@ Updates in real-time via :meth:`update_info` called from the main window.
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygon
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -378,6 +383,421 @@ class _GatesWidget(QWidget):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Neural-network graph visualization — node/circle based
+# ──────────────────────────────────────────────────────────────────────────────
+
+_NN_NODE_R     = 14    # node circle radius (px)
+_NN_NODE_DIA   = 2 * _NN_NODE_R
+_NN_NODE_PITCH = _NN_NODE_DIA + 10   # vertical centre-to-centre spacing = 38px
+_NN_TOP_N      = 15    # nodes shown per layer
+
+_NN_IDX_W      = 46    # left index label (non-output: "d89", "n32")
+_NN_VAL_W      = 48    # right value label ("0.254")
+_NN_COL_W      = _NN_IDX_W + _NN_NODE_DIA + 6 + _NN_VAL_W   # ≈ 122px
+_NN_OUT_NAME_W = 138   # output: person name label width
+_NN_OUT_COL_W  = _NN_NODE_DIA + 8 + _NN_OUT_NAME_W + _NN_VAL_W   # ≈ 222px
+
+_NN_CONN_W     = 90    # Bézier connection area between columns
+_NN_HEAD_H     = 54    # column header height
+_NN_FOOT_H     = 36    # column footer height
+_NN_CONTENT_H  = _NN_TOP_N * _NN_NODE_PITCH + 10   # ≈ 580px
+_NN_TOTAL_H    = _NN_HEAD_H + _NN_CONTENT_H + _NN_FOOT_H + 20
+_NN_PAD        = 14    # left/right page margin
+_NN_FAN        = 4     # max fan-out Bézier connections per source node
+
+_C_NODE_BG     = QColor(28, 28, 44)   # inactive node fill
+_C_NODE_BORDER = QColor(65, 65, 88)   # default node border
+
+
+def _nn_color(frac: float, alpha: int = 255) -> QColor:
+    """Map [0, 1] activation fraction to dark-blue → bright-orange."""
+    frac = max(0.0, min(1.0, frac))
+    r = int(30  + frac * 225)
+    g = int(100 + frac * 80)
+    b = int(200 - frac * 160)
+    c = QColor(r, g, b)
+    c.setAlpha(alpha)
+    return c
+
+
+class NeuralNetworkGraphWidget(QWidget):
+    """Neural-network activation graph: circle nodes + Bézier edge connections.
+
+    Columns (left → right):
+      • Input embedding  — top-N active embedding dimensions
+      • Hidden layer(s)  — top-N neurons per hidden layer (when available)
+      • Output / Sim     — top-N output probabilities or cosine similarities
+
+    Each node is a circle filled with the activation colour (dark = inactive,
+    orange = highly active).  Bézier curves fan between adjacent columns,
+    with opacity proportional to the source node's activation.
+    Prototype mode (no MLP) shows cosine similarities as the output column.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        # Each entry: (title, vals_ndarray, labels_list, is_output)
+        self._layers: List[tuple] = []
+        self._winner: str = ""
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(_NN_TOTAL_H)
+        self.setMinimumWidth(400)
+
+    def set_data(
+        self,
+        embedding_top_dims: List[tuple],
+        layer_activations: List[np.ndarray],
+        output_probs: Dict[str, float],
+        all_similarities: Optional[Dict[str, float]] = None,
+        embedding_dim: int = 192,
+        winner: str = "",
+    ) -> None:
+        layers = []
+
+        # ── Input: top-N active embedding dims ───────────────────────────
+        top_dims = sorted(embedding_top_dims or [], key=lambda x: -abs(x[1]))[:_NN_TOP_N]
+        if top_dims:
+            labels = [f"d{idx}" for idx, _ in top_dims]
+            vals   = np.array([abs(float(v)) for _, v in top_dims], dtype=np.float64)
+            layers.append((f"Input ({embedding_dim})", vals, labels, False))
+
+        # ── Hidden layers: top-N neurons by activation ───────────────────
+        for i, acts in enumerate(layer_activations or []):
+            a = np.abs(np.asarray(acts, dtype=np.float64))
+            top_idx = np.argsort(a)[::-1][:_NN_TOP_N]
+            labels  = [f"n{int(j)}" for j in top_idx]
+            vals    = a[top_idx]
+            layers.append((f"Hidden {i + 1}  ({len(a)})", vals, labels, False))
+
+        # ── Output: probabilities; fallback → cosine similarities ────────
+        if output_probs:
+            top = sorted(output_probs.items(), key=lambda kv: -kv[1])[:_NN_TOP_N]
+            labels = [n for n, _ in top]
+            vals   = np.array([v for _, v in top], dtype=np.float64)
+            layers.append((f"Output  ({len(output_probs)})", vals, labels, True))
+        elif all_similarities:
+            top = sorted(all_similarities.items(), key=lambda kv: -kv[1])[:_NN_TOP_N]
+            labels = [n for n, _ in top]
+            vals   = np.array([v for _, v in top], dtype=np.float64)
+            layers.append((f"Cosine sim  ({len(all_similarities)})", vals, labels, True))
+
+        self._layers = layers
+        self._winner = winner
+
+        n = len(layers)
+        has_out = n > 0 and layers[-1][3]
+        inner   = (n - 1) if has_out else n
+        w = _NN_PAD + inner * _NN_COL_W + max(0, inner - 1) * _NN_CONN_W
+        if has_out:
+            w += _NN_CONN_W + _NN_OUT_COL_W
+        w += _NN_PAD
+        self.setMinimumSize(max(400, w), _NN_TOTAL_H)
+        self.resize(max(400, w), _NN_TOTAL_H)
+        self.update()
+
+    # ── Geometry helpers ─────────────────────────────────────────────────
+
+    def _col_x(self, i: int) -> int:
+        """Left x of column i."""
+        return _NN_PAD + i * (_NN_COL_W + _NN_CONN_W)
+
+    def _node_cx(self, i: int) -> int:
+        """Centre-x of the circle in column i."""
+        is_out = bool(self._layers[i][3]) if i < len(self._layers) else False
+        x = self._col_x(i)
+        return x + (_NN_NODE_R + 4 if is_out else _NN_IDX_W + _NN_NODE_R + 2)
+
+    def _node_cy(self, rank: int) -> int:
+        """Centre-y of node at rank (0-based)."""
+        return _NN_HEAD_H + 6 + rank * _NN_NODE_PITCH + _NN_NODE_R
+
+    # ── Paint ─────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        if not self._layers:
+            font = QFont()
+            font.setPointSize(10)
+            p.setFont(font)
+            p.setPen(_C_DIM)
+            p.drawText(self.rect(), Qt.AlignCenter, t("debug_nn_no_data"))
+            p.end()
+            return
+
+        # 1. Bézier edge connections (drawn behind nodes)
+        for i in range(len(self._layers) - 1):
+            self._draw_connections(p, i)
+
+        # 2. Node columns on top
+        for i, (title, vals, labels, is_out) in enumerate(self._layers):
+            self._draw_column(p, i, title, vals, labels, is_out)
+
+        p.end()
+
+    def _draw_column(
+        self,
+        p: QPainter,
+        col_idx: int,
+        title: str,
+        vals: np.ndarray,
+        labels: List[str],
+        is_out: bool,
+    ) -> None:
+        n       = len(vals)
+        max_val = float(vals.max()) if n and vals.max() > 0 else 1.0
+        mean_v  = float(vals.mean()) if n else 0.0
+        x       = self._col_x(col_idx)
+        cx      = self._node_cx(col_idx)
+        col_w   = _NN_OUT_COL_W if is_out else _NN_COL_W
+
+        # ── Header ──────────────────────────────────────────────────────
+        font = QFont()
+        font.setPointSize(9)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(_C_TEXT)
+        header_x = x if is_out else x
+        p.drawText(header_x, 4, col_w, _NN_HEAD_H // 2,
+                   Qt.AlignHCenter | Qt.AlignVCenter, title)
+        if not is_out and n:
+            font.setBold(False)
+            font.setPointSize(7)
+            p.setFont(font)
+            p.setPen(_C_DIM)
+            p.drawText(header_x, _NN_HEAD_H // 2 + 2, col_w, _NN_HEAD_H // 2 - 4,
+                       Qt.AlignHCenter | Qt.AlignVCenter,
+                       f"top {n} aktív")
+
+        # ── Nodes ────────────────────────────────────────────────────────
+        for rank in range(n):
+            cy   = self._node_cy(rank)
+            val  = float(vals[rank])
+            frac = val / max_val
+            color = _nn_color(frac)
+            is_win = is_out and (labels[rank] == self._winner)
+
+            # Glow ring behind winner node
+            if is_win:
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(60, 190, 120, 45))
+                p.drawEllipse(cx - _NN_NODE_R - 5, cy - _NN_NODE_R - 5,
+                              _NN_NODE_DIA + 10, _NN_NODE_DIA + 10)
+
+            # Node circle
+            border = _C_ASSIGN if is_win else (color if frac > 0.15 else _C_NODE_BORDER)
+            fill   = QColor(
+                int(_C_NODE_BG.red()   + frac * (color.red()   - _C_NODE_BG.red())),
+                int(_C_NODE_BG.green() + frac * (color.green() - _C_NODE_BG.green())),
+                int(_C_NODE_BG.blue()  + frac * (color.blue()  - _C_NODE_BG.blue())),
+            )
+            p.setPen(QPen(border, 1.5))
+            p.setBrush(fill)
+            p.drawEllipse(cx - _NN_NODE_R, cy - _NN_NODE_R,
+                          _NN_NODE_DIA, _NN_NODE_DIA)
+
+            # Index label (left of node, non-output only)
+            if not is_out:
+                font.setPointSize(7)
+                font.setBold(False)
+                p.setFont(font)
+                p.setPen(_C_DIM)
+                p.drawText(x, cy - _NN_NODE_R, _NN_IDX_W - 4, _NN_NODE_DIA,
+                           Qt.AlignRight | Qt.AlignVCenter, labels[rank])
+
+            # Value label (right of node)
+            label_x = cx + _NN_NODE_R + 5
+            if is_out:
+                # Name + value
+                font.setPointSize(8)
+                font.setBold(is_win)
+                p.setFont(font)
+                p.setPen(_C_ASSIGN if is_win else color)
+                name_str = f"{labels[rank][:17]}  {val:.3f}"
+                p.drawText(label_x, cy - _NN_NODE_R,
+                           _NN_OUT_NAME_W + _NN_VAL_W - 4, _NN_NODE_DIA,
+                           Qt.AlignLeft | Qt.AlignVCenter, name_str)
+            else:
+                font.setPointSize(7)
+                font.setBold(False)
+                p.setFont(font)
+                p.setPen(color if frac > 0.2 else _C_DIM)
+                p.drawText(label_x, cy - _NN_NODE_R, _NN_VAL_W, _NN_NODE_DIA,
+                           Qt.AlignLeft | Qt.AlignVCenter, f"{val:.3f}")
+
+        # ── Footer ───────────────────────────────────────────────────────
+        font.setBold(False)
+        font.setPointSize(7)
+        p.setFont(font)
+        p.setPen(_C_DIM)
+        fy = _NN_HEAD_H + _NN_CONTENT_H + 4
+        p.drawText(x, fy, col_w, _NN_FOOT_H - 4,
+                   Qt.AlignHCenter | Qt.AlignTop,
+                   f"max {max_val:.3f}   μ {mean_v:.3f}")
+
+    def _draw_connections(self, p: QPainter, layer_idx: int) -> None:
+        _, src_vals, _, _ = self._layers[layer_idx]
+        _, dst_vals, _, _ = self._layers[layer_idx + 1]
+
+        n_src = len(src_vals)
+        n_dst = len(dst_vals)
+        if not n_src or not n_dst:
+            return
+
+        max_src = float(src_vals.max()) if src_vals.max() > 0 else 1.0
+
+        src_cx = self._node_cx(layer_idx)
+        dst_cx = self._node_cx(layer_idx + 1)
+        x1  = src_cx + _NN_NODE_R        # right edge of source node
+        x2  = dst_cx - _NN_NODE_R        # left edge of destination node
+        cx1 = x1 + (x2 - x1) // 3
+        cx2 = x2 - (x2 - x1) // 3
+
+        # Reproducible fan-out: active nodes connect to several destinations
+        rng = np.random.default_rng(seed=layer_idx * 997 + n_src * 31 + n_dst)
+        p.setBrush(Qt.NoBrush)
+
+        for src_rank in range(n_src):
+            frac = float(src_vals[src_rank]) / max_src
+            if frac < 0.04:
+                continue
+            fan_count = max(1, min(int(frac * _NN_FAN + 0.5), n_dst))
+            dst_ranks = rng.choice(n_dst, size=fan_count, replace=False)
+
+            y1 = self._node_cy(src_rank)
+            alpha = max(22, int(frac * 95))
+
+            for dr in dst_ranks:
+                y2  = self._node_cy(int(dr))
+                pen = QPen(_nn_color(frac, alpha=alpha), 1)
+                pen.setCapStyle(Qt.RoundCap)
+                p.setPen(pen)
+                path = QPainterPath()
+                path.moveTo(x1, y1)
+                path.cubicTo(cx1, y1, cx2, y2, x2, y2)
+                p.drawPath(path)
+
+
+_NN_CACHE_FILE = Path("data/nn_graph_last.json")
+
+
+class NeuralNetworkGraphDialog(QDialog):
+    """Standalone window with the full neural-network activation graph.
+
+    Opened from the Debug tab (Settings) or from the AI Decision Visualizer
+    toolbar.  Uses ``Qt.Window`` so it shows even when Settings is modal.
+
+    Persists the last received activation data to *data/nn_graph_last.json*
+    so closing and reopening the window restores the previous state.
+
+    Call :meth:`update_from_info` to feed a
+    :class:`~app.deep.debug_info.DeepDebugInfo` object.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(t("debug_nn_title"))
+        self.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        self.resize(1050, 660)
+        self._build_ui()
+        self._load_cache()   # restore last run data immediately
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._info_label = QLabel(t("debug_nn_waiting"))
+        self._info_label.setStyleSheet(
+            "font-family: monospace; font-size: 10px; color: #aaa; padding: 2px 4px;"
+        )
+        layout.addWidget(self._info_label)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
+        self._graph = NeuralNetworkGraphWidget()
+        scroll.setWidget(self._graph)
+        layout.addWidget(scroll, stretch=1)
+
+    # ── Cache helpers ─────────────────────────────────────────────────────
+
+    def _save_cache(self, data: dict) -> None:
+        try:
+            _NN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with _NN_CACHE_FILE.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except Exception:
+            log.debug("nn_graph: cache write failed", exc_info=True)
+
+    def _load_cache(self) -> None:
+        try:
+            if not _NN_CACHE_FILE.exists():
+                return
+            with _NN_CACHE_FILE.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            self._render_from_dict(data)
+        except Exception:
+            log.debug("nn_graph: cache read failed", exc_info=True)
+
+    def _render_from_dict(self, data: dict) -> None:
+        face_id    = data.get("face_id", -1)
+        mode       = data.get("mode", "?")
+        decision   = data.get("decision", "?")
+        person_name = data.get("person_name") or "?"
+        winner     = data.get("winner", "")
+
+        embedding_top_dims = [tuple(x) for x in data.get("embedding_top_dims") or []]
+        layer_activations  = [np.array(a, dtype=np.float64) for a in data.get("layer_activations") or []]
+        output_probs       = data.get("output_probs") or {}
+        all_similarities   = data.get("all_similarities") or {}
+
+        n_hidden   = len(layer_activations)
+        n_out      = len(output_probs)
+        face_text  = f"Face #{face_id}" if face_id >= 0 else "—"
+        mode_note  = "  (prototype — MLP nem aktív, cosine sim látható)" if mode == "prototype" else ""
+        self._info_label.setText(
+            f"{face_text}   mode: {mode}{mode_note}   "
+            f"hidden: {n_hidden}   output: {n_out}   "
+            f"döntés: {decision}  →  {person_name}"
+        )
+        self._graph.set_data(
+            embedding_top_dims=embedding_top_dims,
+            layer_activations=layer_activations,
+            output_probs=output_probs,
+            all_similarities=all_similarities,
+            winner=winner,
+        )
+
+    # ── Public update ─────────────────────────────────────────────────────
+
+    def update_from_info(self, info: object) -> None:
+        """Feed a DeepDebugInfo; silently ignores objects of a wrong type."""
+        from app.deep.debug_info import DeepDebugInfo
+        if not isinstance(info, DeepDebugInfo):
+            return
+        pred      = info.prediction
+        winner    = pred.person_name if pred and pred.reason == "assigned" else ""
+
+        cache = {
+            "face_id":           info.face_id,
+            "mode":              info.mode,
+            "decision":          pred.reason,
+            "person_name":       pred.person_name or "",
+            "winner":            winner,
+            "embedding_top_dims": [[int(i), float(v)] for i, v in (info.embedding_top_dims or [])],
+            "layer_activations": [a.tolist() for a in (info.layer_activations or [])],
+            "output_probs":      {k: float(v) for k, v in (info.output_probs or {}).items()},
+            "all_similarities":  {k: float(v) for k, v in (info.all_similarities or {}).items()},
+        }
+        self._save_cache(cache)
+        self._render_from_dict(cache)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main window
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -440,6 +860,12 @@ class AIVisualizationWindow(QDialog):
         nav.addWidget(self._btn_next)
         nav.addWidget(self._btn_last)
         nav.addStretch()
+
+        self._btn_nn_graph = QPushButton(t("debug_nn_open_btn"))
+        self._btn_nn_graph.setToolTip(t("debug_nn_open_tooltip"))
+        self._btn_nn_graph.clicked.connect(self._open_nn_graph)
+        nav.addWidget(self._btn_nn_graph)
+
         outer.addLayout(nav)
 
         scroll = QScrollArea()
@@ -511,6 +937,17 @@ class AIVisualizationWindow(QDialog):
         layout.addStretch()
         scroll.setWidget(container)
         outer.addWidget(scroll)
+
+    # ── Neural graph ──────────────────────────────────────────────────────
+
+    def _open_nn_graph(self) -> None:
+        if not hasattr(self, "_nn_dlg") or self._nn_dlg is None:
+            self._nn_dlg = NeuralNetworkGraphDialog(parent=self)
+        idx = len(self._history) - 1 if self._view_idx == -1 else self._view_idx
+        if 0 <= idx < len(self._history):
+            self._nn_dlg.update_from_info(self._history[idx])
+        self._nn_dlg.show()
+        self._nn_dlg.raise_()
 
     # ── Public slot ───────────────────────────────────────────────────────
 
@@ -702,3 +1139,7 @@ class AIVisualizationWindow(QDialog):
                     (name, sim, max(max_sim, 1e-6))
                     for name, sim in top
                 ])
+
+        # Live-feed open neural graph dialog
+        if hasattr(self, "_nn_dlg") and self._nn_dlg is not None and self._nn_dlg.isVisible():
+            self._nn_dlg.update_from_info(info)

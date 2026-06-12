@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
+    QLabel,
 )
 
 from app.services.face_date_service import FaceDateResolver
@@ -83,6 +84,15 @@ class FaceTimelineView(QGraphicsView):
         self._start_year = 0.0
         self._end_year = 0.0
 
+        # Fixed viewport overlay for the "N undated photos" note — kept out of
+        # the scene so it never scrolls into / collides with the year axis.
+        self._undated_label = QLabel(self.viewport())
+        self._undated_label.setStyleSheet(
+            "QLabel { color: #9399b2; background: rgba(30,30,46,200); "
+            "border-radius: 4px; padding: 2px 6px; }"
+        )
+        self._undated_label.hide()
+
     # ------------------------------------------------------------------
     def set_data(
         self,
@@ -110,6 +120,7 @@ class FaceTimelineView(QGraphicsView):
         bounds = self._compute_bounds(dated, birth, death)
         if bounds is None:
             self._show_empty()
+            self._show_undated(undated)
             return
         self._start_year, self._end_year = bounds
 
@@ -119,8 +130,7 @@ class FaceTimelineView(QGraphicsView):
         height = _LANE_TOP + max(1, rows) * _ROW_H + 6
         self._draw_axis(height)
         self._draw_milestones(birth, death, height)
-        if undated:
-            self._draw_undated_note(undated)
+        self._show_undated(undated)
 
         # Give the scene a little vertical breathing room below the lanes.
         rect = self._scene.itemsBoundingRect()
@@ -280,12 +290,29 @@ class FaceTimelineView(QGraphicsView):
         p.end()
         return canvas
 
-    def _draw_undated_note(self, count: int) -> None:
-        font = QFont()
-        font.setPixelSize(11)
-        note = self._scene.addText(t("timeline_undated", n=count), font)
-        note.setDefaultTextColor(QColor("#9399b2"))
-        note.setPos(_LEFT_PAD, _AXIS_Y - 22)
+    def _show_undated(self, count: int) -> None:
+        """Update the fixed corner overlay noting how many photos are undated."""
+        if count <= 0:
+            self._undated_label.hide()
+            return
+        self._undated_label.setText(t("timeline_undated", n=count))
+        self._undated_label.adjustSize()
+        self._undated_label.show()
+        self._reposition_undated()
+
+    def _reposition_undated(self) -> None:
+        m = 8
+        vp = self.viewport()
+        y = max(m, vp.height() - self._undated_label.height() - m)
+        self._undated_label.move(m, y)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._reposition_undated()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        self._reposition_undated()
 
     def _show_empty(self) -> None:
         font = QFont()

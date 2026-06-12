@@ -1818,6 +1818,12 @@ class MainWindow(QMainWindow):
         if dlg.exec() != SettingsDialog.Accepted:
             return
 
+        # Neural graph deferred open — triggered by the Debug-tab button.
+        # The modal exec() above blocks any new window; open it now that it's closed.
+        if getattr(self, "_pending_open_nn_graph", False):
+            self._pending_open_nn_graph = False
+            self._open_nn_graph_window()
+
         # Database change
         new_db = dlg.selected_db_path()
         if new_db and new_db != self._db_path:
@@ -3562,10 +3568,30 @@ class MainWindow(QMainWindow):
         self._ai_viz_window.show()
         self._ai_viz_window.raise_()
 
+    def _open_nn_graph_window(self) -> None:
+        from app.ui.dialogs.ai_visualization_window import NeuralNetworkGraphDialog
+        if not hasattr(self, "_nn_graph_window") or self._nn_graph_window is None:
+            self._nn_graph_window = NeuralNetworkGraphDialog(parent=self)
+        # Feed the latest available info if the AI viz window has history
+        if (
+            hasattr(self, "_ai_viz_window")
+            and self._ai_viz_window is not None
+            and self._ai_viz_window._history
+        ):
+            self._nn_graph_window.update_from_info(self._ai_viz_window._history[-1])
+        self._nn_graph_window.show()
+        self._nn_graph_window.raise_()
+
     @Slot(object)
     def _on_face_debug(self, info: object) -> None:
         if hasattr(self, "_ai_viz_window") and self._ai_viz_window is not None:
             self._ai_viz_window.update_info(info)
+        if (
+            hasattr(self, "_nn_graph_window")
+            and self._nn_graph_window is not None
+            and self._nn_graph_window.isVisible()
+        ):
+            self._nn_graph_window.update_from_info(info)
 
     # ------------------------------------------------------------------
     # Deep learning model export / import

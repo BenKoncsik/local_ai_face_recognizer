@@ -211,12 +211,25 @@ def _migrate_deep_recognition_tables(engine: Engine) -> None:
                         REFERENCES persons(id) ON DELETE SET NULL,
                     score               FLOAT NOT NULL DEFAULT 0.0,
                     status              VARCHAR(16) NOT NULL DEFAULT 'auto',
+                    decision_json       TEXT,
                     created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
                     decided_at          DATETIME
                 )
                 """
             )
         )
+        # Add decision_json to auto_assignments tables created before it existed.
+        existing_aa = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info(auto_assignments)")
+            ).fetchall()
+        }
+        if "decision_json" not in existing_aa:
+            conn.execute(
+                text("ALTER TABLE auto_assignments ADD COLUMN decision_json TEXT")
+            )
+            log.info("Migration: added column auto_assignments.decision_json")
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_auto_assignments_training_run_id "

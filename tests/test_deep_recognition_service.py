@@ -135,6 +135,31 @@ class TestTrainAndRecognize:
             assert runs[0].n_persons == 2
             assert runs[0].finished_at is not None
 
+    def test_assignment_records_decision_graph(self, tmp_db, tmp_path):
+        """Each assignment stores a parseable deep decision graph."""
+        import json
+
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+            _add_face(s, img, None, _vec(0, seed=999), source=None)
+
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+
+        with session_scope() as s:
+            row = s.query(AutoAssignment).one()
+            assert row.decision_json is not None
+            decision = json.loads(row.decision_json)
+            assert decision["engine"] == "deep"
+            assert decision["reason"] == "assigned"
+            assert isinstance(decision["gates"], list) and decision["gates"]
+            # Loader surfaces the parsed dict on the DTO.
+            dtos = DeepRecognitionService(s).list_auto_assignments(only_open=True)
+            assert dtos and dtos[0].decision is not None
+            assert dtos[0].decision["engine"] == "deep"
+
     def test_named_faces_are_never_touched(self, tmp_db, tmp_path):
         """An already recognized face keeps its person — the old one wins."""
         cfg = _fast_config(tmp_path)

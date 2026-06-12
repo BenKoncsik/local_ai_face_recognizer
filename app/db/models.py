@@ -1119,6 +1119,12 @@ class AutoAssignment(Base):
         String(16), nullable=False, default=AUTO_ASSIGN_STATUS_AUTO, index=True
     )
 
+    # Serialized deep-engine decision graph (gates + winner probabilities)
+    # captured at assignment time, so the review tab can show *why* the AI made
+    # this grouping — the same flow graph as the live AI debug view.  NULL for
+    # rows created before this column existed.
+    decision_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
