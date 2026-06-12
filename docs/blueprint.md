@@ -1,181 +1,164 @@
 # Face-Local Blueprint
 
-Aktuális alkalmazás-architektúra dokumentáció a jelenlegi kódbázishoz.
+Frissítve: 2026-06-12
 
-## 1. Áttekintés
+Ez a dokumentum a jelenlegi kodbazis architekturajat irja le. Nem user manual,
+hanem fejlesztoi terkep: melyik domain hol lakik, milyen pipeline mozgatja az
+adatokat, es mely contractokat kell megorizni, amikor uj funkcio vagy migracio
+kerul a rendszerbe.
 
-A Face-Local lokálisan futó, PySide6 alapú asztali alkalmazás családi és archív fotógyűjtemények feldolgozására. Képmappákat vagy Google Drive projektmappát indexel, arcokat detektál, embeddingeket készít, személyeket tanul felhasználói címkékből, automatikus hozzárendeléseket és névjavaslatokat ad, majd személy-, kép-, családi-, helyszín-, kollázs- és export nézetekben teszi kezelhetővé az archívumot.
+## 1. Rendszerkep
 
-Az alap működés lokális: az SQLite adatbázis, a cropok, a modellek és a beállítások helyben vannak. A Google Drive funkció opcionális projekt-sync és távoli képforrás réteg, nem kötelező felhő backend.
+A Face-Local lokalisan futo, PySide6 alapu desktop alkalmazas csaladi es
+archiv fotogyujtemenyek feldolgozasara. Kepeket indexel lokalis mappabol vagy
+Google Drive projektbol, arcokat detektal, embeddingeket keszit, szemelyeket
+tanul a felhasznaloi cimkekbol, ismeretlen arcokat klaszterez, merge- es
+nevjavaslatokat ad, majd a teljes gyujtemenyt szemely, kep, csalad, hely,
+targy, kollazs es export nezopontokbol teszi kezelhetove.
 
-### Fő technológiák
+Az alapmodell privacy-first: az SQLite adatbazis, cropok, modellek,
+beallitasok es exportok helyben vannak. A Google Drive integracio opcionális
+projekt-sync es tavoli kepforras reteg, nem kotelezo felho backend.
 
-| Terület | Megoldás |
+### Fobb kepessegek
+
+| Terulet | Jelenlegi allapot |
+|---|---|
+| Klasszikus arc pipeline | scan -> detect -> embed -> dedup -> recognize -> ignored filter -> unknown clustering -> consistency -> suggestions |
+| AI/deep pipeline | rescan, rebuild, train-only es analysis-only face detection modok |
+| Detektalas | Coral Edge TPU, OpenCV YuNet, OpenCV DNN SSD, Haar fallback |
+| Embedding | TFLite CPU backend, OpenCV SFace fallback, HOG teszt fallback |
+| Felismeres | prototipus/centroid alapu klasszikus felismeres es MLP ensemble alapu deep recognition |
+| Adatkezeles | SQLite + SQLAlchemy ORM, WAL, idempotens schema migraciok |
+| UI | PySide6/Qt tabok, dialogusok, QRunnable/QThread hattermunkak |
+| Tavoli munka | Google Drive OAuth, Drive API, lock/heartbeat alapu projekt-session |
+| Export | CSV/JSON/Excel metadata, kep/crop export, Astro statikus galeria, kollazs HTML, `.facepack` |
+| Helyszin | EXIF GPS, strukturalt cim, opt-in Nominatim geokodolas, hierarchia |
+| Targyak | manualis object tagging, elofordulasok, szemely-szerep kapcsolatok |
+| Recording | ffmpeg alapu dokumentacios kepernyorogzites, timeline es metadata log |
+
+### Technologiai stack
+
+| Terulet | Megoldas |
 |---|---|
 | Nyelv | Python 3.11+ |
-| UI | PySide6 / Qt |
-| Adatbázis | SQLite + SQLAlchemy ORM, WAL móddal |
-| Detektálás | Coral Edge TPU TFLite, OpenCV YuNet, OpenCV DNN SSD, Haar fallback |
-| Embedding | CPU TFLite MobileFaceNet/ArcFace jellegű modell, OpenCV SFace és HOG teszt fallback |
-| Felismerés | Koszinusz hasonlóság, személyprofilok, centroid + legjobb példa |
-| Klaszterezés | scikit-learn DBSCAN, korrekciókkal támogatott re-cluster |
-| Képfeldolgozás | OpenCV, NumPy, Pillow, EXIF orientáció/GPS |
-| Konfiguráció | YAML + QSettings + `project.local.json` + Drive prefs |
-| Távoli mód | Google Drive OAuth, Drive API, lock/heartbeat alapú projekt-session |
-| Csomagolás | PyInstaller jellegű desktop build, Windows/Linux/macOS scriptek |
+| Desktop UI | PySide6 / Qt |
+| ORM | SQLAlchemy 2.x |
+| DB | SQLite, WAL, foreign key enforcement, busy timeout |
+| CV/ML | OpenCV, NumPy, Pillow, scikit-learn, ai-edge-litert/TFLite |
+| Google Drive | google-auth, google-auth-oauthlib, google-api-python-client, keyring |
+| Export galeria | Astro SSG + Node/npm a `web/astro` alatt |
+| Spreadsheet export | openpyxl |
+| Packaging | PyInstaller jellegu app build, macOS/Windows/Linux scriptek |
+| Teszt | pytest, pytest-qt |
 
----
-
-## 2. Magas szintű architektúra
+## 2. Magas szintu architektura
 
 ```mermaid
 flowchart TB
-    subgraph UI["UI réteg (PySide6)"]
+    subgraph UI["PySide6 UI"]
         MW["MainWindow"]
-        FACE["Arcfelismerés"]
-        BROWSER["Képböngésző"]
-        FAMILY["Családi keresés"]
-        PLACES["Helyszínek"]
-        PERSONS_TAB["Személyek"]
-        COLLAGE["Kollázs"]
-        LOG["Log dock"]
-        DIALOGS["Dialógusok"]
+        FACE["Arcfelismeres tab"]
+        BROWSER["Kepbongeszo tab"]
+        FAMILY["Csaladi kereses tab"]
+        PLACES["Helyszinek tab"]
+        PERSONS["Szemelyek tab"]
+        GROUPS["Csoportok tab"]
+        OBJECTS["Targyak tab"]
+        COLLAGE["Kollazs tab"]
+        SETTINGS["Dialogusok es beallitasok"]
     end
 
-    subgraph WORKERS["Háttérmunka"]
-        PIPE["PipelineWorker (QThread)"]
-        THUMB["ThumbnailRunnable (QRunnable)"]
-        DRIVEIMG["DriveThumb/FetchRunnable"]
+    subgraph WORKERS["Hattermunkak"]
+        PIPE["PipelineWorker"]
+        DEEP["DeepPipelineWorker"]
+        REREC["ReRecognitionWorker"]
+        MATCH["MatchJobWorker"]
+        ASTRO["AstroExportWorker"]
+        THUMB["Thumbnail/Drive QRunnable-ok"]
+        GEO["Geocoding QRunnable-ok"]
     end
 
-    subgraph SERVICES["Service réteg"]
+    subgraph SERVICES["Service reteg"]
         SCAN["ScanService / DriveScanService"]
         DET["DetectionService"]
-        QUALITY["FaceQualityEvaluator"]
         EMB["EmbeddingService"]
         REC["RecognitionService"]
-        SUG["SuggestionService"]
+        DREC["DeepRecognitionService"]
         CLUS["ClusteringService"]
-        ID["IdentityService"]
-        FAMILY_SVC["FamilyService"]
-        PLACE_SVC["PlaceService"]
-        PERSON_SVC["PersonService"]
-        EXPORT["ExportService"]
-        IMG_LIB["ImageLibraryService"]
-        BROWSE["ImageBrowserService"]
-        COLL_SVC["CollageService"]
-        DUP["DuplicateUnknownFaceFinder"]
-        UPDATE["UpdateService"]
-        DEOLD["DeoldifiedPairingService"]
-        CONSISTENCY["IntraImageConsistencyService"]
+        SUG["SuggestionService"]
+        ID["IdentityService / UnknownMergeService"]
         REPAIR["IdentityRepairService"]
-        MERGE_SVC["MergeSuggestionService"]
-        DIAG["FaceDiagnosticsService"]
-        GROUP_SVC["PersonGroupService"]
+        PLACE["PlaceService / GeocodingService"]
+        OBJ["ObjectService"]
+        FAMILY_SVC["FamilyService"]
+        EXPORT["ExportService / metadata exportok"]
         PKG["ProjectPackageService"]
-        RECORD["ScreenRecorderService"]
+        RECORDER["ScreenRecorderService"]
     end
 
-    subgraph GDRIVE["Google Drive réteg"]
-        GCLIENT["GoogleDriveClient"]
-        AUTH["OAuth + CredentialStore"]
-        PROJ["GDriveProjectSession"]
-        CACHE["GDriveCacheManager"]
-        PROVIDER["StorageProvider"]
-    end
-
-    subgraph ML["ML / CV adapterek"]
-        DETECTOR["FaceDetector\nCoral / YuNet / Caffe-Haar"]
+    subgraph ML["ML/CV adapterek"]
+        DETECTOR["FaceDetector\nCoral / YuNet / CPU"]
         EMBEDDER["FaceEmbedder\nTFLite / SFace"]
-        DBSCAN["DBSCAN clusterer"]
+        DEEPML["DeepFaceClassifier\nMLP ensemble"]
+        DBSCAN["DBSCAN"]
     end
 
     subgraph DATA["Perzisztencia"]
         DB[("SQLite faces.db")]
-        CROPS["data/crops/"]
+        CROPS["data/crops"]
+        MODEL["data/deep_model"]
+        CONFIG["config.yaml + QSettings"]
         LOCAL["project.local.json"]
-        CONFIG["config.yaml"]
-        IMAGES["Lokális képgyűjtemény"]
-        DRIVE["Drive projektmappa"]
+        IMAGES["Lokalis kepgyujtemeny"]
+        DRIVE["Google Drive projekt"]
+        ASTRODATA["web/astro build bundle"]
     end
 
     MW --> FACE
     MW --> BROWSER
     MW --> FAMILY
     MW --> PLACES
-    MW --> PERSONS_TAB
+    MW --> PERSONS
+    MW --> GROUPS
+    MW --> OBJECTS
     MW --> COLLAGE
-    MW --> LOG
-    MW --> DIALOGS
+    MW --> SETTINGS
     MW --> PIPE
-
-    FACE --> ID
-    FACE --> CLUS
-    BROWSER --> BROWSE
-    BROWSER --> PLACE_SVC
-    BROWSER --> DEOLD
-    FAMILY --> FAMILY_SVC
-    PLACES --> PLACE_SVC
-    PERSONS_TAB --> PERSON_SVC
-    COLLAGE --> COLL_SVC
-    DIALOGS --> EXPORT
-    DIALOGS --> UPDATE
-    DIALOGS --> AUTH
+    MW --> DEEP
+    MW --> MATCH
 
     PIPE --> SCAN
     PIPE --> DET
     PIPE --> EMB
     PIPE --> REC
+    PIPE --> CLUS
     PIPE --> SUG
 
-    SCAN --> IMG_LIB
-    SCAN --> GCLIENT
-    DET --> DETECTOR
-    DET --> QUALITY
-    EMB --> EMBEDDER
-    CLUS --> DBSCAN
-    DRIVEIMG --> CACHE
+    DEEP --> SCAN
+    DEEP --> DET
+    DEEP --> EMB
+    DEEP --> DREC
+    DEEP --> CLUS
+    DEEP --> SUG
 
     SERVICES --> DB
+    DET --> DETECTOR
+    EMB --> EMBEDDER
+    DREC --> DEEPML
+    CLUS --> DBSCAN
     DET --> CROPS
-    FACE --> CROPS
-    BROWSER --> IMAGES
-    IMG_LIB --> LOCAL
-    GDRIVE --> DRIVE
-    CONFIG --> PIPE
+    DREC --> MODEL
+    SCAN --> IMAGES
+    SCAN --> DRIVE
+    EXPORT --> ASTRODATA
+    CONFIG --> MW
+    LOCAL --> SCAN
 ```
 
-### Aktuális pipeline
+## 3. Belepes es inditas
 
-A fő pipeline jelenleg hét fő szakaszos, egy embedding utáni deduplikáló köztes passzal:
-
-```mermaid
-flowchart LR
-    A["Lokális mappa vagy Drive projekt"] --> B["1. ScanService / DriveScanService\nhash, metadata, relative_path, RemoteImage"]
-    B --> C["2. DetectionService\nfast vagy high-accuracy"]
-    C --> Q["FaceQualityEvaluator\nscore + reason codes"]
-    Q --> D["3. EmbeddingService\nTFLite/SFace/HOG embedding"]
-    D --> X["3b. IntraImageDuplicateService\nazonos fizikai arc duplikátumainak törlése"]
-    X --> E["4. RecognitionService\nadaptív + same-image assist"]
-    E --> U["5. ClusteringService\nunassigned -> Unknown személyek"]
-    U --> I["6. IntraImageConsistencyService\nsame-image fragmentáció javítása"]
-    I --> F["7. SuggestionService\nismeretlen -> ismert jelöltek"]
-    F --> G["UI frissítés\nszemélylista, badge, log"]
-
-    C --> CROP["Arc crop fájlok"]
-    C --> LM["5 pontos landmarkok, ha YuNet adja"]
-    D --> EMBED["Embedding blobok"]
-    E --> ASSIGN["assignment_source/confidence/assigned_at"]
-    U --> UNKNOWN["Unknown N személyek"]
-```
-
-Fontos: a normál futás előbb felismerés-központú, majd a még megoldatlan arcokat klaszterezi `Unknown N` személyekbe. A DBSCAN re-cluster és legacy munkafolyamat továbbra is létezik kézi same/different korrekciókkal.
-
----
-
-## 3. Belépési pont és indítás
-
-**Fő fájl**: `app/main.py`
+Fo fajl: `app/main.py`
 
 ```bash
 python -m app.main
@@ -184,810 +167,621 @@ python -m app.main --debug
 python -m app.main --db /tmp/faces.db
 ```
 
-Indításkor az alkalmazás:
+Telepitett script entrypoint:
 
-1. feldolgozza a CLI argumentumokat,
-2. beállítja a fájlos naplózást,
-3. betölti a `.env` fájlt Google OAuth és egyéb titkok miatt,
-4. betölti a YAML konfigurációt, majd `--db` esetén felülírja az adatbázis útját,
-5. létrehozza a szükséges DB és crop könyvtárakat,
-6. elindítja a Google Drive cache startup cleanupot,
-7. betölti a nyelvi preferenciákat,
-8. létrehozza a Qt alkalmazást, ikont és témát,
-9. migrálja a régi QSettings tárolót, ha szükséges,
-10. felépíti a `MainWindow`-t.
+```bash
+face-local
+```
 
-A `MainWindow` konstruktorában történik a tényleges `init_db(config.db_path_resolved)`, az idempotens schema migrációk futtatása, az `ImageLibraryService` inicializálása, a védett `Ismeretlen` személy biztosítása, a tabok és toolbarok létrehozása, majd a Drive/update/recording háttérintegrációk bekötése.
+Inditasi sorrend:
 
----
+1. CLI argumentumok feldolgozasa.
+2. Fajlos naplozas beallitasa.
+3. `.env` betoltese Google OAuth es egyeb titkok miatt.
+4. YAML config betoltese, majd `--db` eseten DB utvonal felulirasa.
+5. DB es crop konyvtarak letrehozasa.
+6. Google Drive cache startup cleanup.
+7. Nyelvi preferencia betoltese.
+8. Qt alkalmazas, ikon es tema inicializalasa.
+9. Regi QSettings tarolo migracioja az app sajat INI helyere.
+10. `MainWindow` felepitese.
 
-## 4. Konfiguráció
+A `MainWindow` konstruktoraban tortenik az `init_db(config.db_path_resolved)`,
+az idempotens schema migraciok futtatasa, az `ImageLibraryService`
+inicializalasa, a vedett `Ismeretlen` szemely biztositasa, a tabok,
+toolbarok, Drive/update/recording integraciok es hatter-worker signalok
+bekotese.
 
-**Fájl**: `app/config.py`
+## 4. Konfiguracio
 
-Betöltési sorrend:
+Fo fajl: `app/config.py`
+
+### Betoltesi sorrend
 
 1. explicit `--config`,
 2. `FACE_LOCAL_CONFIG`,
-3. fejlesztői módban `config.yaml`, majd `config.example.yaml`,
-4. frozen app esetén user config, bundle config és bundle example fallbackek.
+3. fejlesztoi modban `config.yaml`, majd `config.example.yaml`,
+4. frozen app eseten user config, bundle config, bundle example, majd lokalis fallback.
 
-Relatív utak a config fájl könyvtárához képest oldódnak fel. Frozen buildben az alapértelmezett írható storage útvonalak a felhasználói adatkönyvtárba kerülnek.
+Relativ utak a config fajl konyvtarahoz kepest oldodnak fel. Frozen buildben
+az alapertelmezett irhato storage utak a felhasznaloi adatkonyvtarba kerulnek,
+hogy az app bundle ne legyen irasi celpont.
 
-### AppConfig mezők
+### Fo config szekciok
 
-| Mező | Leírás |
+| Szekcio | Felelosseg |
 |---|---|
-| `detection` | detektor küszöbök, CPU/Coral/YuNet modellek, high-accuracy, duplikált-ismeretlen IoU és containment küszöb |
-| `embedding` | embedding modell, bemeneti méret, dimenzió, crop mód (`legacy`/`square`/`aligned`) |
-| `clustering` | DBSCAN és incremental Unknown-klaszterezési paraméterek |
-| `intra_image` | ugyanazon képen belüli személyazonosító-fragmentáció javítása |
-| `intra_image_duplicate` | ugyanazon képen belüli, ugyanazt a fizikai arcot duplikáló bboxok eltávolítása |
-| `identity_repair` | globális Unknown-fragmentáció és merge-jelölt keresés küszöbei |
-| `recognition` | automatikus felismerés, adaptív küszöb és same-image assist |
-| `suggestions` | névjavaslatok küszöbe és darabszáma |
-| `matching` | háttérben futó face+név alapú merge suggestion motor |
-| `storage` | SQLite DB és crop könyvtár |
-| `scan` | támogatott képformátumok, worker szám, thumbnail méret |
-| `recording` | ffmpeg-alapú képernyőrögzítés, hang, kijelző és szegmentálási beállítások |
-| `base_dir` | relatív utak alapja |
+| `detection` | detektor modellek, Coral/YuNet/CPU valasztas, high-accuracy, adaptive escalation, verification gate |
+| `embedding` | TFLite/SFace embedding model, input size, dimenzio, crop mode (`legacy`, `square`, `aligned`) |
+| `clustering` | DBSCAN es incremental Unknown-klaszterezes |
+| `intra_image` | ugyanazon kepen beluli identity-fragmentacio javitasa |
+| `intra_image_duplicate` | ugyanazon kepen levo duplikalt fizikai arcboxok torlese |
+| `identity_repair` | globalis Unknown-fragmentacio es merge jeloltek |
+| `recognition` | klasszikus automatikus felismeres, rerecognition es Unknown auto-merge review |
+| `deep_recognition` | MLP ensemble training, open-set kapuk, model cache, training data policy |
+| `ai_face_detection` | analysis-only YuNet alapu AI face detection eredmenyek |
+| `overlap_resolution` | deep pipeline overlap box resolution |
+| `ignored_faces` | tartosan ignoralt arc embedding lista kuszobei |
+| `suggestions` | Unknown -> ismert nevjavaslatok |
+| `matching` | face+nev alapu merge suggestion motor es auto-merge korlatok |
+| `storage` | SQLite DB es crop konyvtar |
+| `scan` | kepkiterjesztesek, worker szam, thumbnail meret |
+| `recording` | ffmpeg recording, audio, display es segment beallitasok |
 
-### QSettings alapú felhasználói beállítások
+### QSettings
 
-A YAML konfiguráció mellett több UI- és gépspecifikus beállítás az `app.app_settings.app_qsettings()` által kezelt INI fájlban él: `Documents/localAIFaceRecognizer/settings/settings.ini`. Indításkor egyszeri migráció fut a régi natív `QSettings("FaceLocal", "FaceLocal")` tárolóból.
+A YAML mellett tobb gep- es UI-specifikus beallitas az
+`app.app_settings.app_qsettings()` altal kezelt INI fajlban el:
+`Documents/localAIFaceRecognizer/settings/settings.ini`.
 
 | Namespace | Tartalom |
 |---|---|
-| `shortcuts/*` | globális billentyűparancs engedélyezése és egyedi kiosztások |
-| `face_quality/exclude_low_quality` | alacsony minőségű arcok automatikus kihagyása embedding/felismerés/suggestion közben |
-| `deoldified/auto_pair` | deoldified/colorized képek automatikus eredeti párhoz kötése a képböngészőben |
-| `geocoding/enabled` | online geokódolás engedélyezése; alapból kikapcsolt, cache/offline javaslatok ettől függetlenül működhetnek |
-| `updates/notify` | release értesítések engedélyezése |
-| `recording/*` | kimeneti mappa, minőség, fps, audio eszközök, hangerők, kijelzőválasztás |
-| `paths/*` | utoljára használt mappák és fájlválasztó kezdőpontok |
-| Drive preferenciák | aktív Google fiók, projektmappa, Drive mód, DB sync és cache beállítások |
+| `shortcuts/*` | globalis billentyuparancs engedelyezes es egyedi kiosztas |
+| `face_quality/exclude_low_quality` | gyenge minosegu arcok kihagyasa automatikus pipeline szakaszokbol |
+| `deoldified/auto_pair` | deoldified/colorized par automatikus osszekotese |
+| `geocoding/enabled` | online geokodolas opt-in kapcsoloja |
+| `updates/notify` | release ertesites |
+| `recording/*` | kimeneti mappa, fps, audio es kijelzo beallitasok |
+| `paths/*` | utoljara hasznalt fajlvalaszto helyek |
+| Drive preferenciak | account, projektmappa, Drive mod, DB sync, cache |
 
-### Lényeges alapértékek
+## 5. Perzisztencia es adatmodell
 
-```yaml
-detection:
-  confidence_threshold: 0.65
-  min_face_size: 50
-  high_accuracy_confidence_threshold: 0.25
-  iou_merge_threshold: 0.35
-  duplicate_unknown_iou_threshold: 0.35
-  duplicate_unknown_containment_threshold: 0.80
-  use_yunet: true
+Fo fajlok: `app/db/models.py`, `app/db/database.py`
 
-embedding:
-  input_size: [112, 112]
-  embedding_dim: 192
-  crop_mode: legacy
+Az adatbazis SQLite, SQLAlchemy ORM-mel. A DB init:
 
-clustering:
-  epsilon: 0.4
-  min_samples: 2
-  metric: cosine
-  unknown_assign_threshold: 0.45
-  create_unknown_min_cluster_size: 2
+- `Base.metadata.create_all()` hivasaval letrehozza a hianyzo tablakat,
+- `PRAGMA table_info` alapon idempotensen hozzaadja az uj oszlopokat,
+- letrehozza a szukseges indexeket es egyedi constraint-eket,
+- bekapcsolja a `WAL`, `foreign_keys=ON`, `synchronous=NORMAL`,
+  `busy_timeout=5000` beallitasokat,
+- kulon migralja a deep recognition, object tagging, geocoding, place type,
+  person group es kollazs-helyszin adatokat.
 
-intra_image:
-  enabled: true
-  merge_similarity: 0.62
-  max_faces_per_image: 40
+Nincs kulon migration framework, ezert schema valtozasnal az ORM modell es az
+idempotens migracio egyutt frissitendo.
 
-intra_image_duplicate:
-  enabled: true
-  duplicate_similarity: 0.90
-  min_overlap: 0.10
-  max_faces_per_image: 80
+### Tablacsoportok
 
-identity_repair:
-  merge_similarity: 0.66
-  min_pair_similarity: 0.60
-  max_candidates_per_person: 5
+| Csoport | Tablak |
+|---|---|
+| Kepek es arcok | `images`, `faces`, `face_corrections`, `ignored_faces` |
+| Szemelyek | `persons`, `relationships`, `person_groups`, `person_group_memberships` |
+| Helyszinek | `places`, `place_aliases`, `geocoding_cache`, `place_address_suggestions` |
+| Targyak | `tagged_objects`, `object_occurrences`, `object_person_links`, `object_aliases` |
+| Kollazs | `collages`, `collage_nodes` |
+| Drive | `remote_images` |
+| Merge es audit | `merge_suggestions`, `merge_decisions`, `recognition_merge_log` |
+| Deep/AI | `training_runs`, `auto_assignments`, `ai_face_detections` |
 
-recognition:
-  auto_assign_threshold: 0.72
-  min_margin: 0.08
-  min_examples_per_person: 1
-  centroid_weight: 0.70
-  use_recognized_faces_for_training: true
-  profile_auto_min_confidence: 0.85
-  adaptive_threshold_enabled: true
-  adaptive_min_threshold: 0.55
-  same_image_assist_enabled: true
-  same_image_assist_threshold: 0.62
-  same_image_assist_min_confirmed: 1
-  same_image_assist_margin: 0.05
-
-suggestions:
-  similarity_threshold: 0.5
-  max_suggestions_per_person: 3
-
-matching:
-  face_threshold: 0.5
-  name_threshold: 0.85
-  name_supported_face_floor: 0.35
-  min_confidence: 0.45
-  max_suggestions_per_person: 3
-  chunk_size: 64
-  reserved_cpus: 1
-  max_workers: null
-  progress_throttle_ms: 250
-
-recording:
-  fps: 18
-  quality: normal
-  segment_seconds: 8
-  display_mode: all
-  concat_on_stop: true
-```
-
----
-
-## 5. Adatmodell
-
-**Fájlok**: `app/db/models.py`, `app/db/database.py`
+### Fo entitasok
 
 ```mermaid
 erDiagram
     IMAGES ||--o{ FACES : contains
+    IMAGES ||--o| REMOTE_IMAGES : sourced_from
+    IMAGES ||--o{ OBJECT_OCCURRENCES : has
+    IMAGES ||--o{ AI_FACE_DETECTIONS : analyzed_by
     PLACES ||--o{ IMAGES : located_at
-    PLACES ||--o{ PLACE_ALIASES : has
+    PLACES ||--o{ PLACE_ALIASES : keeps
     PLACES ||--o{ PLACES : parent_child
+
     PERSONS ||--o{ FACES : assigned_to
-    PERSONS ||--o{ RELATIONSHIPS : person_a
-    PERSONS ||--o{ RELATIONSHIPS : person_b
+    PERSONS ||--o{ RELATIONSHIPS : relates
     PERSONS ||--o{ PERSON_GROUP_MEMBERSHIP : member_of
     PERSON_GROUPS ||--o{ PERSON_GROUP_MEMBERSHIP : contains
-    FACES ||--o{ FACE_CORRECTIONS : correction_a
-    FACES ||--o{ FACE_CORRECTIONS : correction_b
+
+    FACES ||--o{ FACE_CORRECTIONS : constrained_by
+    FACES ||--o{ AUTO_ASSIGNMENTS : reviewed_as
+    FACES ||--o{ RECOGNITION_MERGE_LOG : audited_by
+    TRAINING_RUNS ||--o{ AUTO_ASSIGNMENTS : produced
+
+    TAGGED_OBJECTS ||--o{ OBJECT_OCCURRENCES : appears_as
+    TAGGED_OBJECTS ||--o{ OBJECT_PERSON_LINKS : linked_to
+    PERSONS ||--o{ OBJECT_PERSON_LINKS : has_role
+    TAGGED_OBJECTS ||--o{ OBJECT_ALIASES : keeps
+
     COLLAGES ||--o{ COLLAGE_NODES : contains
     IMAGES ||--o{ COLLAGE_NODES : referenced_by
-    IMAGES ||--o| REMOTE_IMAGES : sourced_from
-    PERSONS ||--o{ MERGE_SUGGESTIONS : source
-    PERSONS ||--o{ MERGE_SUGGESTIONS : target
 
-    IMAGES {
-        int id PK
-        text file_path UK
-        string relative_path
-        string file_hash
-        float file_mtime
-        int width
-        int height
-        string photo_date
-        text note
-        int place_id FK
-        float exif_latitude
-        float exif_longitude
-        float image_latitude
-        float image_longitude
-        bool detection_done
-        bool embedding_done
-    }
-
-    FACES {
-        int id PK
-        int image_id FK
-        int person_id FK
-        int bbox_x
-        int bbox_y
-        int bbox_w
-        int bbox_h
-        float confidence
-        string detector_backend
-        text crop_path
-        blob embedding
-        blob landmarks
-        bool is_excluded
-        string assignment_source
-        float assignment_confidence
-        datetime assigned_at
-        float quality_score
-        string quality_reasons
-        bool is_low_quality
-    }
-
-    PERSONS {
-        int id PK
-        string name
-        bool is_auto_named
-        string gender
-        text thumbnail_path
-        bool thumbnail_is_manual
-        string family_code
-        string external_family_code
-        string last_name
-        string first_name
-        string second_name
-        string nickname
-        string married_name
-        string birth_place
-        string birth_date
-        string death_place
-        string death_date
-        text notes
-        bool is_protected
-    }
-
-    PERSON_GROUPS {
-        int id PK
-        string name
-        string color
-        text description
-    }
-
-    PERSON_GROUP_MEMBERSHIP {
-        int person_id PK FK
-        int group_id PK FK
-    }
-
-    RELATIONSHIPS {
-        int id PK
-        string relationship_type
-        int person_a_id FK
-        int person_b_id FK
-    }
-
-    PLACES {
-        int id PK
-        string name
-        float latitude
-        float longitude
-        text thumbnail_path
-        bool thumbnail_is_manual
-        string place_type
-        float accuracy_radius_meters
-        int parent_id FK
-        string settlement_name
-        string street_name
-        string house_number
-        string display_name
-        string coordinate_source
-        bool is_exact_coordinate
-        bool is_anonymous
-        string source
-    }
-
-    PLACE_ALIASES {
-        int id PK
-        int place_id FK
-        string name
-        float latitude
-        float longitude
-        text thumbnail_path
-        int source_place_id
-    }
-
-    REMOTE_IMAGES {
-        int id PK
-        int image_id FK
-        string provider
-        string drive_file_id
-        string drive_folder_id
-        string remote_name
-        string modified_time
-        string checksum
-        datetime last_seen_at
-        bool deleted_remote
-    }
-
-    FACE_CORRECTIONS {
-        int id PK
-        int face_id_a FK
-        int face_id_b FK
-        bool same_person
-    }
-
-    MERGE_SUGGESTIONS {
-        int id PK
-        int source_person_id FK
-        int target_person_id FK
-        float confidence
-        float face_similarity
-        float name_similarity
-        string status
-        string job_id
-        datetime created_at
-        datetime updated_at
-        datetime decided_at
-    }
-
-    GEOCODING_CACHE {
-        int id PK
-        string query_type
-        string query_text
-        string settlement_name
-        string street_name
-        string house_number
-        text result_json
-        datetime created_at
-    }
-
-    PLACE_ADDRESS_SUGGESTIONS {
-        int id PK
-        string settlement_name
-        string street_name
-        string source
-        datetime last_used_at
-    }
-
-    COLLAGES {
-        int id PK
-        string collage_uid
-        text source_file UK
-        text album_title
-        string album_date
-        int format_width
-        int format_height
-        string orientation
-        string bg_color
-        float spacing
-    }
-
-    COLLAGE_NODES {
-        int id PK
-        int collage_id FK
-        int image_id FK
-        string node_uid
-        float rel_x
-        float rel_y
-        float rel_w
-        float rel_h
-        float theta
-        float scale
-        string theme
-        text src_raw
-        text src_resolved
-        bool src_missing
-        string year
-        string location
-        string event_name
-        text notes
-    }
+    PERSONS ||--o{ MERGE_SUGGESTIONS : source_or_target
+    PERSONS ||--o{ MERGE_DECISIONS : snapshot_only
 ```
 
-### Migrációs stratégia
+### Fontos mezok es contractok
 
-Nincs külön migration framework. Az `init_db()`:
-
-- létrehozza a hiányzó táblákat `Base.metadata.create_all()` hívással,
-- `PRAGMA table_info` alapján idempotensen hozzáadja az új oszlopokat,
-- létrehozza a szükséges indexeket, köztük a `family_code` részleges egyediségét és az `external_family_code` egyediségét,
-- bekapcsolja a WAL, foreign key, normal synchronous és `busy_timeout=5000` SQLite beállításokat,
-- biztosítja a `person_groups`, `person_group_memberships`, `geocoding_cache` és `place_address_suggestions` táblákat,
-- migrálja a régi kollázs-helyszín mezőket a `places` táblához,
-- backfilleli a régi helyek `place_type`, `accuracy_radius_meters`, `display_name` és `coordinate_source` mezőit,
-- inicializálja a hordozható képgyűjtemény-kezelést.
-
-Kézzel migrált mezőcsoportok: strukturált személyadatok, `family_code`, `external_family_code`, `gender`, védett személyek, kézi thumbnail jelölők, képek relatív útja, képjegyzet, EXIF GPS és képszintű GPS koordinátái, arc assignment metaadatok, arcminőség mezők, landmarkok, strukturált helyszínek, kapcsolatok, geokódolási cache, person group tagság és remote image metadata.
-
----
-
-## 6. Hordozható képgyűjtemény
-
-**Fájl**: `app/services/image_library_service.py`
-
-A projekt kezeli azt az esetet, amikor ugyanazt az adatbázist másik gépen vagy más mount point alatt nyitják meg.
-
-| Elem | Szerep |
+| Entitas | Fontos mezok |
 |---|---|
-| `Image.file_path` | eredeti abszolút út, legacy kompatibilitás |
-| `Image.relative_path` | POSIX stílusú út a képgyűjtemény rootjához képest |
-| `project.local.json` | gépspecifikus local config a DB mellett |
-| `image_library_root` | aktuális gépen érvényes képgyűjtemény gyökér |
+| `Image` | `file_path`, `relative_path`, `file_hash`, meret, `photo_date`, `note`, `place_id`, EXIF es image-level GPS, `detection_done`, `embedding_done` |
+| `Face` | bbox, confidence, `detector_backend`, `crop_path`, embedding blob, landmark blob, quality mezok, assignment metadata, uncertain/note mezok, auto-merge review mezok |
+| `Person` | nev, auto/protected flag, gender, thumbnail, family/external code, strukturalt nevek, birth/death adatok, notes |
+| `IgnoredFace` | embedding, thumbnail snapshot, source face/person snapshot, note |
+| `MergeSuggestion` | normalizalt szemelypar, face/name score, status, job_id |
+| `MergeDecision` | elfogadott/elutasitott/dismissed merge dontes snapshot, akkor is olvashato, ha a szemely mar merge-elve lett |
+| `TrainingRun` | mode, statisztika, validation accuracy, data fingerprint, model path |
+| `AutoAssignment` | deep engine automatikus dontese, status (`auto`, `confirmed`, `corrected`, `reverted`), review audit |
+| `AiFaceDetection` | analysis-only bbox/confidence, run_id, source, detector name |
+| `TaggedObject` | user-tagged targy globalis adatai |
+| `ObjectOccurrence` | targy kepbeli pont/bbox/polygon-ready geometriaval es per-kep megjegyzessel |
+| `RemoteImage` | Drive file id, folder id, remote nev, checksum, modified time, deleted flag |
 
-Feloldási sorrend:
+## 6. Klasszikus pipeline
 
-1. `relative_path` + `image_library_root`,
-2. legacy `file_path`,
-3. `None`, ha a kép nem feloldható.
+Fo fajl: `app/workers/pipeline_worker.py`
 
-Az `ImageLibraryService` emellett közös rootot detektál, relatív utakra migrál, ellenőrzi a root elérhetőségét, és a scan közben képes régi abszolút rekordokat relatív út alapján újralinkelni. Hiányzó root esetén a UI külön dialógusban engedi a root átállítását; legacy DB-knél migrációs dialógus fut háttérszálon.
+```mermaid
+flowchart LR
+    A["Lokalis mappa vagy Drive projekt"] --> B["1. Scan\nScanService / DriveScanService"]
+    B --> C["2. Detection\nDetectionService"]
+    C --> Q["FaceQualityEvaluator"]
+    Q --> D["3. Embedding\nEmbeddingService"]
+    D --> X["3b. IntraImageDuplicateService"]
+    X --> E["4. RecognitionService"]
+    E --> IGN["4b. IgnoredFaceService"]
+    IGN --> U["5. ClusteringService\nUnknown N"]
+    U --> I["6. IntraImageConsistencyService"]
+    I --> S["7. SuggestionService"]
+    S --> UI["UI refresh + counters"]
+```
 
----
+### Szakaszok
 
-## 7. Google Drive mód
+1. **Scan**: lokalis fajlrendszer vagy Drive projekt indexelese, hash,
+   meret, EXIF GPS, `relative_path`, `RemoteImage`.
+2. **Detection**: detektor backend valasztas, high-accuracy es adaptive
+   escalation, optional verification gate, landmark es crop mentese.
+3. **Embedding**: pending arcok embeddingje TFLite/SFace backenddel.
+4. **Same-image duplicate cleanup**: ugyanazon fizikai arc duplikalt,
+   meg nem rendelt bboxainak eltavolitasa embedding + overlap alapon.
+5. **Recognition**: klasszikus, tanult szemelyprofilok alapjan torteno
+   automatikus hozzarendeles.
+6. **Ignored filter**: tartosan ignoralt embeddingekhez hasonlo uj, meg
+   hozzarendeletlen arcok elnyomasa, mielott Unknown szemelyt generalnanak.
+7. **Unknown clustering**: megoldatlan arcok meglovo vagy uj `Unknown N`
+   szemelyekbe rendezese.
+8. **Intra-image consistency**: ugyanazon kepen beluli identitas-fragmentacio
+   javitasa.
+9. **Suggestions**: Unknown szemelyek osszevetese ismert szemelyekkel.
 
-**Fájlok**: `app/gdrive/*`, `app/ui/dialogs/gdrive_settings_tab.py`, `app/workers/drive_image_worker.py`
+A klasszikus pipeline nem irja felul a megbizhato, felhasznalo altal vagy
+korabbi biztos workflow altal megadott named-person hozzarendeleseket.
 
-A Drive integráció opcionális, két fő feladatot lát el:
+## 7. Deep es AI pipeline
 
-- Drive projektmappa megnyitása és a projekt DB szinkronizálása,
-- Drive-on lévő képek listázása, lokális mirror/cache kezelése és indexelése.
+Fo fajlok: `app/workers/deep_pipeline_worker.py`,
+`app/services/deep_recognition_service.py`, `app/deep/*`,
+`app/services/ai_face_detection_service.py`
 
-### Fő komponensek
+A deep pipeline a "new recognition path". Pontossag-elso modell: training
+akar percekig futhat es CPU-intenziv lehet.
 
-| Komponens | Felelősség |
+### Modok
+
+| Mod | Jelentes |
 |---|---|
-| `oauth_config.py` | Google OAuth client konfiguráció ellenőrzése |
-| `oauth_flow.py` | böngészős bejelentkezés, account email lekérése |
-| `credential_store.py` | token tárolás keyringben vagy titkosított fallback fájlban |
-| `drive_client.py` | Drive API wrapper retry logikával |
-| `preferences.py` | account, folder, Drive mód és DB sync QSettings preferenciák |
-| `project_session.py` | projektmappa struktúra, DB letöltés/feltöltés, lock, heartbeat |
-| `drive_scan_service.py` | Drive képek rekurzív indexelése és mirror frissítés |
-| `storage_provider.py` | lokális és Drive képforrás egységes protokollja |
-| `cache.py` | átmeneti Drive fájl cache, méretlimit és cleanup |
-| `db_sync.py` | régebbi/egyszerűbb DB sync wrapper |
-| `connectivity.py` | online/offline guard |
-| `folder_url.py` | Drive folder URL vagy ID parse |
+| `rescan` | uj kepek scan/detect/embed, AI face detection, overlap resolution, ignored filter, train+recognize, cluster, consistency, review counters |
+| `rebuild` | automatikus arcboxok torlese, emberi dontesek megtartasa, teljes ujradetektalas es ujratanitas |
+| `train` | hianyzo embeddingek + modell ujratanitasa, arcok modositasa nelkul |
+| `detect_faces` | analysis-only AI face detection minden kepen, `faces` tabla erintese nelkul |
 
-### Projekt-session
+### Deep recognition contractok
 
-A `GDriveProjectSession`:
+- A mar named szemelyhez rendelt arcot a deep engine nem mozgatja el.
+- A training data trusted forrasokbol jon: manualis, megerositett, approved
+  vagy eleg biztos auto hozzarendelesek a konfiguracio szerint.
+- Open-set kapuk védik a rendszert: outlier, alacsony confidence, tul gyenge
+  probability, margin vagy prototype similarity eseten az arc ismeretlen marad.
+- A felhasznaloi "different person" korrekcio hard veto.
+- Minden deep auto assignment `AutoAssignment` sort kap, amit a UI-ban
+  confirm/correct/revert muvelettel lehet kezelni.
+- A megerositett deep dontes `deep_confirmed` jelleggel kesobb training data
+  lehet.
+- A modell `data/deep_model/deep_face_model.pkl` alatt perzisztalodik, es
+  `data_fingerprint` alapjan ujrahasznalhato, ha a cimkezett adat nem valtozott.
 
-1. feloldja vagy létrehozza a projekt almappáit,
-2. biztosítja a projekt descriptor fájlt,
-3. lockot szerez, stale lockot felismer,
-4. letölti vagy inicializálja a projekt SQLite DB-t,
-5. heartbeatet frissít,
-6. záráskor checkpointolja és feltölti a DB-t,
-7. felszabadítja a lockot.
+### AI face detection
 
-A `MainWindow` Drive toolbar gombja a beállításoktól függően nyitja vagy zárja a Drive projektet. Drive módban a pipeline a letöltött DB override útvonalon dolgozik.
+Az `AiFaceDetectionService` kulon, analysis-only eredmenyt ir az
+`ai_face_detections` tablaba. Nem hoz letre `Face` sort, nem rendel szemelyt,
+nem torol es nem mozgat klasszikus eredmenyeket. Celja diagnosztikai es
+osszehasonlitasi informacio: hol lat az AI arcot, mekkora bboxszal es milyen
+confidence-szel.
 
----
-
-## 8. Service réteg
-
-| Service | Felelősség |
-|---|---|
-| `ScanService` | lokális képek rekurzív keresése, hash, méret, EXIF GPS, DB rekord, `relative_path` |
-| `DriveScanService` | Drive képek listázása, letöltése/mirrorozása, `RemoteImage` rekordok frissítése |
-| `DetectionService` | arcok detektálása, high-accuracy többmenetes mód, landmark mentés, crop mentés, arcminőség |
-| `EmbeddingService` | pending arcok embeddingjeinek előállítása, alacsony minőség opcionális kihagyása |
-| `RecognitionService` | felcímkézett személyekből profilépítés, adaptív felismerés, same-image assist |
-| `SuggestionService` | automatikusan nevezett személyek összevetése ismert személyekkel, accept/reject |
-| `ClusteringService` | unassigned arcok Unknown személyekbe klaszterezése, meglévő Unknownhoz rendelés, DBSCAN re-cluster same/different korrekciókkal |
-| `IdentityService` | átnevezés, merge, törlés, reassign, kizárás, kézi korrekciók |
-| `FamilyService` | családi kódok, kapcsolatok, rokonleírások, családi képfeltételek szerinti keresés |
-| `PlaceService` | helyszínek létrehozása, helytípusok (exact/area/region), strukturált cím (settlement/street/house, display_name, classify_address állapotgép), típus-tudatos EXIF GPS kapcsolás, közeli helyek, hierarchia (parent/children), merge, kézi/automatikus thumbnail |
-| `GeocodingService` | cache-first geokódolás: település/utca javaslat, cím→koordináta; rétegek: geocoding_cache → place_address_suggestions (offline) → opt-in online provider |
-| `PersonService` | önálló Személyek oldal: személyek listázása szűrőkkel és arc/kép számokkal, strukturált adatok, `external_family_code` és név frissítése, személyhez tartozó arc cropok és képek lekérése, kézi bélyegkép beállítása arc cropból, védett személy védelme |
-| `ImageBrowserService` | mappa- és képösszefoglalók a böngésző tabhoz |
-| `ImageLibraryService` | hordozható útvonalkezelés és migráció |
-| `FaceCropService` | stabil crop fájlnevek, crop újragenerálás, thumbnail frissítés |
-| `FaceQualityEvaluator` / `FaceQualityBatchService` | confidence, méret, blur és aspect ratio alapú minősítés, teljes DB újraminősítés |
-| `IntraImageDuplicateService` | embedding + overlap alapján eltávolítja az ugyanazon képen duplikált, még hozzárendeletlen bboxokat |
-| `DuplicateUnknownFaceFinder` | ismert arcokra rálógó ismeretlen boxok keresése és törlése |
-| `CollageService` | Picasa `.cxf/.cfx` import, render, arc-projekció, annotált export |
-| `CollageParser` | kollázs XML parse, sérült XML recover, node geometria |
-| `DeoldifiedPairingService` | colorized/deoldified fájlok eredeti párjainak felismerése és szinkronizálása |
-| `ShortcutService` | központi, QSettingsben mentett billentyűparancs-definíciók és app-szintű dispatch |
-| `ExportService` | személy/kép/arc CSV, JSON, HTML, képfájl és kollázs HTML export |
-| `UpdateService` | GitHub release ellenőrzés, asset letöltés, platformfüggő update |
-| `IntraImageConsistencyService` | azonos képen levő arcok konzisztencia-javítása, fragmentáció feloldása |
-| `IdentityRepairService` | tömeges személyazonosító fragmentáció feloldása és konzisztencia-javítás |
-| `MergeSuggestionService` | háttér-motor face- és név-alapú merge javaslatok perzisztálásához, státuszkezeléssel és auto-merge segéddel |
-| `FaceDiagnosticsService` | arc-adatok diagnosztikája, fragmentáció kimutatása, javító javaslatokkal |
-| `PersonGroupService` | személycsoportok (Kórus, Munkahely, stb.) kezelése, kategorizáció |
-| `ProjectPackageService` | teljes projekt export/import `.facepack` ZIP formátumban |
-| `ScreenRecorderService` | ffmpeg-alapú képernyőrögzítés hanggal, idővonal-napló, szegmentált mentés |
-
----
-
-## 9. ML és képfeldolgozás
+## 8. Detektalas, embedding, felismeres
 
 ### Detektorok
 
-**Fájlok**: `app/detectors/*`
+Fajlok: `app/detectors/*`, `app/services/detection_service.py`
 
-- `FaceDetector`: absztrakt interfész.
-- `CoralDetector`: Edge TPU TFLite modell, ha pycoral és eszköz elérhető.
-- `YuNetDetector`: OpenCV YuNet ONNX CPU detektor, 5 pontos landmarkokkal.
-- `CpuDetector`: OpenCV DNN SSD, fallbackként Haar cascade.
-- `factory.py`: Edge TPU library/device probe, macOS USB visibility check és megfelelő backend kiválasztása.
+Valasztasi sorrend:
 
-A kiválasztási sorrend: konfigurált Coral modell és sikeres izolált Edge TPU probe esetén Coral; különben `use_yunet=true` és elérhető YuNet modell esetén YuNet; végül Caffe SSD/Haar CPU fallback. Az `aligned` crop mód csak YuNet landmarkokkal ad valódi arcigazítást, más detektorral `square` jellegű fallbackre degradál.
+1. Coral Edge TPU, ha konfiguralt modell, pycoral/libedgetpu es eszkoz elerheto.
+2. YuNet ONNX, ha `use_yunet=true` es a modell elerheto.
+3. OpenCV DNN SSD.
+4. Haar cascade fallback.
 
-### High-accuracy detektálás
+YuNet 5 pontos landmarkot ad, ez kell az `embedding.crop_mode = aligned`
+valodi ArcFace-szeru igazitasahoz. Mas detektornal az aligned mod square
+fallbackkent viselkedik.
 
-A `DetectionService` opcionális high-accuracy módban alacsonyabb küszöböt és több preprocessing variánst használ. Tipikus variánsok: eredeti kép, CLAHE, hisztogramkiegyenlítés, gamma, bilateral. Az átfedő találatok IoU alapján deduplikálódnak.
+A `DetectionService` kezeli az EXIF orientaciot, crop irast, face quality
+ertekelest, adaptive escalationt es optional verification gate-et. High-accuracy
+mod tobb preprocessing variansbol dolgozik, majd IoU/containment alapon
+deduplikal.
 
-A detektálás EXIF orientációt normalizál, perceptual dHash diagnosztikát ír, és Coral hiba esetén CPU detektorra tud visszaesni. YuNet találatoknál a 5 pontos landmark `Face.landmarks` blobként mentődik.
+### Face quality
 
-### Arcminőség
+Fajl: `app/services/face_quality_service.py`
 
-**Fájl**: `app/services/face_quality_service.py`
+Extra modell nelkul szamol:
 
-Az arcminőség extra modell nélkül számolódik:
+- detector confidence,
+- bbox meret,
+- blur Laplacian variancia,
+- bbox aspect ratio.
 
-- alacsony detector confidence,
-- túl kicsi bbox,
-- blur Laplacian varianciával,
-- szokatlan bbox aspect ratio.
+Eredmeny: `quality_score`, `quality_reasons`, `is_low_quality`. QSettings
+alapjan az automatikus pipeline kihagyhatja a gyenge minosegu arcokat,
+mikozben kezi hozzarendelesek tovabbra is hasznalhatok.
 
-Az eredmény `quality_score`, `quality_reasons` és `is_low_quality`. A pipeline QSettings alapján kihagyhatja az alacsony minőségű arcokat embedding/felismerés/suggestion szakaszban, miközben kézi hozzárendelések továbbra is használhatók.
+### Embedding
 
-### Embeddingek
+Fajlok: `app/embeddings/*`, `app/services/embedding_service.py`
 
-**Fájlok**: `app/embeddings/*`
+- `TFLiteEmbedder`: backend sorrend `ai-edge-litert`, `tflite-runtime`,
+  `tensorflow.lite`.
+- `SFaceEmbedder`: OpenCV SFace/ONNX fallback grayscale enhancementtel.
+- HOG stub csak tesztelheto fallback, eles felismeresre gyenge.
+- Embedding es landmark blobok float32 binariskent tarolodnak a `Face` modellen.
 
-- `TFLiteEmbedder`: CPU-n futó TFLite embedding modell; backend betöltési sorrendje `ai-edge-litert`, `tflite-runtime`, majd `tensorflow.lite`.
-- `SFaceEmbedder`: OpenCV SFace / ONNX alternatíva, grayscale enhancementtel.
-- ha a TFLite modell hiányzik, a kód előbb SFace fallbacket próbál, majd tesztelhető, de éles felismerésre gyenge HOG stubot használ.
-- `Face.set_embedding()` és `Face.get_embedding()` float32 blobként tárol és olvas.
-- `embedding.crop_mode`: `legacy` bbox-stretch, `square` aspect-preserving crop, `aligned` 5 pontos ArcFace igazítás landmarkkal.
+### Klasszikus felismeres
 
-### Felismerés
+Fajl: `app/services/recognition_service.py`
 
-**Fájl**: `app/services/recognition_service.py`
+A klasszikus felismero szemelyprofilokat epit trusted arcokbol. A pontszam a
+centroid es a legjobb egyedi pelda sulyozott koszinusz hasonlosaga. Ket passz:
 
-A felismerő nem mozgat már megbízhatóan felcímkézett, nem védett személyhez tartozó arcokat. Profilokat épít kézi, legacy, suggestion-approved és nagyon biztos automatikus arcokból. A pontszám a centroid és a legjobb egyedi példa súlyozott koszinusz hasonlósága.
+1. adaptiv threshold face quality, meret es aspect ratio alapjan,
+2. same-image assist, ha ugyanazon kepen mar van kezzel megerositett szemely.
 
-Két passz van:
+Automatikus hozzarendeles csak eros score, megfelelo margin es eleg tanito
+pelda eseten tortenik. Az eredmeny mindig tolti az `assignment_source`,
+`assignment_confidence`, `assigned_at` mezoket.
 
-1. adaptív threshold a face quality, bbox méret és aspect ratio alapján,
-2. same-image assist, amikor ugyanazon a képen már van kézzel megerősített személy, ezért a jelöltkészlet biztonságosan szűkíthető.
+### Re-recognition
 
-Automatikus hozzárendelés csak erős pontszám, megfelelő margin és elegendő tanító példa esetén történik. Az eredmény mindig tölti az assignment metaadatokat.
+Fajlok: `app/workers/rerecognition_worker.py`,
+`app/services/rerecognition_service.py`, `app/ui/dialogs/rerecognition_*`
 
----
+Kepbongeszo-kontekstusbol indithato Unknown arc ujrafelismeres. Auto threshold
+felett automatikus merge tortenhet, alacsonyabb tartomanyban review dialogus
+nyilik. A `recognition_merge_log` batch alapu audit es undo informaciot tarol.
 
-## 10. UI felépítés
+## 9. UI felosztas
 
-**Fő fájl**: `app/ui/main_window.py`
+Fo fajl: `app/ui/main_window.py`
 
-```mermaid
-flowchart TB
-    MW["MainWindow"] --> TB["Toolbar"]
-    MW --> TABS["QTabWidget"]
-    MW --> STATUS["Status bar"]
-    MW --> LOG["Log dock"]
+### Tabok
 
-    TABS --> FACES["Arcfelismerés"]
-    TABS --> BROWSER["Képböngésző"]
-    TABS --> FAMILY["Családi keresés"]
-    TABS --> PLACES["Helyszínek"]
-    TABS --> PERSONS["Személyek"]
-    TABS --> COLLAGE["Kollázs"]
+| Tab/panel | Fajl | Felelosseg |
+|---|---|---|
+| Arcfelismeres | `sidebar_panel.py`, `cluster_panel.py`, `preview_panel.py` | szemelylista, rendezheto es stackelheto arcgrid, eredeti kep bbox overlay, reassign/merge/exclude |
+| Kepbongeszo | `image_browser_panel.py` | mappafa, kepnezeto, inline face/object/date/place edit, fullscreen, Drive fetch |
+| Csaladi kereses | `family_search_panel.py` | family code, kapcsolatok es tobb-szemelyes kepkereses |
+| Helyszinek | `locations_panel.py` | helylista/fa, EXIF/koordinata/cim, merge, galeriak |
+| Szemelyek | `persons_panel.py` | `PERSONS` tabla karbantartasa, strukturalt adatok, thumb, kapcsolodo kepek |
+| Csoportok | `groups_panel.py`, `group_manager_dialog.py` | person group CRUD es tagsag |
+| Targyak | `objects_panel.py` | object CRUD, elofordulasok, szemely-szerep kapcsolatok |
+| Kollazs | `collage_panel.py` | Picasa `.cxf/.cfx` import, canvas, node meta, overlay, export |
+| Log | `log_panel.py` | folyamat es debug log megjelenites |
 
-    FACES --> SIDE["SidebarPanel\nszemélylista + thumbok"]
-    FACES --> CLUSTER["ClusterPanel\nkiválasztott személy arcai"]
-    FACES --> PREVIEW["PreviewPanel\neredeti kép + bbox overlay"]
+### Toolbar es globalis muveletek
 
-    BROWSER --> TREE["mappafa + keresés"]
-    BROWSER --> VIEW["nagy kép / fullscreen / inline editor"]
-    BROWSER --> INFO["személy, dátum, hely, EXIF, deoldified"]
+- kepgyujtemeny mappa valasztas,
+- scan modok es deep/AI futasok,
+- pipeline stop,
+- export es Astro static site export,
+- arcnelkuli kepek es kezi arcjeloles,
+- bbox edit mode, move/resize, undo/redo,
+- arcracs rendezese eredeti sorrend, datum es minoseg szerint, valamint near-duplicate arcok stackelt nezetben,
+- nevjavaslatok es merge javaslatok,
+- beallitasok,
+- Google Drive projekt nyitas/zaras,
+- recording start/pause/resume/stop es audio level meter.
 
-    FAMILY --> FSEARCH["rokon- és tokenalapú képkeresés"]
-    PLACES --> LVIEW["helylista, képek, személyek, merge"]
-    COLLAGE --> CANVAS["QGraphicsView kollázs canvas"]
-    COLLAGE --> META["node metaadat szerkesztés"]
-```
+### Fontos dialogusok
 
-### Fő toolbar műveletek
-
-- képgyűjtemény mappa kiválasztása,
-- scan mód választása,
-- pipeline megállítása,
-- export,
-- arcnélküli képek és kézi arcjelölés,
-- interaktív arckeret-szerkesztés (drag handles, move/resize, undo/redo Ctrl+Z/Ctrl+Y),
-- névjavaslatok,
-- beállítások,
-- Google Drive projekt nyitás/zárás.
-- képernyőrögzítés vezérlése (start/pause/resume/stop, audio szint, elapsed idő).
-
-### Arcfelismerés tab
-
-- személylista kereséssel és hover preview-val,
-- személy arcainak thumbnail gridje,
-- eredeti kép preview bbox overlay-jel,
-- személy átnevezése, merge, törlése,
-- face eltávolítás clusterből, reassign, exclude,
-- személyadatok szerkesztése,
-- re-cluster indítás,
-- jobbklikk és preview műveletek.
-
-### Képböngésző tab
-
-- mappafa, rejtett mappák szűrése, thumbnailes képlista,
-- univerzális tokenes keresés személy, hely, dátum és szöveges kulcsszavak alapján,
-- nagy kép nézet zoom/pan/fullscreen móddal,
-- bal/jobb oldali panelek elrejtése fullscreen módban,
-- bbox overlay kapcsoló és átlátszóság slider,
-- arc bbox overlay és kézi bbox rajzolás,
-- inline személy hozzárendelés vagy új személy létrehozás,
-- arc bbox módosítás és törlés,
-- legutóbbi hozzárendelések előresorolása személyválasztásnál,
-- kép dátum kezelése, fájlnévből automatikus dátumkitöltés, EXIF dátumjavaslat elfogadása,
-- dátum visszaírása EXIF `DateTimeOriginal` mezőbe parse-olható dátum esetén,
-- helyszín keresés, létrehozás, hozzárendelés, átnevezés,
-- képszintű GPS koordináta szerkesztése, törlése és EXIF GPS-be írása,
-- koordináta-forrás prioritás: kézi képszintű GPS, EXIF GPS, majd helyszín koordináta,
-- helyszín koordinátáinak EXIF GPS-be írása,
-- deoldified/original párok közötti váltás,
-- Drive thumbnail/fetch támogatás.
-
-### Családi keresés tab
-
-- személyek keresése családi kód, név és strukturált mezők alapján,
-- szülő/gyerek/házastárs/testvér/ág jellegű kapcsolati szűrések,
-- több személyt tartalmazó képek keresése,
-- lapozott találati lista,
-- keresési javaslatok.
-
-### Helyszínek tab
-
-- helyek listázása szűrőkkel,
-- névvel vagy EXIF-ből létrejött anonim helyek kezelése,
-- helyhez tartozó képek és személyek összefoglalása,
-- dátum- és koordináta-alapú helyszínfilterek,
-- közeli helyek felismerése,
-- helyek összevonása alias megőrzéssel.
-
-### Személyek tab
-
-A Helyszínek oldal mintájára felépített, önálló karbantartó oldal a `PERSONS` rekordokhoz (`app/ui/panels/persons_panel.py`):
-
-- minden személy táblázatos listája az összes mezővel: id, bélyegkép, név, családi kód, külső családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett rekord-e,
-- rendezhető oszlopok és kereső/szűrő név (+ becenév és strukturált nevek) és családi kód alapján,
-- a kijelölt személyhez jobb oldalon megjelenő bélyegkép, arc cropok galériája és a kapcsolódó képek galériája (lazy-load `ThumbnailRunnable`-lel),
-- inline átnevezés a név cellában, illetve „Átnevezés” gomb; üres név nem menthető, védett személy nem nevezhető át,
-- „Adatok szerkesztése” gomb az újrahasznosított `PersonInfoDialog`-gal a strukturált mezőkhöz,
-- „Bélyegkép módosítása” gomb: a `ThumbnailPickerDialog` a személy arc cropjaiból enged választani, hiányzó crop esetén placeholder jelenik meg crash helyett,
-- minden módosítás után frissül a táblázat, a bélyegkép és a kapcsolódó panelek, és a `person_data_changed` jelzésen keresztül az Arcfelismerés oldal is.
-
-### Kollázs tab
-
-- Picasa `.cxf/.cfx` import,
-- kollázs választás, zoom, fit, face overlay kapcsoló,
-- node metaadat szerkesztés,
-- arcok kollázs koordinátára vetítése,
-- annotált kollázs és kollázs HTML export.
-
-### Fontos dialógusok
-
-| Dialógus | Feladat |
+| Dialogus | Felelosseg |
 |---|---|
-| `SettingsDialog` | nyelv, DB út, image library, update, TPU, párosítás, minőségszűrés, shortcutok, recording és Drive beállítások |
-| `ShortcutsSettingsTab` | billentyűparancsok engedélyezése, módosítása, törlése, konfliktusellenőrzés |
-| `GDriveSettingsTab` | Google login/logout, Drive folder választás, Drive mód, DB sync, cache törlés |
-| `ScanModesDialog` | gyors, high-accuracy és rescan módok |
-| `ManualMarkDialog` | kézi arc hozzáadása képen |
-| `NoFaceImagesDialog` | arcnélküli képek átnézése |
-| `OverlappingUnknownFacesDialog` | ismert arcokra rálógó ismeretlen boxok törlése |
-| `SuggestionDialog` | névjavaslatok elfogadása / elutasítása |
-| `SuggestionViewer` | teljes kép galéria, összehasonlítás és részletesebb elemzés névjavaslatoknál |
-| `PersonInfoDialog` | strukturált személyadatok, nem, családi kód, csoporttagság |
-| `ThumbnailPickerDialog` | a Személyek oldalon a személy arc cropjai közül választható új bélyegkép, hiányzó crop esetén placeholder |
-| `RenameDialog` | személy átnevezése |
-| `MergeDialog` | személyek összevonása |
-| `PlaceMergeDialog` | helyek összevonása |
-| `PlaceEditDialog` | kétpaneles hely-szerkesztő: strukturált cím (település/utca autocomplete, házszám), típus, koordináta-forrás, lat/lon, pontossági sugár, szülő + interaktív térkép (PlaceMapPickerWidget) |
-| `ExportDialog` | export formátum és cél kiválasztása |
-| `ImageLibraryMissingDialog` | hiányzó image library root kezelése |
-| `MigrateLibraryDialog` | legacy abszolút utak migrálása relatív utakra |
-| `CollageNodeDialog` | kollázs node metaadatok |
-| `TpuStatusDialog` | TPU diagnosztika és telepítési segítség |
-| `UpdateDialog` | release asset letöltés és update |
-| `FaceDiagnosticsDialog` | arc fragmentáció kimutatása, fragmentáció okainak elemzése |
-| `IdentityRepairDialog` | tömeges személyazonosító fragmentáció javítása, konzisztencia-helyreállítás |
+| `SettingsDialog` | nyelv, DB, image library, TPU, Drive, updates, shortcuts, recording, geocoding |
+| `ScanModesDialog` | fast/high-accuracy/rescan/deep futasi modok |
+| `ManualMarkDialog` / `NoFaceImagesDialog` | kezi arc es arcnelkuli kepek |
+| `SuggestionDialog` / `SuggestionViewer` | nevjavaslat review, full-image compare |
+| `AutoAssignmentsTab` | deep auto assignment confirm/correct/revert |
+| `AutoMergeReviewDialog` | Unknown manual merge soran automatikusan athuzott arcok review-ja |
+| `ReRecognitionReviewDialog` / `ReRecognitionHistoryDialog` | re-recognition review es undo history |
+| `IgnoredFacesDialog` | tartosan ignoralt arcok kezelese |
+| `PersonInfoDialog` | strukturalt szemelyadatok, family code, csoporttagsag |
+| `GroupManagerDialog` | csoport CRUD es tagsag |
+| `PlaceEditDialog` / `PlaceMergeDialog` | strukturalt cim, koordinata, map picker, merge |
+| `ObjectInfoDialog` / `ObjectPickerDialog` / `ObjectMergeDialog` | targyadatok, object valasztas es merge |
+| `ExportDialog` | export formatum es cel |
+| `ImageLibraryMissingDialog` / `MigrateLibraryDialog` | hordozhato image library root kezeles |
+| `CollageNodeDialog` | kollazs node metaadat |
+| `TpuStatusDialog` | Edge TPU diagnosztika |
+| `UpdateDialog` | release asset letoltes es update |
+| `FaceDiagnosticsDialog` / `IdentityRepairDialog` | fragmentacio diagnosztika es javitas |
 
-### Billentyűparancsok
+## 10. Domain service-ek
 
-**Fájlok**: `app/services/shortcut_service.py`, `app/ui/dialogs/shortcuts_settings_tab.py`
-
-A `ShortcutService` app-szintű event filteren keresztül diszpécsel, de editable input widgetekben nem nyeli el a gépelést. A kiosztás QSettingsben mentődik, capture módban konfliktust jelez, és néhány alapművelet nem törölhető.
-
-Alap kategóriák:
-
-- általános: beállítások, keresés fókusz, fullscreen, log panel,
-- képböngésző: előző/következő kép, kézi kijelölés, face assign/confirm, bbox edit/delete/next/prev, zoom/fit/info,
-- személyek: új személy, átnevezés, merge, reassign, exclude,
-- kollázs: import, face overlay, node törlés, HTML export.
-
----
-
-## 11. Keresés, családfa és helyszínek
-
-### Személykeresés
-
-**Fájlok**: `app/utils/person_search.py`, `app/ui/widgets/person_search_select.py`
-
-A személykeresés normalizált, több mezős keresést használ. A találatoknál a név mellett a strukturált mezők, becenév, házassági név és családi kód is releváns.
-
-### Univerzális tokenes keresés
-
-**Fájl**: `app/ui/widgets/universal_search_bar.py`
-
-A képböngészőben használt kereső chip/token alapú. A beírt szövegből és kiválasztott javaslatokból `SearchToken` lista épül, amely a mappafa és képtalálatok szűrésére szolgál. A javaslatforrás panelenként cserélhető, így ugyanaz a widget használható személy-, hely-, dátum- vagy szabad szöveges kereséshez.
-
-### Családi kódok és kapcsolatok
-
-**Fájl**: `app/services/family_service.py`
-
-A családi szolgáltatás:
-
-- normalizálja és validálja a családi kódokat,
-- parse-olja a családgyökeret, generációt, házastárs jelölést,
-- listáz gyerekeket, testvéreket, ágakat,
-- tárolt kapcsolatokat kezel: `ParentChild`, `Spouse`,
-- testvérséget részben származtatott módon kezel,
-- kapcsolatleírást ad két személy között,
-- képeket keres személyek, kapcsolatok és strukturált mezők alapján.
-
-### Helyszínek
-
-**Fájlok**: `app/services/place_service.py`, `app/services/geocoding_service.py`, `app/services/geocoding/` (provider, nominatim_provider, factory), `app/utils/exif.py`, `app/ui/panels/locations_panel.py`, `app/ui/dialogs/place_edit_dialog.py`, `app/ui/widgets/address_autocomplete_edit.py`, `app/ui/widgets/place_map_picker_widget.py`, `app/workers/geocoding_worker.py`
-
-A scan EXIF GPS koordinátát olvas. Ha a képnek nincs helye, a `PlaceService` közeli meglévő helyhez kötheti, vagy anonim EXIF helyet hoz létre. A felhasználó ezeket később elnevezheti, összevonhatja vagy kézzel rendelheti képekhez.
-
-**Strukturált cím, autocomplete és interaktív térkép.** A hely a szabad nevén túl strukturált címet tárol: `settlement_name` (kötelező), `street_name`, `house_number` (opcionális), `display_name` (auto: „Balatonszemes, Bajcsy-Zsilinszky utca 12."), `coordinate_source` (`geocoded_settlement`/`geocoded_street`/`geocoded_address`/`manual_map_pin`/`exif`/`imported`) és `is_exact_coordinate`. A `PlaceService.classify_address` állapotgépe: csak település → `area`/`geocoded_settlement`/nem pontos; +utca → `area`/`geocoded_street`; +házszám → `exact`/`geocoded_address`/pontos; térképi kézi pin → `manual_map_pin`. Metódusok: `create_place_from_address`, `update_place_address`, `set_manual_coordinates`, `find_places_by_settlement`, `build_display_name`. A kereső a `display_name`/`settlement`/`street`/`house_number`/alias/`name` mezőkre is illeszt. A `PlaceEditDialog` kétpaneles: bal oldalt űrlap (`AddressAutocompleteEdit` település/utca, debounce + háttér-worker), jobb oldalt `PlaceMapPickerWidget` (Leaflet + `QWebChannel`, húzható marker, kattintásra pont, pontossági kör). A geokódolást a `GeocodingService` végzi cache-first módon: `geocoding_cache` (provider-válaszok) → `place_address_suggestions` (a felhasználó saját, offline is működő címei) → online provider. **Az online geokódolás opt-in, alapból kikapcsolva** (`geocoding/enabled` QSettings, Beállítások → Képpárosítás fül); a `NominatimProvider` (`urllib`, User-Agent + 1 req/s throttle) csak engedélyezve hívódik. Provider-hiba/offline esetén a szolgáltatás üres listával/`None`-nal degradál, a kézi koordináta-megadás mindig elérhető.
-
-**Helytípusok és hierarchia.** Minden hely `place_type` értéke `exact` (pontos hely – ház, templom, strand; ~50 m), `area` (település méretű; ~5 km) vagy `region` (nagy földrajzi egység; ~50 km). A típushoz tartozik egy `accuracy_radius_meters` (alapértéke a típusból jön, felülírható), amely a közeli-hely keresés sugarát szabja. EXIF GPS feldolgozáskor a `link_exif_gps_to_image` előbb `exact`, majd `area`, végül `region` helyet keres (`find_nearby(..., place_types=..., use_place_radius=True)`); ha egyik sincs, anonim `exact` helyet hoz létre. A `place_type IS NULL`/régi helyek a migrációban automatikusan `area` típust kapnak (`database._migrate_place_types`). A helyek a `parent_id` mezővel hierarchiába (`region → area → exact`) szervezhetők (`set_parent` ciklusvédelemmel, `list_children`/`list_descendants`). A `LocationsPanel` `QTreeWidget`-ben, szülő-gyermek fában mutatja a helyeket Típus oszloppal és ikonnal, típus-szűrővel; az „Új hely"/„Szerkesztés" a `PlaceEditDialog`-ot nyitja (név, típus, koordináta, sugár, szülő).
-
-A képnek a helyszíntől külön saját koordinátája is lehet (`Image.image_latitude`, `Image.image_longitude`). Megjelenítéskor ez az elsődleges; ha nincs, az EXIF GPS, majd a kapcsolt hely koordinátája következik. Az EXIF helper validál koordinátát, rugalmas dátumot parse-ol, és támogatja a GPS/dátum visszaírását a képfájlba.
-
-### Deoldified párosítás
-
-**Fájl**: `app/services/deoldified_pairing_service.py`
-
-A deoldified/colorized fájlokat a `-deoldified` token alapján kapcsolja az eredeti képhez. A képböngészőben ez lehetővé teszi, hogy a színezett képet nézve az eredeti kép arcadatai, dátuma és metaadatai legyenek szerkeszthetők, és egy mozdulattal lehessen váltani az eredeti/színezett verzió között. A funkció QSettingsből kapcsolható.
-
----
-
-## 12. Export és kollázs
-
-### Export
-
-**Fájl**: `app/services/export_service.py`
-
-Az export szolgáltatás:
-
-- személyekhez tartozó képek vagy cropok mappába másolása,
-- CSV riport,
-- JSON riport,
-- önálló HTML galéria,
-- kollázs HTML export,
-- bbox pixeles és százalékos koordináták,
-- személy-, kép-, dátum-, hely- és arcmetaadatok exportja,
-- biztonságos fájlnevek és hordozható image resolver használata.
-
-### Kollázs
-
-**Fájlok**: `app/services/collage_parser.py`, `app/services/collage_service.py`, `app/ui/panels/collage_panel.py`
-
-A kollázs alrendszer Picasa jellegű `.cxf/.cfx` fájlokat olvas. A parser képes sérült XML recoverre, Windows/Picasa útvonalak feloldására, relatív node geometriák és metaadatok parse-olására.
-
-A `CollageService`:
-
-- importálja és adatbázisba menti a kollázst,
-- node-okat `Image` rekordokhoz linkel,
-- rendereli a kollázst,
-- arcokat vetít a kollázs node koordinátáira,
-- annotált képet és annotált `.cxf`-et exportál,
-- fájlnévből év/hely/esemény metaadatokat tud kinyerni.
-
----
-
-## 13. Háttérmunkák és threading
-
-| Worker | Feladat |
+| Service | Felelosseg |
 |---|---|
-| `PipelineWorker` | scan -> detect -> embed -> same-image duplicate cleanup -> recognize -> cluster Unknown -> intra-image consistency -> suggest pipeline QThreadben |
-| `ThumbnailRunnable` | lokális thumbnail generálás QRunnable-ben |
-| `DriveThumbRunnable` | Drive image thumbnail letöltés/generálás |
-| `DriveFetchRunnable` | Drive kép lokális lekérése megnyitáshoz/szerkesztéshez |
-| `MatchJobWorker` | merge suggestion scoring és perzisztálás háttérszálon |
-| `GeocodingWorker` | cím autocomplete/geocode hívások UI-blokkolás nélkül |
-| `_DownloadThread` | update asset letöltés |
-| `_InstallerThread` | TPU telepítési parancsok futtatása |
-| `_SignInThread` | Google OAuth login |
-| `_FolderProbeThread` | Drive folder validálás |
-| `_MigrationThread` | image library relatív út migráció |
+| `ScanService` | lokalis kepek indexelese, hash, EXIF, relative path, DB rekord |
+| `DriveScanService` | Drive kepek listazasa, mirror/cache, `RemoteImage` frissites |
+| `DetectionService` | face detect, high-accuracy, verification, crop, landmark, quality |
+| `EmbeddingService` | pending embeddingek eloallitasa |
+| `RecognitionService` | klasszikus profile-based felismeres |
+| `DeepRecognitionService` | training run, MLP ensemble, auto assignment review muveletek |
+| `AiFaceDetectionService` | analysis-only AI bbox eredmenyek |
+| `ClusteringService` | Unknown N klaszterezes, re-cluster same/different korrekciokkal |
+| `SuggestionService` | Unknown -> ismert szemely nevjavaslat |
+| `MergeSuggestionService` | face+nev alapu perzisztalt merge javaslatok |
+| `IdentityService` | rename, merge, delete, reassign, exclude, manual correction |
+| `UnknownMergeService` | Unknown manual hozzarendeles es auto-merge review |
+| `IgnoredFaceService` | ignore forever, embedding alapu szures, un-ignore |
+| `OverlapResolutionService` | deep pipeline atfedo box feloldas, assigned/manual arcok vedelme |
+| `IntraImageDuplicateService` | azonos fizikai arc duplikalt uj bboxainak torlese |
+| `IntraImageConsistencyService` | kepen beluli identity-fragmentacio javitasa |
+| `IdentityRepairService` | globalis fragmentacio-jeloltek |
+| `FaceDiagnosticsService` | fragmentacio es quality okok diagnosztikaja |
+| `PersonService` | Szemelyek tab CRUD, szurok, thumb, face cropok, kepek |
+| `PersonGroupService` | szemelycsoport CRUD es tagsag |
+| `FamilyService` | family code, kapcsolatok, csaladi kepkereses |
+| `FamilyCodeSchemeStore` / `FamilyCodeInterpreter` | testreszabhato family code semak es ertelmezes |
+| `PlaceService` | hely CRUD, EXIF GPS link, cim, hierarchia, merge, thumbnail |
+| `GeocodingService` | cache-first cimjavaslat/geocode, opt-in online provider |
+| `ObjectService` | targyak, elofordulasok, szemely-szerep kapcsolatok, merge |
+| `ImageBrowserService` | kepbongeszo mappa/kep osszefoglalok |
+| `FaceDateResolver` / `FuzzyDate` | arcok kepdatumabol szarmaztatott rendezheto, pontatlan datum-intervallum |
+| `FaceGroupingService` | near-identical arcok embedding alapu csoportositasa stackelt arcracs nezethez |
+| `ImageLibraryService` | hordozhato relative path es root migracio |
+| `FaceCropService` | crop fajlnev, crop ujrageneralas, thumbnail frissites |
+| `CollageParser` / `CollageService` | Picasa kollazs parse, render, overlay, export |
+| `DeoldifiedPairingService` | eredeti es deoldified/colorized par kezeles |
+| `ShortcutService` | app-szintu shortcuts es QSettings perzisztencia |
+| `ExportService` | CSV/JSON/kep/Astro/kollazs export |
+| `ImageMetadataExportService` / `FaceMetadataExportService` | metadata export workflow-k |
+| `ProjectPackageService` | `.facepack` export/import |
+| `UpdateService` | GitHub release check, asset valasztas, letoltes |
+| `ScreenRecorderService` | ffmpeg recording, audio mix, segmentek, concat |
 
-Hosszú művelet nem futhat a GUI szálon. A háttérfolyamatok Qt signallal frissítik a progress bart, státuszt, logot és UI listákat.
+## 11. Hordozhato image library es Drive
 
----
+### Lokalis hordozhatosag
 
-## 14. Csomagolás, release és diagnosztika
+Fajl: `app/services/image_library_service.py`
 
-Kapcsolódó fájlok:
+Az `Image.file_path` legacy abszolut ut, az `Image.relative_path` a
+kepgyujtemeny rootjahoz kepesti POSIX-style ut. A gepenkenti root a DB mellett
+levo `project.local.json` fajlban el.
+
+Resolver sorrend:
+
+1. `relative_path` + aktualis `image_library_root`,
+2. legacy `file_path`,
+3. `None`, ha nem feloldhato.
+
+A service kozos rootot detektal, relatív utakra migral, scan kozben regi
+abszolut rekordokat relinkel, es missing-root UI workflow-t tamogat.
+
+### Google Drive
+
+Fajlok: `app/gdrive/*`, `app/ui/dialogs/gdrive_settings_tab.py`,
+`app/workers/drive_image_worker.py`
+
+Komponensek:
+
+| Komponens | Felelosseg |
+|---|---|
+| `oauth_config.py` / `oauth_flow.py` | Google OAuth config es browser login |
+| `credential_store.py` | token tarolas keyringben vagy titkositott fallbackben |
+| `drive_client.py` | Drive API wrapper retry logikaval |
+| `preferences.py` | account, folder, Drive mod es DB sync QSettings |
+| `project_session.py` | projekt descriptor, DB download/upload, lock, heartbeat |
+| `drive_scan_service.py` | Drive kepek rekurziv indexelese es mirror frissites |
+| `storage_provider.py` | lokalis es Drive kepforras protokoll |
+| `cache.py` | atmeneti Drive file cache, meretlimit es cleanup |
+| `db_sync.py` | egyszerubb/legacy DB sync wrapper |
+| `connectivity.py` | online/offline guard |
+| `folder_url.py` | Drive folder URL vagy ID parse |
+
+Drive modban a pipeline a letoltott projekt DB override utvonalon dolgozik.
+A `GDriveProjectSession` stale lockot felismer, heartbeatet frissit, zaraskor
+checkpointol es feltolti a DB-t.
+
+## 12. Kereses, csalad, hely, targy
+
+### Szemelykereses es universal search
+
+Fajlok: `app/utils/person_search.py`,
+`app/ui/widgets/person_search_select.py`,
+`app/ui/widgets/universal_search_bar.py`
+
+A szemelykereses normalizalt tobbmezos keresest hasznal: nev, strukturalt nev,
+becenev, hazassagi nev, family code. A kepbongeszoben token/chip alapu
+univerzalis kereso mukodik szemely, hely, datum es szabad szoveg forrasokkal.
+
+### Fuzzy datumok es arcracs rendezese
+
+Fajlok: `app/utils/fuzzy_date.py`, `app/services/face_date_service.py`,
+`app/services/face_grouping_service.py`, `app/ui/panels/cluster_panel.py`
+
+A kepek es szemelyadatok datumai szabad szovegesek lehetnek: pontos nap,
+honap, ev, evtized, intervallum, nyitott vegu datum vagy becsles. A
+`FuzzyDate` ezt `earliest`/`latest` intervallumma es rendezheto `sort_key`-je
+alakitja. A `FaceDateResolver` az arc datumakent a kep effektív datumát adja
+vissza cache-elve. Az arcracs ez alapjan tud datum szerint novekvo/csokkeno
+sorrendet adni, illetve minoseg szerint rendezni.
+
+A `FaceGroupingService` embedding-koszinusz hasonlosaggal near-identical
+arcokat von ossze egy stackelt tile-ba. Ez nem identity merge es nem DB iras:
+csak UI-nezet, amely a hasonlo shotokat vagy duplikalt scaneket teszi
+attekinthetobbe.
+
+### Csaladi modell
+
+Fajlok: `app/services/family_service.py`,
+`app/services/family_code_schemes.py`,
+`app/services/family_code_interpreter.py`
+
+A family code semak felhasznalo altal szerkeszthetok. A service normalizal,
+validal, parse-ol, kapcsolatokat kezel (`ParentChild`, `Spouse`), testverseget
+szarmaztat, rokonleirast ad, es kepeket keres csaladi feltetelek szerint.
+
+### Helyszinek es geokodolas
+
+Fajlok: `app/services/place_service.py`,
+`app/services/geocoding_service.py`, `app/services/geocoding/*`,
+`app/ui/panels/locations_panel.py`, `app/ui/dialogs/place_edit_dialog.py`
+
+Helytipusok:
+
+- `exact`: konkret hely, kb. haz/templom/strand szintu,
+- `area`: telepules vagy kisebb terulet,
+- `region`: nagyobb foldrajzi egyseg.
+
+A `Place` strukturalt cimet tarol: `settlement_name`, `street_name`,
+`house_number`, `display_name`, `coordinate_source`, `is_exact_coordinate`.
+A `PlaceService.classify_address` cimbol helytipust es koordinataforrast
+szarmaztat. A `parent_id` hierarchiat tesz lehetove (`region -> area -> exact`).
+
+EXIF GPS feldolgozaskor a service elobb kozeli `exact`, majd `area`, majd
+`region` helyet keres a tipushoz tartozo sugarakkal. Ha nincs talalat,
+anonim EXIF helyet hoz letre. A kepnek a helytol fuggetlen sajat
+`image_latitude`/`image_longitude` koordinataja is lehet, ami megjeleniteskor
+elsobbseget elvez az EXIF es hely koordinatak elott.
+
+Online geokodolas opt-in. A sorrend:
+
+1. `geocoding_cache`,
+2. `place_address_suggestions`,
+3. online provider, jelenleg Nominatim throttle-lal es User-Agenttel.
+
+### Targyak
+
+Fajlok: `app/services/object_service.py`, `app/ui/panels/objects_panel.py`,
+`app/ui/dialogs/object_*`
+
+A targyak domainje kulon van az arcfelismerestol. Nincs embedding, biometrikus
+adat vagy face pipeline reszvetel. A felhasznalo targy identitasokat hozhat
+letre, elofordulasokat jelolhet kepeken, per-kep megjegyzest irhat, es
+szemelyeket kothet a targyhoz szerepekkel (`owner`, `former_owner`, `driver`,
+`creator`, `user`, `family`, `other`). A schema mar bbox/polygon es AI
+detection mezokre is fel van keszitve, de a jelenlegi workflow manualis pont
+es bbox orientalt.
+
+### Deoldified parok
+
+Fajl: `app/services/deoldified_pairing_service.py`
+
+A `-deoldified`/colorized kepeket az eredetihez koti. Szerkeszteskor a
+kanonikus eredeti kep adatait kell modositani, nem a szinezett par
+kulon rekordjat.
+
+## 13. Export, Astro es projektcsomag
+
+### Export service
+
+Fajl: `app/services/export_service.py`
+
+Tamogatott iranyok:
+
+- szemelyhez tartozo kepek vagy cropok mappaba masolasa,
+- CSV/JSON/Excel jellegu riportok,
+- bbox koordinatak pixeles es szazalekos formaban,
+- szemely, kep, datum, hely, targy es arc metaadatok,
+- kollazs HTML es annotalt export,
+- Astro statikus weboldal export.
+
+Exportnal mindig hordozhato image resolver hasznalando. Hianyzo root es Drive
+fetch hiba kezeles kotelezo.
+
+### Astro static site
+
+Fajlok: `web/astro/*`, `app/workers/astro_export_worker.py`
+
+Az Astro export a jelenlegi nagy adathalmazokra optimalizalt HTML galeria.
+A Python exporter bundle-t ir a `web/astro` projektbe:
+
+- build-time JSON: `manifest.json`, `persons.json`, `photos.json`,
+  `map-data.json`, `slideshow-data.json`,
+- kepvariansok: `thumbs`, `medium`, `original`,
+- runtime minimal `search-index.json`,
+- standalone parity oldalak: `map.html`, `slideshow.html`, opcionális
+  `collage_index.html`.
+
+Az Astro SSG lapozott listakat es detail oldalakat general. A kesz `dist/`
+fajlrendszerrol is megnyithato, csak a fetch-alapu kereso igenyel szervert.
+
+### Projektcsomag
+
+Fajl: `app/services/project_package_service.py`
+
+A `.facepack` ZIP teljes hordozhato projektet tartalmazhat:
+
+- SQLite DB,
+- cropok,
+- konfiguracio/beallitas snapshot,
+- opcionálisan kepek.
+
+Importnal az utak uj helyre oldodnak fel. Abszolut utak nem tekinthetok
+hordozhatonak, ezert az `ImageLibraryService` relatív resolveret kell hasznalni.
+
+## 14. Hattermunkak es threading
+
+Hosszu muvelet nem futhat a GUI szalon. A worker-ek Qt signallal frissitik a
+progress bart, statust, logot es UI listakat.
+
+| Worker | Felelosseg |
+|---|---|
+| `PipelineWorker` | klasszikus 7 stage pipeline + koztes passzok |
+| `DeepPipelineWorker` | rescan/rebuild/train/detect_faces AI pipeline |
+| `ReRecognitionWorker` | kepbongeszo Unknown ujrafelismeres |
+| `MatchJobWorker` | merge suggestion scoring es perzisztalas |
+| `AstroExportWorker` | Astro bundle es build futtatasa |
+| `FaceMetadataExportWorker` | hosszu face metadata export |
+| `ThumbnailRunnable` | lokalis thumbnail generacio |
+| `DriveThumbRunnable` / `DriveFetchRunnable` | Drive thumbnail es kep fetch |
+| `GeocodingWorker` QRunnable-ok | cim autocomplete/geocode UI blokkolas nelkul |
+| `_DownloadThread` | update asset letoltes |
+| `_InstallerThread` | TPU telepitesi parancsok |
+| `_SignInThread` / `_FolderProbeThread` | Google OAuth es folder validalas |
+| `_MigrationThread` | image library relative path migracio |
+
+## 15. Packaging, update es recording
+
+Kapcsolodo fajlok:
 
 - `scripts/package_app.py`,
 - `scripts/build_and_run.sh`,
@@ -998,187 +792,107 @@ Kapcsolódó fájlok:
 - `scripts/github_release.py`,
 - `scripts/post_x_release.py`,
 - `scripts/post_buffer_release.py`,
+- `scripts/generate_appcast.py`,
+- `sparkle/Sources/SparkleHelper/main.swift`,
 - `app/diagnostics.py`.
 
-A projekt tartalmaz platformikonokat (`assets/icons`) és release automatizálási segédeket. Az `UpdateService` GitHub release asseteket ellenőriz, platform szerint assetet választ, letöltési progresszt ad, majd macOS DMG, Windows EXE/ZIP, Linux DEB/tar.gz telepítési útvonalakat kezel. A `MainWindow` státuszsorban és system tray értesítésben is tud update-et jelezni, ha az értesítés engedélyezett. A diagnosztikai modul TFLite backendeket vizsgál, a TPU dialógus Edge TPU library/device állapotot és javító parancsokat mutat.
+Az app platformikonokat tartalmaz az `assets/icons` alatt. Az `UpdateService`
+GitHub release asseteket ellenoriz, platform szerint valaszt assetet, letoltesi
+progresszt ad, majd macOS DMG, Windows EXE/ZIP, Linux DEB/tar.gz utvonalakat
+kezel. macOS oldalon Sparkle helper es appcast artefaktumok is jelen vannak.
 
----
+### Kepernyorogzites
 
-## 15. Tesztek
+Fajlok: `app/services/screen_recorder_service.py`,
+`app/services/recording_timeline_log.py`,
+`app/services/recording_metadata.py`,
+`app/ui/widgets/recording_controls.py`
 
-**Könyvtár**: `tests/`
+Az ffmpeg alapu recorder:
 
-A tesztcsomag lefedi többek között:
+- mikrofon hangot rogzit, system audio best-effort loopback eszkozzel,
+- aktiv ablak, minden kijelzo vagy kivalasztott kijelzok rogzitese,
+- segmentalt mentes crash-vedett granularitassal,
+- pause/resume ffmpeg restarttal,
+- stopkor opcionális concat vegso MP4-be,
+- timeline `.timeline.txt` es crash-safe JSON metadata.
 
-- konfiguráció betöltését és DB út mentését,
-- adatbázis és schema viselkedést,
-- lokális scan és image library logikát,
-- Google Drive dotenv, credential store, folder URL, storage provider, project session és drive scan réteget,
-- YuNet/CPU detektorokat és TFLite/SFace embeddert,
-- detektálás, embedding, intra-image dedup/consistency, klaszterezés, felismerés és suggestion service-eket,
-- face crop, face quality, duplikált ismeretlen arc és identity repair workflow-kat,
-- képböngésző, deoldified compare és image metadata export szolgáltatásokat,
-- helyszín-, geokódolási-, családi-, person group- és személy szolgáltatásokat,
-- deoldified párosítást,
-- Drive projekt-session lock/heartbeat és távoli képszinkront,
-- kollázs parse-t,
-- exportot, face metadata exportot és `.facepack` projektcsomagolást,
-- képernyőrögzítés argumentumait, metadata/timeline logját és audio level metert,
-- release és social posztoló scripteket.
+## 16. Tesztek es fejlesztoi parancsok
 
-Futtatás:
+Futtatas:
 
 ```bash
 pytest
 ```
 
----
+Helper scriptek:
 
-## 16. Fragmentáció és konzisztencia
+```bash
+scripts/run_tests.sh
+scripts/run_tests.ps1
+scripts/build_and_run.sh
+scripts/build_and_run.ps1
+scripts/build_and_run.bat
+```
 
-**Fájlok**: `app/services/intra_image_duplicate_service.py`, `app/services/intra_image_consistency_service.py`, `app/services/identity_repair_service.py`, `app/services/face_diagnostics_service.py`
+A tesztcsomag lefedi tobbek kozott:
 
-A személyazonosítók fragmentációja akkor fordul elő, amikor:
+- config es DB init/migracio,
+- image library es local scan,
+- Drive dotenv, credential store, folder URL, storage provider, project session,
+  drive scan,
+- detektorok, embedding, alignment,
+- detection, face quality, duplicate/overlap resolution, ignored faces,
+  clustering, recognition, deep recognition,
+- rerecognition, auto merge review, merge decision history,
+- person, group, family, place, geocoding, object service,
+- image browser, date/fuzzy date, arcracs sort/group, EXIF write, deoldified compare,
+- collage parser,
+- export, face/image metadata export, Astro export, `.facepack`,
+- recording args, metadata, timeline, audio level meter,
+- release helper scriptek.
 
-- kézi arc korrekciók ellentmondanak az automatikus hozzárendeléseknek,
-- ugyanaz az ember több személyhez van hozzárendelve,
-- alacsony minőségű arcok téves hozzárendeléseket vezetnek be.
+Dokumentacio-only valtozasnal nem kotelezo teljes pytestet futtatni, de schema
+vagy pipeline contract valtozasnal az erintett service teszteket legalabb
+celzottan futtatni kell.
 
-Az `IntraImageDuplicateService` embedding + bbox-overlap alapján törli az ugyanazon képen frissen létrejött, még hozzárendeletlen duplikált arcboxokat, mielőtt azok külön Unknown személyekké válnának. Az `IntraImageConsistencyService` egy képen belüli fragmentációt javítja: ha egy képen többszörösen hozzárendelt arcok vannak, egy pass-en keresztül konzisztenssé teszi őket az összes megadott arc hozzárendeléséből. Az `IdentityRepairService` ezt a tömeges szintre emeli: a teljes adatbázist elemzi, fragmentáció-klasztereket azonosít, és merge jelölteket ad a javító UI-nak.
+## 17. Fejlesztesi contractok
 
-A `FaceDiagnosticsService` felismeri és jelzi a fragmentáció okát: alacsony minőség, ellentmondó korrekciók, stb. A `FaceDiagnosticsDialog` ezt interaktív módon jeleníti meg, és a javító műveletek közvetlenül indíthatók belőle.
-
----
-
-## 17. Merge javaslatok és név-alapú keresés
-
-**Fájlok**: `app/services/merge_suggestion_service.py`, `app/services/name_matching.py`
-
-A `MergeSuggestionService` háttérben futó keresőmotor, amely embedding-alapú arc hasonlóságot és fuzzy névjelet kombinál, majd merge javaslatokat kínál fel. A név önmagában nem elég erős jel: csak akkor támogatja a javaslatot, ha az arc-hasonlóság is eléri a konfigurált minimumot. A motor:
-
-- személyek neveit normalizálja és tokenizálja,
-- arc centroid és legjobb-pár hasonlóságot, valamint név-hasonlóságot számít,
-- `MergeSuggestion` rekordokat hoz létre a DB-ben normalizált `source_person_id < target_person_id` párokkal,
-- státuszt kezel: `pending`, `accepted`, `rejected`, `deferred`, `dismissed`,
-- `job_id` alapján megkülönbözteti az aktuális és régi háttérfutások eredményeit,
-- `MatchJobWorker` QThread-ben futtatja a keresést.
-
-A javaslatok a UI-ban megjeleníthetők, elfogadhatók, elutasíthatók, későbbre halaszthatók vagy végleg elrejthetők. A dimissz-elt javaslatok nem jelennek meg újra.
-
----
-
-## 18. Személycsoportok
-
-**Fájlok**: `app/services/person_group_service.py`, `app/ui/widgets/group_chip_select.py`
-
-A személycsoportok (Kórus, Munkahely, Horgászklub, stb.) sokhoz-sokhoz kapcsolatot biztosítanak személyek között, anélkül hogy kitöltenék a genealógiai felépítést. A `PersonGroup` modell és `PersonGroupMembership` join tábla támogat ezt.
-
-A `PersonGroupService`:
-
-- csoportokat hoz létre, nevez át, töröl,
-- tagságot kezel,
-- export során csoportinformációkat tartalmazza.
-
-A `GroupChipSelect` widget a `PersonInfoDialog`-ban választható csoporttagságot biztosít chip alapú interfésszel.
-
----
-
-## 19. Projekt csomagolás
-
-**Fájl**: `app/services/project_package_service.py`
-
-A projekt `.facepack` ZIP csomag formátumba exportálható/importálható. Ez egy teljes, hordozható projekt, amely tartalmazza:
-
-- a teljes SQLite adatbázist,
-- az összes arc crop képet,
-- a konfigurációt és beállításokat,
-- az opcionális képeket (ha a felhasználó ezt választotta).
-
-Az export azt a mappát csomagolja, ahol a projekt él. Az import feloldja az összes útvonalat és képeket átmásolja az új helyre. Az `ImageLibraryService` relatív útvonala támogatja ezt a hordozhatóságot.
-
----
-
-## 20. Képernyőrögzítés
-
-**Fájlok**: `app/services/screen_recorder_service.py`, `app/ui/widgets/recording_controls.py`, `app/services/recording_timeline_log.py`, `app/services/recording_metadata.py`
-
-A `ScreenRecorderService` ffmpeg-alapú képernyőrögzítés, amely:
-
-- hanggal együtt rögzít: mikrofon kötelező logikai forrás, system audio best-effort loopback eszközzel,
-- aktív ablak, minden kijelző vagy kiválasztott kijelzők rögzítését támogatja,
-- szegmentált fájlokba mentést támogat (crash-védett mentési granularitás),
-- forced keyframe-ek a stabilitásért,
-- pause/resume lehetőség (ffmpeg restart),
-- stopkor opcionálisan összefűzi a segmenteket egy végső MP4-be.
-
-Az `RecordingTimelineLog` egy `.timeline.txt` naplóban az aktív kontextust és képböngészőben megnyitott képeket időbélyeggel tárolja, így könnyű visszanavigálni.
-
-A `RecordingControls` widget az alkalmazásban start/pause/resume/stop gombokat, elapsed időt és audio level metert biztosít. A `RecordingMetadata` és `RecordingMetadataWriter` crash-safe JSON metaadatot kezel.
-
----
-
-## 21. Fejlesztési irányelvek
-
-- DB schema változásnál frissíteni kell az ORM modelleket, az idempotens migrációkat és ezt a blueprintet.
-- Új képútvonalat kezelő funkciónál a `file_path` helyett lehetőség szerint az `ImageLibraryService` resolverét kell használni.
-- Drive képeknél a lokális fájl csak cache/mirror lehet; remote metadata a `RemoteImage` rekordban él.
-- Új automatikus hozzárendelésnél mindig tölteni kell az `assignment_source`, `assignment_confidence`, `assigned_at` mezőket.
-- UI műveleteknél a védett `Ismeretlen` személyt nem szabad átnevezni vagy törölni.
-- Kézi arc- vagy bbox-módosítás után a cropot, embedding állapotot és személy thumbnailt is konzisztensen kell frissíteni.
-- Helyszín merge esetén alias adatokat meg kell őrizni.
-- Képszintű GPS módosításnál a DB mezők és az opcionális EXIF visszaírás legyen külön kezelve; helyszín koordinátát csak explicit művelet írjon képfájlba.
-- Deoldified nézetben kézi arc-, dátum- és személymódosításnál a kanonikus, eredeti képre kell menteni, nem a színezett párra.
-- Új billentyűparancsnál a `ShortcutService` default listáját, az i18n kulcsokat és a handler-regisztrációt együtt kell frissíteni.
-- Családi kapcsolatnál kerülni kell az önhivatkozást, duplikált házastárs rekordot és ciklikus parent-child láncot.
-- Hosszabb futású munkát Qt workerben vagy QRunnable-ben kell végezni, nem a GUI szálon.
-- Exportnál, kollázsnál, preview-nál és képböngészőnél kezelni kell a hiányzó image library rootot és a Drive fetch hibákat.
-- Új UI szöveghez az `app/ui/i18n.py` kulcsait kell frissíteni.
-- Személy-módosításnál (merge, reassign, kizárás) érdemes az `IntraImageConsistencyService` pass-t futtatni, hogy az azonos képen belüli konzisztencia javuljon.
-- Új arc-korrekció vagy módosítás után az `IdentityRepairService` scan-et ajánlott indítani fragmentáció-feloldáshoz.
-- Merge javaslatokat létrehozó kódban a `MergeSuggestionService` konfigurált face+név scoringját és `MergeSuggestion` státuszmodelljét kell használni; név-only merge javaslat nem lehet automatikusan elégséges.
-- Személycsoport szerkesztésnél a DB-ben `PersonGroupMembership` rekordokat kell változtatni, nem a `Person` tábla módosítása.
-- `.facepack` export/import esetén az `ImageLibraryService` relatív útvonal resolverét kell használni; abszolút utak nem hordozhatók.
-- Képernyőrögzítés szinkron üzeneteit a `RecordingTimelineLog`-ba kell írni idő-indexszel.
-- Fragmentáció-javító vagy merge javaslat elfogadása után a kiválasztott személy-hozzárendeléseket kell módosítani, ezt követően `IntraImageConsistencyService` pass ajánlott.
-- A Személyek oldal adatműveleteit a `PersonService`-en keresztül kell végezni; üzleti logika ne kerüljön a `PersonsPanel` widgetbe.
-
----
-
-## 22. Személyek oldal
-
-**Fájlok**: `app/services/person_service.py`, `app/ui/panels/persons_panel.py`
-
-A Személyek egy önálló karbantartó tab (a Helyszínek oldal mintájára), amely a `PERSONS` táblát teszi táblázatosan kezelhetővé, függetlenül az Arcfelismerés oldaltól.
-
-### Cél
-
-Egy helyen áttekinthető és szerkeszthető legyen az összes személy minden adata, a hozzájuk tartozó arcokkal és képekkel együtt, anélkül hogy az Arcfelismerés munkafolyamatba kellene belépni.
-
-### UI felépítés
-
-- Felül szűrősor: név (+ becenév és strukturált nevek) és családi kód kereső, „Alkalmaz” gomb, találatszám.
-- Bal oldali fő panel: rendezhető `QTableWidget` az összes mezővel (id, bélyegkép ikon, név, családi kód, külső családi kód, vezetéknév, keresztnév, második név, becenév, házassági név, nem, születési hely/dátum, halálozási hely/dátum, megjegyzés, automatikusan elnevezett-e, védett-e). Az id numerikusan rendeződik, a kis bélyegkép ikonok háttérben (`ThumbnailRunnable`) töltődnek.
-- Jobb oldali részletező panel: nagy bélyegkép, arc/kép darabszám, műveletgombok, az arc cropok galériája és a kapcsolódó képek galériája (`PlaceGalleryWidget`, lazy-load).
-
-### Service réteg
-
-A `PersonService` metódusai (a session tranzakciót a hívó vezérli):
-
-- `list_persons(filters)` – minden személy `PersonSummary`-ként, arc- és képszámmal, név/családi kód szűréssel,
-- `list_face_crops(person_id)` – a személy arc cropjai (placeholderhez/bélyegkép-választáshoz),
-- `list_images_for_person(person_id)` – a kapcsolódó képek elérési útjai,
-- `rename_person(person_id, name)` – átnevezés üres-név- és védett-ellenőrzéssel,
-- `update_person(person_id, **fields)` – strukturált mezők frissítése, üres string → `None`, üres családi kód törlése,
-- `set_thumbnail_from_face(person_id, face_id)` – bélyegkép beállítása arc cropból, hiányzó/idegen crop esetén `ValueError`.
-
-### Bélyegkép módosítás
-
-A „Bélyegkép módosítása” gomb a `ThumbnailPickerDialog`-ot nyitja, amely a személyhez tartozó arc cropokat rácsban mutatja. Egy arcra kattintva az lesz a `thumbnail_path` (`thumbnail_is_manual = True`). Hiányzó vagy nem betölthető crop fájl esetén placeholder jelenik meg, az alkalmazás nem omlik össze. Mentés után a táblázat és a nagy bélyegkép is frissül.
-
-### Védett személyek
-
-A védett rekord (pl. `Ismeretlen`) neve nem szerkeszthető inline (a név cella nem editable), az „Átnevezés” gomb tiltott, és a `PersonService.rename_person` is `ValueError`-t dob védett személyre. A strukturált adatok és a bélyegkép továbbra is kezelhetők.
-
-### Kapcsolódó képek lazy-load
-
-Az arc cropok és a kapcsolódó képek is a meglévő `PlaceGalleryWidget`-tel jelennek meg, amely `ThumbnailRunnable` QRunnable-ökkel a háttérszálon generál bélyegképeket, így a betöltés nem fagyasztja a UI-t. A nagy előnézet dupla kattintásra teljes méretben nyílik meg.
+- DB schema valtozasnal frissuljon az ORM modell, az idempotens migracio es ez
+  a blueprint.
+- Uj képfájl-utvonalat kezelo kod ne kozvetlenul az `Image.file_path` mezore
+  epitsen, hanem az `ImageLibraryService` resolverere.
+- Drive kepeknel a lokalis fajl cache/mirror, a tavoli azonossag a
+  `RemoteImage` rekordban el.
+- Uj automatikus face assignment mindig tolti az `assignment_source`,
+  `assignment_confidence`, `assigned_at` mezoket.
+- Named szemelyhez rendelt, emberi dontessel megerositett arcot automata
+  pipeline ne mozgasson el.
+- A vedett `Ismeretlen` szemely nem nevezheto at es nem torolheto.
+- Kezi bbox/arc modositasa utan crop, embedding allapot es szemely thumbnail
+  konzisztenciat is rendezni kell.
+- Low-quality szures automatikus workflow-kban mukodhet, de manualis dontest
+  nem irhat felul.
+- Hely merge soran alias adatokat meg kell orizni.
+- GPS visszairasnal DB mezok es EXIF iras kulon explicit muveletek legyenek.
+- Deoldified nezetben kanonikus eredeti kepre kell menteni.
+- Targyak ne keruljenek be face recognition pipeline-ba: nincs embedding,
+  nincs biometric match.
+- Uj shortcutnal a `ShortcutService`, i18n kulcsok es handler-regisztracio
+  egyutt frissuljenek.
+- Csaladi kapcsolatnal tilos az onhivatkozas, duplikalt spouse rekord es
+  ciklikus parent-child lanc.
+- Hosszu futasu munka QThread/QRunnable legyen, ne GUI thread.
+- Merge suggestion csak face+nev scoring contract szerint johet letre; nev-only
+  automatikus merge nem elegseges.
+- `MergeDecision` es `RecognitionMergeLog` audit sorokat meg kell tartani akkor
+  is, ha az eredeti suggestion/person mar eltunt.
+- Deep auto assignment review allapotot (`auto`, `confirmed`, `corrected`,
+  `reverted`) nem szabad sima face assignmentkent kezelni.
+- Analysis-only AI face detection nem modosithatja a `faces` tablat.
+- `.facepack`, export, preview es kollazs workflow kezelje a missing image
+  library rootot es Drive fetch hibakat.
+- Uj UI szoveghez `app/ui/i18n.py` frissitendo.
+- Szemely adatmuveletek a `PersonService`-en, targy muveletek az
+  `ObjectService`-en, hely muveletek a `PlaceService`-en menjenek at, ne
+  panelbe kerulo uzleti logikaval.

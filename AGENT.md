@@ -73,59 +73,148 @@ Users never research; app always shows exact fix commands or one-click button. E
 ```
 local_ai_face_recognizer/
 ├── app/
-│   ├── config.py                  # Pydantic config (AppConfig, DetectionConfig, …)
-│   ├── main.py                    # Entry point: QApplication, MainWindow
+│   ├── main.py                    # Entry point: CLI args, QApplication, MainWindow
+│   ├── config.py                  # YAML/dataclass config loading and path resolution
+│   ├── app_settings.py            # QSettings-backed app preferences
+│   ├── diagnostics.py             # Environment and runtime diagnostics helpers
+│   ├── logging_setup.py           # File/GUI logging setup
+│   ├── paths.py                   # Frozen/dev path helpers
 │   ├── db/
 │   │   ├── database.py            # session_scope(), init_db()
-│   │   └── models.py              # ORM: Image, Face, Person, FaceCorrection
+│   │   └── models.py              # SQLAlchemy ORM: images, faces, people, metadata, places, groups
 │   ├── detectors/
 │   │   ├── base.py                # FaceDetector ABC, Detection dataclass
-│   │   ├── factory.py             # create_detector() — Coral probe + CPU fallback
+│   │   ├── factory.py             # create_detector(): Coral/YuNet/CPU fallback
 │   │   ├── coral_detector.py      # EdgeTPU detector
-│   │   └── cpu_detector.py        # OpenCV DNN (Caffe SSD res10)
+│   │   ├── cpu_detector.py        # OpenCV DNN / Haar fallback
+│   │   └── yunet_detector.py      # OpenCV YuNet detector with landmarks
 │   ├── embeddings/
 │   │   ├── base.py                # FaceEmbedder ABC
-│   │   └── tflite_embedder.py     # MobileFaceNet TFLite (+ HOG stub fallback)
+│   │   ├── alignment.py           # Face crop alignment helpers
+│   │   ├── sface_embedder.py      # OpenCV SFace backend
+│   │   └── tflite_embedder.py     # MobileFaceNet/ArcFace-style TFLite (+ fallback)
+│   ├── deep/
+│   │   ├── classifier.py          # Optional learned classifier layer
+│   │   ├── dataset.py             # Training/inference dataset helpers
+│   │   └── debug_info.py          # Deep recognition diagnostics
 │   ├── clustering/
 │   │   └── clusterer.py           # DBSCAN over cosine distance
+│   ├── gdrive/
+│   │   ├── drive_client.py        # Google Drive API adapter
+│   │   ├── oauth_flow.py          # OAuth flow
+│   │   ├── credential_store.py    # Token/keyring storage
+│   │   ├── project_session.py     # Lock/heartbeat project session
+│   │   ├── storage_provider.py    # Local/Drive storage abstraction
+│   │   ├── drive_scan_service.py  # Drive-backed scan integration
+│   │   └── cache.py               # Ephemeral Drive cache
+│   ├── jobs/
+│   │   ├── cancellation.py        # Shared cancellation tokens
+│   │   └── job_types.py           # Background job result/progress types
 │   ├── services/
-│   │   ├── scan_service.py        # Discover new image files
-│   │   ├── detection_service.py   # Run detector, save Face records
+│   │   ├── scan_service.py        # Local image discovery, hashing, metadata
+│   │   ├── detection_service.py   # Run detector, save Face records/crops
 │   │   ├── embedding_service.py   # Run embedder, save embeddings
-│   │   ├── clustering_service.py  # Run DBSCAN, assign Person IDs
-│   │   ├── identity_service.py    # Rename / merge / delete person
-│   │   ├── suggestion_service.py  # Match Unknown → Named persons
-│   │   └── export_service.py      # CSV/image export by person
+│   │   ├── recognition_service.py # Known-person matching and assignment
+│   │   ├── clustering_service.py  # Unknown-person clustering and recluster
+│   │   ├── suggestion_service.py  # Unknown -> known-person suggestions
+│   │   ├── identity_service.py    # Rename / merge / delete / reassign people
+│   │   ├── person_service.py      # Person profile and detail operations
+│   │   ├── person_group_service.py # Person groups and group membership
+│   │   ├── image_library_service.py # Library/project state and image sources
+│   │   ├── image_browser_service.py # Browser tab queries and image details
+│   │   ├── face_*_service.py      # Face crop/date/quality/diagnostics/export/verification helpers
+│   │   ├── family*_*.py           # Family search and family-code parsing/schemes
+│   │   ├── place_service.py       # Places, geocoding links, map/search data
+│   │   ├── object_service.py      # Object tags, occurrences, and merges
+│   │   ├── collage_*.py           # Collage parser and persistence
+│   │   ├── *_merge*_service.py    # Unknown/auto/merge suggestion workflows
+│   │   ├── *_duplicate*_service.py # Duplicate/overlap/intra-image cleanup
+│   │   ├── screen_recorder_service.py # ffmpeg screen/audio recording
+│   │   ├── export_service.py      # CSV/JSON/image/Astro static export
+│   │   ├── update_service.py      # Sparkle/appcast update checks
+│   │   └── geocoding/             # Provider interface + Nominatim provider
 │   ├── workers/
-│   │   └── pipeline_worker.py     # QThread: scan → detect → embed → cluster → suggest
+│   │   ├── pipeline_worker.py     # QThread: scan -> detect -> embed -> recognize -> cluster -> suggest
+│   │   ├── deep_pipeline_worker.py # Deep recognition background run
+│   │   ├── match_job_worker.py    # Batch match jobs
+│   │   ├── thumbnail_worker.py    # Thumbnail loading/generation
+│   │   ├── drive_image_worker.py  # Drive thumbnail/image fetch
+│   │   └── *_worker.py            # Export, geocoding, rerecognition, Astro jobs
+│   ├── updater/
+│   │   └── sparkle_bridge.py      # macOS Sparkle helper bridge
+│   ├── utils/
+│   │   ├── exif.py                # EXIF read/write helpers
+│   │   ├── image_metadata.py      # Image metadata extraction
+│   │   ├── image_utils.py         # Image/path utilities
+│   │   ├── person_search.py       # Person search helpers
+│   │   └── fuzzy_date.py          # Fuzzy/partial date handling
 │   └── ui/
-│       ├── i18n.py                # t("key") — EN + HU strings
+│       ├── i18n.py                # t("key") - EN + HU strings
 │       ├── main_window.py         # Main QMainWindow
+│       ├── theme.py               # Application theme
+│       ├── display_utils.py       # UI formatting helpers
 │       ├── panels/
-│       │   ├── sidebar_panel.py   # Person list with search
-│       │   ├── cluster_panel.py   # Face grid for selected person
+│       │   ├── cluster_panel.py   # Face recognition/person face grid
+│       │   ├── image_browser_panel.py # Photo browser and metadata workflows
+│       │   ├── persons_panel.py   # Person detail/list tab
+│       │   ├── family_search_panel.py # Family search tab
+│       │   ├── locations_panel.py # Places/map tab
+│       │   ├── objects_panel.py   # Object tag tab
+│       │   ├── collage_panel.py   # Collage workflow tab
+│       │   ├── groups_panel.py    # Person groups tab
 │       │   ├── preview_panel.py   # Image preview with bbox overlay
+│       │   ├── sidebar_panel.py   # Legacy/person sidebar
 │       │   └── log_panel.py       # Activity log dock
-│       └── dialogs/
-│           ├── settings_dialog.py # Language, database, TPU status
-│           ├── tpu_status_dialog.py # TPU probe + auto-fix
-│           ├── rename_dialog.py
-│           ├── merge_dialog.py
-│           └── suggestion_dialog.py # Review/approve suggestions
-├── models/                        # Downloaded ML models (gitignored)
+│       ├── dialogs/               # Settings, Drive, export, merge, place/object, repair, update dialogs
+│       ├── widgets/               # Shared Qt widgets (search selects, maps, grids, recording controls)
+│       ├── helpers/               # UI helper algorithms
+│       └── workers/               # UI-local async helpers
+├── assets/
+│   ├── entitlements.plist         # macOS signing/packaging entitlements
+│   └── icons/                     # App icons (.png, .ico, .icns, iconset)
+├── models/                        # Versioned detector/embedder assets plus optional local models
 │   ├── deploy.prototxt
 │   ├── res10_300x300_ssd_iter_140000.caffemodel
+│   ├── face_detection_yunet_2023mar.onnx
+│   ├── sface.onnx
 │   ├── ssd_mobilenet_v2_face_quant_postprocess_edgetpu.tflite
-│   └── mobilefacenet.tflite       # Manual placement required
-├── data/                          # Runtime data (gitignored)
-│   ├── faces.db                   # SQLite with WAL
-│   └── crops/                     # Face crop thumbnails
+│   └── mobilefacenet.tflite       # Optional/manual local embedding model
+├── data/                          # Runtime DB, crops, caches, trained model data (gitignored)
+│   ├── faces.db                   # SQLite with WAL, local runtime only
+│   ├── crops/                     # Face crop thumbnails
+│   └── deep_model/                # Optional trained classifier artifacts
+├── web/
+│   └── astro/                     # Static HTML gallery export (Astro SSG)
+│       ├── src/                   # Astro pages/components/lib/data loaders
+│       ├── public/                # Generated export assets (gitignored)
+│       └── dist/                  # Built static site (gitignored)
+├── sparkle/
+│   └── Sources/SparkleHelper/     # Swift helper used by Sparkle update flow
 ├── scripts/
-│   ├── build_and_run.sh           # macOS / Linux
-│   └── build_and_run.bat          # Windows
-├── tests/
-├── config.yaml                    # Auto-generated
-└── pyproject.toml
+│   ├── build_and_run.sh           # macOS / Linux setup + launch
+│   ├── build_and_run.bat          # Windows setup + launch
+│   ├── build_and_run.ps1          # PowerShell setup + launch
+│   ├── run_tests.sh / run_tests.ps1 # Test runners
+│   ├── package_app.py             # Desktop packaging
+│   ├── build_linux_deb.sh         # Linux .deb packaging
+│   ├── build_windows_installer.iss # Inno Setup installer script
+│   ├── generate_appcast.py        # Sparkle appcast generation
+│   ├── github_release.py          # GitHub release automation
+│   ├── post_buffer_release.py / post_x_release.py # Social release posting helpers
+│   └── detect_*_probe.py          # Detector diagnostics
+├── docs/                          # Blueprint, packaging docs, appcast/wiki artifacts
+├── memory/                        # Agent memory/project notes
+├── tests/                         # Pytest suite across DB, services, UI, Drive, export, release
+├── .github/
+│   ├── workflows/                 # Release and test dashboard workflows
+│   └── scripts/                   # GitHub project automation
+├── config.yaml                    # Checked-in default/local config
+├── config.example.yaml            # Example config template
+├── requirements.txt               # Runtime dependencies
+├── requirements-windows.txt       # Windows-specific dependency set
+├── pyproject.toml                 # Package metadata, deps, pytest/ruff/mypy config
+├── README.md
+└── AGENT.md
 ```
 
 ---
