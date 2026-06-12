@@ -439,3 +439,91 @@ def test_import_remaps_crop_paths(project, tmp_path):
         face = session.query(Face).first()
         assert face.crop_path.startswith(str(result.crops_dir))
         assert (result.crops_dir / "img000001_face000001.jpg").exists()
+
+
+def test_import_remaps_image_paths_with_relative_path(project, tmp_path):
+    """A portable image resolves against the new library root after import."""
+    target = project["tmp_path"] / "out.facepack"
+    _service(project).export_package(target)
+    dest = tmp_path / "restored"
+    result = ProjectPackageService.import_package(target, dest)
+
+    init_db(result.db_path)
+    with session_scope() as session:
+        remapped = ProjectPackageService.remap_image_paths(
+            session, result.manifest, result.images_dir
+        )
+        # The single image keeps its portable "sub/photo.jpg" relative path,
+        # which already matches the bundled layout → nothing to rewrite.
+        assert remapped == 0
+        img = session.query(Image).first()
+        assert img.relative_path == "sub/photo.jpg"
+        assert (result.images_dir / "sub" / "photo.jpg").exists()
+
+
+def test_import_remaps_legacy_absolute_only_image(tmp_path):
+    """A legacy image with only a foreign absolute path resolves after import.
+
+    This is the cross-machine case: the database row carries an absolute
+    ``file_path`` from another machine and no ``relative_path``.  The file lives
+    *outside* the library root, so it is bundled under ``images/_external/...``;
+    after import :meth:`remap_image_paths` must repoint it so it loads locally.
+    """
+    from app.services.image_library_service import (
+        get_image_library,
+        resolve_image_path,
+    )
+
+    db_path = tmp_path / "faces.db"
+    init_db(db_path)
+
+    images_root = tmp_path / "library"
+    images_root.mkdir()
+    get_image_library().set_library_root(images_root)
+
+    # The real source sits outside the library root (no portable relative path).
+    external = tmp_path / "external" / "legacy.jpg"
+    external.parent.mkdir(parents=True)
+    arr = np.zeros((20, 20, 3), dtype=np.uint8)
+    assert save_image_bgr(external, arr)
+
+    crops_dir = tmp_path / "crops"
+    crops_dir.mkdir()
+    assert save_image_bgr(crops_dir / "img000001_face000001.jpg", arr)
+
+    with session_scope() as session:
+        img = Image(
+            file_path=str(external),
+            relative_path=None,
+            file_hash="legacy",
+            file_mtime=0.0,
+            width=20,
+            height=20,
+            detection_done=True,
+        )
+        session.add(img)
+
+    service = ProjectPackageService(
+        db_path=db_path,
+        crops_dir=crops_dir,
+        library_root=images_root,
+    )
+    target = tmp_path / "legacy.facepack"
+    service.export_package(target)
+
+    dest = tmp_path / "restored"
+    result = ProjectPackageService.import_package(target, dest)
+
+    init_db(result.db_path)
+    get_image_library().set_library_root(result.images_dir)
+    with session_scope() as session:
+        remapped = ProjectPackageService.remap_image_paths(
+            session, result.manifest, result.images_dir
+        )
+        assert remapped == 1
+        img = session.query(Image).first()
+        # relative_path now points under the extracted images/ dir...
+        assert img.relative_path is not None
+        # ...and resolves to a file that actually exists on this machine.
+        resolved = resolve_image_path(img)
+        assert resolved is not None and resolved.exists()

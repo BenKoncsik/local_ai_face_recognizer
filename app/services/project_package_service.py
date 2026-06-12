@@ -679,6 +679,55 @@ class ProjectPackageService:
         )
 
     @staticmethod
+    def remap_image_paths(
+        session, manifest: dict, images_dir: Path | str
+    ) -> int:
+        """Repoint every :class:`Image` at its bundled copy under *images_dir*.
+
+        The archive bundles each image under ``images/<archive-relative>`` (see
+        :meth:`_archive_image_path`).  After import the database still holds the
+        *original machine's* absolute ``file_path``; legacy records additionally
+        have no ``relative_path`` at all, so :meth:`ImageLibraryService.resolve_path`
+        would fall back to that stale absolute path and fail to find the file.
+
+        This rewrites each image's ``relative_path`` to the path it was bundled
+        under — relative to the extracted ``images/`` directory — so resolution
+        succeeds against the new library root regardless of the original
+        machine's layout.  Images that were not bundled (missing / foreign path
+        at export time) are left untouched.
+
+        Returns the number of rewritten rows.
+        """
+        from app.db.models import Image
+
+        images_dir = Path(images_dir)
+        entries = (manifest.get("images") or {}).get("entries") or []
+        remapped = 0
+        for entry in entries:
+            archive_path = entry.get("archive_path")
+            image_id = entry.get("id")
+            if not archive_path or image_id is None:
+                # Not bundled (missing/foreign at export) — keep existing paths.
+                continue
+            rel = _archive_path_to_image_rel(archive_path)
+            if rel is None:
+                continue
+            # Only repoint when the bundled file actually landed on disk, so a
+            # member that failed to extract never hides behind a broken path.
+            if not (images_dir / Path(*rel.split("/"))).exists():
+                continue
+            image = session.get(Image, image_id)
+            if image is None:
+                continue
+            if image.relative_path != rel:
+                image.relative_path = rel
+                remapped += 1
+        if remapped:
+            session.flush()
+            log.info("Remapped %d image path(s) to %s", remapped, images_dir)
+        return remapped
+
+    @staticmethod
     def remap_crop_paths(session, crops_dir: Path | str) -> int:
         """Repoint every ``Face.crop_path`` at the imported crops directory.
 
@@ -724,6 +773,21 @@ def _normalize_posix(rel: str) -> str:
     """Normalize a stored relative path to forward slashes, no leading slash."""
     parts = [p for p in rel.replace("\\", "/").split("/") if p and p != "."]
     return "/".join(parts)
+
+
+def _archive_path_to_image_rel(archive_path: str) -> Optional[str]:
+    """Strip the leading ``images/`` from an archive path → library-relative path.
+
+    Returns the portion of *archive_path* below :data:`ARCHIVE_IMAGES_DIR`
+    (e.g. ``images/sub/a.jpg`` → ``sub/a.jpg``), or ``None`` when the path is
+    not under the images directory.
+    """
+    norm = _normalize_posix(archive_path)
+    prefix = ARCHIVE_IMAGES_DIR + "/"
+    if not norm.startswith(prefix):
+        return None
+    rel = norm[len(prefix):]
+    return rel or None
 
 
 # Most filesystems cap a single path component at 255 bytes; stay well under it

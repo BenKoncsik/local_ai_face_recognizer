@@ -3512,6 +3512,13 @@ class MainWindow(QMainWindow):
                 log.warning("Imported images dir missing: %s", result.images_dir)
         with session_scope() as session:
             ProjectPackageService.remap_crop_paths(session, result.crops_dir)
+            # Repoint every bundled image at its extracted copy so records with
+            # only an original-machine absolute path (no portable relative_path)
+            # still resolve here. This must run before the migration fallback,
+            # which can only handle paths already under the new root.
+            ProjectPackageService.remap_image_paths(
+                session, result.manifest, result.images_dir
+            )
             if lib is not None and lib.is_available():
                 try:
                     lib.migrate_to_relative_paths(
