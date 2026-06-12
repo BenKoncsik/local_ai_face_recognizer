@@ -11,10 +11,12 @@ chip selector) and in the *Groups* main-window tab.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, Signal
+from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -32,15 +34,18 @@ from PySide6.QtWidgets import (
 )
 
 from app.db.database import session_scope
-from app.db.models import Person
+from app.db.models import Face, Person
 from app.services.person_group_service import PersonGroupService
+from app.services.person_service import PersonService
 from app.ui.i18n import t
 from app.ui.widgets.person_search_select import PersonSearchSelect
+from app.workers.thumbnail_worker import ThumbnailRunnable
 
 log = logging.getLogger(__name__)
 
 _ROLE_ID = Qt.UserRole
 _ROLE_COUNT = Qt.UserRole + 1
+_MEMBER_THUMB = 40  # px — member-list avatar size
 
 
 class AddMemberDialog(QDialog):
@@ -84,6 +89,41 @@ class AddMemberDialog(QDialog):
         return self._selected_person_id
 
 
+class MemberImagesDialog(QDialog):
+    """Browse the images a group member appears in (preview + thumbnail strip)."""
+
+    def __init__(
+        self,
+        person_name: str,
+        image_paths,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        from app.ui.widgets.place_gallery_widget import PlaceGalleryWidget
+
+        self.setWindowTitle(t("group_member_images_title", name=person_name))
+        self.setMinimumSize(600, 480)
+        self.resize(720, 560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        paths = list(image_paths)
+        if paths:
+            gallery = PlaceGalleryWidget()
+            gallery.set_images(paths)
+            layout.addWidget(gallery, stretch=1)
+        else:
+            empty = QLabel(t("group_member_no_images"))
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("color: #888; font-style: italic;")
+            layout.addWidget(empty, stretch=1)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.accept)
+        layout.addWidget(btns)
+
+
 class GroupManagerWidget(QWidget):
     """List and edit selectable person groups (rename + note + create/delete).
 
@@ -105,6 +145,8 @@ class GroupManagerWidget(QWidget):
         # Guards re-entrancy while the editor is being populated programmatically
         # (e.g. during _reload_list), so those field changes don't trigger a save.
         self._loading: bool = False
+        # Pending member-avatar thumbnail loads: cache_key → person_id.
+        self._member_thumb_keys: dict[str, int] = {}
         self._build_ui()
         self._reload_list()
 
@@ -183,8 +225,13 @@ class GroupManagerWidget(QWidget):
         ed.addWidget(self._members_label)
 
         self._members_list = QListWidget()
+        self._members_list.setIconSize(QSize(_MEMBER_THUMB, _MEMBER_THUMB))
         self._members_list.currentItemChanged.connect(
             self._on_member_selection_changed
+        )
+        # Double-clicking a member opens their (editable) profile.
+        self._members_list.itemDoubleClicked.connect(
+            lambda _item: self._on_member_detail()
         )
         ed.addWidget(self._members_list, stretch=1)
 
@@ -201,8 +248,16 @@ class GroupManagerWidget(QWidget):
         self._remove_member_btn = QPushButton(t("group_member_remove"))
         self._remove_member_btn.clicked.connect(self._on_remove_member)
         self._remove_member_btn.setEnabled(False)
+        self._detail_member_btn = QPushButton(t("group_member_detail"))
+        self._detail_member_btn.clicked.connect(self._on_member_detail)
+        self._detail_member_btn.setEnabled(False)
+        self._images_member_btn = QPushButton(t("group_member_images"))
+        self._images_member_btn.clicked.connect(self._on_member_images)
+        self._images_member_btn.setEnabled(False)
         member_btns.addWidget(self._add_member_btn)
         member_btns.addWidget(self._remove_member_btn)
+        member_btns.addWidget(self._detail_member_btn)
+        member_btns.addWidget(self._images_member_btn)
         member_btns.addStretch()
         ed.addLayout(member_btns)
 
@@ -296,18 +351,38 @@ class GroupManagerWidget(QWidget):
         self._reload_members(group_id)
 
     def _reload_members(self, group_id: int) -> None:
-        """Refresh the member list for *group_id*."""
+        """Refresh the member list for *group_id* (name + avatar thumbnail)."""
         try:
             with session_scope() as session:
                 persons = PersonGroupService(session).get_persons_in_group(group_id)
-                rows = [(p.id, p.name) for p in persons]
+                member_ids = [p.id for p in persons]
+                # One query for fallback avatars: best-confidence crop per person,
+                # used when a person has no explicit thumbnail set.
+                fallback: dict[int, str] = {}
+                if member_ids:
+                    crop_rows = (
+                        session.query(Face.person_id, Face.crop_path)
+                        .filter(
+                            Face.person_id.in_(member_ids),
+                            Face.crop_path.isnot(None),
+                            Face.is_excluded == False,  # noqa: E712
+                        )
+                        .order_by(Face.person_id, Face.confidence.desc())
+                        .all()
+                    )
+                    for pid, crop in crop_rows:
+                        fallback.setdefault(pid, crop)
+                rows = [
+                    (p.id, p.name, p.thumbnail_path or fallback.get(p.id))
+                    for p in persons
+                ]
         except Exception:
             log.exception("Failed to load members for group id=%s", group_id)
             return
 
         self._members_list.blockSignals(True)
         self._members_list.clear()
-        for pid, name in rows:
+        for pid, name, _thumb in rows:
             item = QListWidgetItem(name)
             item.setData(_ROLE_ID, pid)
             self._members_list.addItem(item)
@@ -316,6 +391,32 @@ class GroupManagerWidget(QWidget):
         self._members_list.setVisible(bool(rows))
         self._members_empty.setVisible(not rows)
         self._remove_member_btn.setEnabled(False)
+        self._detail_member_btn.setEnabled(False)
+        self._images_member_btn.setEnabled(False)
+        self._start_member_thumb_loads(rows)
+
+    def _start_member_thumb_loads(self, rows) -> None:
+        """Kick off async avatar loads for the member list."""
+        self._member_thumb_keys.clear()
+        for pid, _name, thumb in rows:
+            if not thumb or not Path(thumb).exists():
+                continue
+            key = f"groupmember:{pid}:{thumb}"
+            self._member_thumb_keys[key] = pid
+            worker = ThumbnailRunnable(thumb, key, size=_MEMBER_THUMB)
+            worker.signals.ready.connect(self._on_member_thumb_ready)
+            QThreadPool.globalInstance().start(worker)
+
+    def _on_member_thumb_ready(self, key: str, img: QImage) -> None:
+        pid = self._member_thumb_keys.get(key)
+        if pid is None:
+            return
+        icon = QIcon(QPixmap.fromImage(img))
+        for row in range(self._members_list.count()):
+            item = self._members_list.item(row)
+            if item is not None and item.data(_ROLE_ID) == pid:
+                item.setIcon(icon)
+                break
 
     # ------------------------------------------------------------------
     # Slots
@@ -400,7 +501,41 @@ class GroupManagerWidget(QWidget):
     def _on_member_selection_changed(
         self, current: Optional[QListWidgetItem], _prev
     ) -> None:
-        self._remove_member_btn.setEnabled(current is not None)
+        has = current is not None
+        self._remove_member_btn.setEnabled(has)
+        self._detail_member_btn.setEnabled(has)
+        self._images_member_btn.setEnabled(has)
+
+    def _selected_member_id(self) -> Optional[int]:
+        item = self._members_list.currentItem()
+        return item.data(_ROLE_ID) if item is not None else None
+
+    def _on_member_detail(self) -> None:
+        """Open the selected member's editable profile; refresh on save."""
+        person_id = self._selected_member_id()
+        if person_id is None:
+            return
+        from app.ui.dialogs.person_info_dialog import edit_person_dialog
+
+        if edit_person_dialog(person_id, parent=self):
+            # The edit may have renamed the person or changed their group
+            # memberships (via the profile's group chips), so rebuild.
+            self._after_membership_change()
+
+    def _on_member_images(self) -> None:
+        """Show the images the selected member appears in."""
+        person_id = self._selected_member_id()
+        if person_id is None:
+            return
+        try:
+            with session_scope() as session:
+                person = session.get(Person, person_id)
+                name = person.name if person is not None else ""
+                images = PersonService(session).list_images_for_person(person_id)
+        except Exception:
+            log.exception("Failed to load images for person id=%s", person_id)
+            return
+        MemberImagesDialog(name, images, self).exec()
 
     def _on_add_member(self) -> None:
         if self._current_id is None:

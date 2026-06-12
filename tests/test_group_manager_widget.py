@@ -10,8 +10,10 @@ from __future__ import annotations
 import pytest
 
 from app.db.database import init_db, session_scope
-from app.db.models import Person
+from app.db.models import Face, Image, Person
 from app.services.person_group_service import PersonGroupService
+from app.ui.dialogs import group_manager_dialog
+from app.ui.dialogs import person_info_dialog
 from app.ui.dialogs.group_manager_dialog import _ROLE_ID, GroupManagerWidget
 
 
@@ -31,6 +33,25 @@ def _add_person(name: str) -> int:
 def _make_group(name: str) -> int:
     with session_scope() as s:
         return PersonGroupService(s).create_group(name).id
+
+
+def _add_image_with_face(person_id: int, path: str) -> None:
+    with session_scope() as s:
+        img = Image(file_path=path, file_hash="h" + path, file_mtime=0.0)
+        s.add(img)
+        s.flush()
+        s.add(
+            Face(
+                image_id=img.id,
+                person_id=person_id,
+                bbox_x=0,
+                bbox_y=0,
+                bbox_w=10,
+                bbox_h=10,
+                confidence=0.9,
+                crop_path=path,  # arbitrary; not loaded from disk in these tests
+            )
+        )
 
 
 def _members(gid: int) -> set[str]:
@@ -154,3 +175,62 @@ def test_invalid_name_not_persisted_silently_on_switch(db, qtbot):
     with session_scope() as s:
         info = next(g for g in PersonGroupService(s).list_groups() if g.id == g1)
     assert info.name == "Alpha"  # unchanged — duplicate rejected
+
+
+def test_member_images_passes_person_image_paths(db, qtbot, monkeypatch):
+    alice = _add_person("Alice")
+    gid = _make_group("Kórus")
+    with session_scope() as s:
+        PersonGroupService(s).add_person_to_group(alice, gid)
+    _add_image_with_face(alice, "/tmp/a1.jpg")
+    _add_image_with_face(alice, "/tmp/a2.jpg")
+
+    widget = GroupManagerWidget()
+    qtbot.addWidget(widget)
+    _select_group(widget, gid)
+    widget._members_list.setCurrentRow(0)
+
+    captured = {}
+
+    class _FakeDialog:
+        def __init__(self, name, paths, parent=None):
+            captured["name"] = name
+            captured["paths"] = list(paths)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(group_manager_dialog, "MemberImagesDialog", _FakeDialog)
+    widget._on_member_images()
+
+    assert captured["name"] == "Alice"
+    assert set(captured["paths"]) == {"/tmp/a1.jpg", "/tmp/a2.jpg"}
+
+
+def test_member_detail_opens_editor_and_refreshes(db, qtbot, monkeypatch):
+    alice = _add_person("Alice")
+    gid = _make_group("Kórus")
+    with session_scope() as s:
+        PersonGroupService(s).add_person_to_group(alice, gid)
+
+    widget = GroupManagerWidget()
+    qtbot.addWidget(widget)
+    _select_group(widget, gid)
+    widget._members_list.setCurrentRow(0)
+
+    calls = {}
+
+    def _fake_edit(person_id, parent=None):
+        calls["person_id"] = person_id
+        # Simulate the user removing this person from the group via the profile.
+        with session_scope() as s:
+            PersonGroupService(s).remove_person_from_group(person_id, gid)
+        return True
+
+    monkeypatch.setattr(person_info_dialog, "edit_person_dialog", _fake_edit)
+    widget._on_member_detail()
+
+    assert calls["person_id"] == alice
+    # The members list refreshed and now reflects the removal.
+    assert widget._members_list.count() == 0
+    assert _members(gid) == set()

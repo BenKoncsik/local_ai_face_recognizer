@@ -333,82 +333,93 @@ def person_db(tmp_path):
         return person.id
 
 
-def _auto_answer_message_boxes(monkeypatch, role):
-    """Make every QMessageBox auto-click its first button with *role*.
-
-    Returns a list that records one entry per shown box, so tests can assert
-    whether a warning appeared at all.
-    """
+def _no_message_boxes(monkeypatch):
+    """Fail loudly if any QMessageBox is shown — saving must stay inline."""
     from PySide6.QtWidgets import QMessageBox
 
-    shown: list[str] = []
+    def fail_exec(self):  # noqa: ANN001
+        raise AssertionError("Saving a code must not open a dialog")
 
-    def fake_exec(self):  # noqa: ANN001
-        shown.append(self.text())
-        for btn in self.buttons():
-            if self.buttonRole(btn) == role:
-                self._test_clicked = btn
-                break
-        return 0
-
-    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
-    monkeypatch.setattr(
-        QMessageBox, "clickedButton", lambda self: getattr(self, "_test_clicked", None)
-    )
-    return shown
+    monkeypatch.setattr(QMessageBox, "exec", fail_exec)
 
 
 def test_person_dialog_valid_code_is_canonicalised(qtbot, person_db, monkeypatch):
-    from PySide6.QtWidgets import QDialog, QMessageBox
+    from PySide6.QtWidgets import QDialog
     from app.db.database import session_scope
     from app.db.models import Person
     from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 
-    shown = _auto_answer_message_boxes(monkeypatch, QMessageBox.AcceptRole)
+    _no_message_boxes(monkeypatch)
     with session_scope() as session:
         dlg = PersonInfoDialog(session.get(Person, person_db))
     qtbot.addWidget(dlg)
 
     dlg._family_code.setText("c85")
+    # A valid code clears the inline warning marker.
+    assert not dlg._family_code_warn.isVisible()
     dlg.accept()
     assert dlg.result() == QDialog.Accepted
     assert dlg.family_code() == "C85"
-    assert shown == []  # a valid code shows no warning
 
 
-def test_person_dialog_invalid_code_saved_after_override(qtbot, person_db, monkeypatch):
-    from PySide6.QtWidgets import QDialog, QMessageBox
+def test_person_dialog_invalid_code_saved_with_inline_marker(
+    qtbot, person_db, monkeypatch
+):
+    from PySide6.QtWidgets import QDialog
     from app.db.database import session_scope
     from app.db.models import Person
     from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 
-    shown = _auto_answer_message_boxes(monkeypatch, QMessageBox.AcceptRole)
+    _no_message_boxes(monkeypatch)
     with session_scope() as session:
         dlg = PersonInfoDialog(session.get(Person, person_db))
     qtbot.addWidget(dlg)
 
     dlg._family_code.setText("rossz-kód!!")
+    # The inline warning marker appears live, without any dialog…
+    assert dlg._family_code_warn.isVisible()
+    assert dlg._family_code_warn.toolTip()  # tooltip explains the problem
+
     dlg.accept()
-    assert len(shown) == 1  # warned once…
-    assert dlg.result() == QDialog.Accepted  # …but the save went through
+    assert dlg.result() == QDialog.Accepted  # save is never blocked
     assert dlg.family_code() == "rossz-kód!!"  # kept exactly as typed
+    assert dlg._family_code_warn.isVisible()  # marker still flags it
 
 
-def test_person_dialog_invalid_code_back_to_edit(qtbot, person_db, monkeypatch):
-    from PySide6.QtWidgets import QDialog, QMessageBox
+def test_person_dialog_marker_toggles_live(qtbot, person_db, monkeypatch):
     from app.db.database import session_scope
     from app.db.models import Person
     from app.ui.dialogs.person_info_dialog import PersonInfoDialog
 
-    shown = _auto_answer_message_boxes(monkeypatch, QMessageBox.RejectRole)
+    _no_message_boxes(monkeypatch)
     with session_scope() as session:
         dlg = PersonInfoDialog(session.get(Person, person_db))
     qtbot.addWidget(dlg)
 
-    dlg._family_code.setText("rossz-kód!!")
-    dlg.accept()
-    assert len(shown) == 1
-    assert dlg.result() != QDialog.Accepted  # stayed in the editor
+    # Empty → no marker; invalid → marker on; valid → marker off again.
+    assert not dlg._family_code_warn.isVisible()
+    dlg._family_code.setText("???")
+    assert dlg._family_code_warn.isVisible()
+    dlg._family_code.setText("C85")
+    assert not dlg._family_code_warn.isVisible()
+
+
+def test_person_dialog_flags_preexisting_invalid_code(qtbot, monkeypatch, tmp_path):
+    from app.db.database import init_db, session_scope
+    from app.db.models import Person
+    from app.ui.dialogs.person_info_dialog import PersonInfoDialog
+
+    _no_message_boxes(monkeypatch)
+    init_db(tmp_path / "preexisting.db")
+    with session_scope() as session:
+        # A bad code can already be stored (saved earlier as-is); the dialog
+        # must surface it immediately on open.
+        person = Person(name="Régi", is_auto_named=False, family_code="rossz!!")
+        session.add(person)
+        session.flush()
+        dlg = PersonInfoDialog(session.get(Person, person.id))
+    qtbot.addWidget(dlg)
+    assert dlg._family_code_warn.isVisible()
 
 
 def test_person_dialog_help_follows_active_scheme(qtbot, person_db, custom_scheme):

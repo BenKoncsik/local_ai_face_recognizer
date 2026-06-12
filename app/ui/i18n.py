@@ -314,16 +314,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "Hibás külső családi azonosító",
     },
     "placeholder_example": {"en": "e.g. {code}", "hu": "pl. {code}"},
-    "code_save_anyway_msg": {
-        "en": "There is a problem with this code:\n\n{error}\n\n"
-              "You can still save it exactly as typed.",
-        "hu": "A megadott kóddal probléma van:\n\n{error}\n\n"
-              "Ettől függetlenül elmentheted pontosan úgy, ahogy beírtad.",
-    },
-    "code_save_anyway_btn": {"en": "Save anyway", "hu": "Mentés így is"},
-    "code_back_to_edit_btn": {
-        "en": "Back to editing",
-        "hu": "Vissza a szerkesztéshez",
+    "code_inline_error_tip": {
+        "en": "Problem with this code:\n{error}\nIt will be saved exactly as "
+              "typed.",
+        "hu": "Probléma ezzel a kóddal:\n{error}\nMentéskor pontosan így marad, "
+              "ahogy beírtad.",
     },
     "family_code_open_scheme_editor": {
         "en": "Edit family code schemes…",
@@ -1081,6 +1076,16 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "group_member_none_available": {
         "en": "Everyone is already a member of this group.",
         "hu": "Mindenki a társaság tagja már.",
+    },
+    "group_member_detail": {"en": "Profile", "hu": "Adatlap"},
+    "group_member_images": {"en": "Images", "hu": "Képek"},
+    "group_member_images_title": {
+        "en": "Images of {name}",
+        "hu": "{name} képei",
+    },
+    "group_member_no_images": {
+        "en": "This person does not appear in any images yet.",
+        "hu": "Ez a személy még egyetlen képen sem szerepel.",
     },
 
     # ── Collage ──────────────────────────────────────────────────────────

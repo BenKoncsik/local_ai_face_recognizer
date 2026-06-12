@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QScrollArea,
     QStyle,
     QTextEdit,
@@ -83,20 +82,54 @@ class PersonInfoDialog(QDialog):
         self._gender.setCurrentIndex(idx if idx >= 0 else 0)
         form.addRow(t("gender"), self._gender)
 
+        self._family_validator = lambda svc, value: svc.ensure_unique_family_code(
+            value, current_person_id=self._person_id
+        )
+        self._external_validator = (
+            lambda svc, value: svc.ensure_unique_external_family_code(
+                value, current_person_id=self._person_id
+            )
+        )
+
         self._family_code = QLineEdit(person.family_code or "")
+        self._family_code_warn = self._install_code_warning(self._family_code)
         self._family_code_help_action = self._add_help_action(
             self._family_code, self._family_code_help_text()
         )
         self._add_scheme_editor_action(self._family_code)
         self._refresh_family_code_help()
+        self._family_code.textChanged.connect(
+            lambda: self._refresh_code_warning(
+                self._family_code, self._family_code_warn, self._family_validator
+            )
+        )
         form.addRow(t("family_code"), self._family_code)
 
         self._external_family_code = QLineEdit(person.external_family_code or "")
         self._external_family_code.setPlaceholderText(t("example_external_family_code"))
+        self._external_code_warn = self._install_code_warning(self._external_family_code)
         self._add_help_action(
             self._external_family_code, t("external_family_code_help")
         )
+        self._external_family_code.textChanged.connect(
+            lambda: self._refresh_code_warning(
+                self._external_family_code,
+                self._external_code_warn,
+                self._external_validator,
+            )
+        )
         form.addRow(t("external_family_code"), self._external_family_code)
+
+        # Flag any pre-existing invalid/duplicate codes right away, so the
+        # marker is visible before the user touches the field.
+        self._refresh_code_warning(
+            self._family_code, self._family_code_warn, self._family_validator
+        )
+        self._refresh_code_warning(
+            self._external_family_code,
+            self._external_code_warn,
+            self._external_validator,
+        )
 
         self._last_name = QLineEdit(person.last_name or "")
         self._last_name.setPlaceholderText(t("example_last_name"))
@@ -271,53 +304,67 @@ class PersonInfoDialog(QDialog):
         sample = examples[1][0] if len(examples) > 1 else "C85"
         self._family_code.setPlaceholderText(t("placeholder_example", code=sample))
 
-    def _confirm_code_field(self, field: QLineEdit, validator, title: str) -> bool:
-        """Validate one code field; let the user save even when it fails.
+    def _install_code_warning(self, field: QLineEdit):
+        """Attach a hidden leading warning marker to *field*.
 
-        Valid values are canonicalised in place.  Invalid values (format
-        problems or duplicate identity codes) show a warning that explains the
-        problem, and the user chooses between saving the raw text as typed or
-        returning to the editor.
+        The marker is a red icon shown at the start of the line edit only when
+        the current code is invalid or duplicated; it never blocks editing or
+        saving.  Returns the created action so callers can toggle it.
         """
-        raw = field.text().strip()
+        icon = self.style().standardIcon(QStyle.SP_MessageBoxCritical)
+        action = field.addAction(icon, QLineEdit.LeadingPosition)
+        action.setVisible(False)
+        return action
+
+    def _validate_code(self, validator, raw: str):
+        """Return ``(canonical, error)`` for a code; ``error`` is None when OK.
+
+        ``canonical`` is the cleaned-up form when valid, otherwise None.  The
+        validator runs against the DB so duplicate identity codes are caught
+        alongside format problems.
+        """
         try:
             with session_scope() as session:
-                canonical = validator(FamilyService(session), raw)
+                canonical = validator(FamilyService(session), raw.strip())
         except ValueError as exc:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle(title)
-            box.setText(t("code_save_anyway_msg", error=str(exc)))
-            save_btn = box.addButton(t("code_save_anyway_btn"), QMessageBox.AcceptRole)
-            box.addButton(t("code_back_to_edit_btn"), QMessageBox.RejectRole)
-            box.setDefaultButton(save_btn)
-            box.exec()
-            if box.clickedButton() is not save_btn:
-                return False
-            field.setText(raw)
-            return True
-        field.setText(canonical or "")
-        return True
+            return None, str(exc)
+        return canonical or "", None
+
+    def _refresh_code_warning(self, field: QLineEdit, action, validator) -> None:
+        """Update the inline warning marker from the field's current text."""
+        _canonical, error = self._validate_code(validator, field.text())
+        if error:
+            action.setToolTip(
+                self._help_tooltip_html(t("code_inline_error_tip", error=error))
+            )
+            action.setVisible(True)
+        else:
+            action.setToolTip("")
+            action.setVisible(False)
+
+    def _apply_code_field(self, field: QLineEdit, action, validator) -> None:
+        """Persist-time handling: canonicalise when valid, keep raw when not.
+
+        Saving is never blocked — an invalid or duplicate code is stored
+        exactly as typed and the inline marker stays visible to flag it.
+        """
+        canonical, error = self._validate_code(validator, field.text())
+        if error is None:
+            field.setText(canonical)
+        self._refresh_code_warning(field, action, validator)
 
     def accept(self) -> None:
-        ok = self._confirm_code_field(
-            self._family_code,
-            lambda svc, value: svc.ensure_unique_family_code(
-                value, current_person_id=self._person_id
-            ),
-            t("family_code_invalid_title"),
+        # Both code fields save without interrupting: valid codes are
+        # canonicalised, invalid/duplicate ones are kept as typed and only
+        # flagged by the inline marker.
+        self._apply_code_field(
+            self._family_code, self._family_code_warn, self._family_validator
         )
-        if not ok:
-            return
-        ok = self._confirm_code_field(
+        self._apply_code_field(
             self._external_family_code,
-            lambda svc, value: svc.ensure_unique_external_family_code(
-                value, current_person_id=self._person_id
-            ),
-            t("external_family_code_invalid_title"),
+            self._external_code_warn,
+            self._external_validator,
         )
-        if not ok:
-            return
 
         # Save group memberships (skipped for protected persons)
         if not self._is_protected:
@@ -451,3 +498,47 @@ class PersonInfoDialog(QDialog):
 
     def notes(self) -> str:
         return self._notes.toPlainText().strip()
+
+
+def edit_person_dialog(person_id: int, parent: Optional[QWidget] = None) -> bool:
+    """Open the editable :class:`PersonInfoDialog` for *person_id* and persist.
+
+    Loads the person, shows the dialog, and on *accept* writes the structured
+    fields back via :class:`PersonService` (group memberships are saved by the
+    dialog itself).  Returns ``True`` when the user saved changes, ``False`` if
+    the person is missing or the dialog was cancelled.
+
+    Shared entry point so every caller (Persons tab, sidebar, Társaságok tab)
+    opens and saves the profile the same way.
+    """
+    from app.services.person_service import PersonService
+
+    with session_scope() as session:
+        person = session.get(Person, person_id)
+        if person is None:
+            return False
+        dlg = PersonInfoDialog(person, parent=parent)
+    if dlg.exec() != PersonInfoDialog.Accepted:
+        return False
+    try:
+        with session_scope() as session:
+            PersonService(session).update_person(
+                person_id,
+                gender=dlg.gender(),
+                family_code=dlg.family_code(),
+                external_family_code=dlg.external_family_code(),
+                last_name=dlg.last_name(),
+                first_name=dlg.first_name(),
+                second_name=dlg.second_name(),
+                nickname=dlg.nickname(),
+                married_name=dlg.married_name(),
+                birth_place=dlg.birth_place(),
+                birth_date=dlg.birth_date(),
+                death_place=dlg.death_place(),
+                death_date=dlg.death_date(),
+                notes=dlg.notes(),
+            )
+    except Exception:
+        log.exception("Failed to save person id=%d", person_id)
+        return False
+    return True
