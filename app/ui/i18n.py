@@ -1069,6 +1069,19 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                "hu": "A társaság mentése nem sikerült"},
     "group_none_yet":    {"en": "(no groups created yet)",
                           "hu": "(még nincs létrehozva társaság)"},
+    "group_members_none": {"en": "(no members yet)",
+                           "hu": "(még nincsenek tagok)"},
+    "group_member_add":  {"en": "Add member", "hu": "Tag hozzáadása"},
+    "group_member_remove": {"en": "Remove", "hu": "Eltávolítás"},
+    "group_member_add_title": {"en": "Add member", "hu": "Tag hozzáadása"},
+    "group_member_add_prompt": {
+        "en": "Pick a person to add to this group:",
+        "hu": "Válaszd ki a társasághoz hozzáadandó személyt:",
+    },
+    "group_member_none_available": {
+        "en": "Everyone is already a member of this group.",
+        "hu": "Mindenki a társaság tagja már.",
+    },
 
     # ── Collage ──────────────────────────────────────────────────────────
     "collage_label":     {"en": "Collage:", "hu": "Kollázs:"},

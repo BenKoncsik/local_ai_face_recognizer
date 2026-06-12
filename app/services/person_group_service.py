@@ -243,3 +243,61 @@ class PersonGroupService:
             .order_by(Person.name)
             .all()
         )
+
+    def add_person_to_group(self, person_id: int, group_id: int) -> bool:
+        """Add *person_id* to *group_id*.
+
+        Returns ``True`` if a new membership was created, ``False`` if the
+        person was already a member (idempotent).
+
+        Raises:
+            ValueError: if the person or group does not exist, or the person
+                        is protected.
+        """
+        person = self._session.get(Person, person_id)
+        if person is None:
+            raise ValueError(f"Person id={person_id} not found.")
+        if person.is_protected:
+            raise ValueError(
+                f"Cannot assign groups to protected person '{person.name}'."
+            )
+        if self._session.get(PersonGroup, group_id) is None:
+            raise ValueError(f"Group id={group_id} not found.")
+
+        existing = (
+            self._session.query(PersonGroupMembership)
+            .filter(
+                PersonGroupMembership.person_id == person_id,
+                PersonGroupMembership.group_id == group_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            return False
+        self._session.add(
+            PersonGroupMembership(person_id=person_id, group_id=group_id)
+        )
+        self._session.flush()
+        log.debug("add_person_to_group: person=%d group=%d", person_id, group_id)
+        return True
+
+    def remove_person_from_group(self, person_id: int, group_id: int) -> bool:
+        """Remove *person_id* from *group_id*.
+
+        Returns ``True`` if a membership was removed, ``False`` if the person
+        was not a member (idempotent).
+        """
+        deleted = (
+            self._session.query(PersonGroupMembership)
+            .filter(
+                PersonGroupMembership.person_id == person_id,
+                PersonGroupMembership.group_id == group_id,
+            )
+            .delete(synchronize_session="fetch")
+        )
+        self._session.flush()
+        if deleted:
+            log.debug(
+                "remove_person_from_group: person=%d group=%d", person_id, group_id
+            )
+        return bool(deleted)

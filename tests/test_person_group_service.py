@@ -293,3 +293,67 @@ class TestMembership:
                 .all()
             )
         assert len(memberships) == 1
+
+
+# ---------------------------------------------------------------------------
+# Single-person add / remove
+# ---------------------------------------------------------------------------
+
+class TestAddRemoveMember:
+    def test_add_creates_membership(self, db, alice):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Kórus").id
+        with session_scope() as s:
+            created = PersonGroupService(s).add_person_to_group(alice, gid)
+        assert created is True
+        with session_scope() as s:
+            members = PersonGroupService(s).get_persons_in_group(gid)
+        assert {p.name for p in members} == {"Alice"}
+
+    def test_add_is_idempotent(self, db, alice):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Kórus").id
+        with session_scope() as s:
+            assert PersonGroupService(s).add_person_to_group(alice, gid) is True
+        with session_scope() as s:
+            assert PersonGroupService(s).add_person_to_group(alice, gid) is False
+        with session_scope() as s:
+            members = PersonGroupService(s).get_persons_in_group(gid)
+        assert len(members) == 1
+
+    def test_add_protected_person_raises(self, db):
+        with session_scope() as s:
+            protected = Person(name="Ismeretlen", is_auto_named=False, is_protected=True)
+            s.add(protected)
+            s.flush()
+            pid = protected.id
+            gid = PersonGroupService(s).create_group("Kórus").id
+        with pytest.raises(ValueError, match="protected"):
+            with session_scope() as s:
+                PersonGroupService(s).add_person_to_group(pid, gid)
+
+    def test_add_unknown_group_raises(self, db, alice):
+        with pytest.raises(ValueError, match="not found"):
+            with session_scope() as s:
+                PersonGroupService(s).add_person_to_group(alice, 9999)
+
+    def test_remove_deletes_membership(self, db, alice, bob):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Kórus").id
+        with session_scope() as s:
+            svc = PersonGroupService(s)
+            svc.add_person_to_group(alice, gid)
+            svc.add_person_to_group(bob, gid)
+        with session_scope() as s:
+            removed = PersonGroupService(s).remove_person_from_group(alice, gid)
+        assert removed is True
+        with session_scope() as s:
+            members = PersonGroupService(s).get_persons_in_group(gid)
+        assert {p.name for p in members} == {"Bob"}
+
+    def test_remove_non_member_returns_false(self, db, alice):
+        with session_scope() as s:
+            gid = PersonGroupService(s).create_group("Kórus").id
+        with session_scope() as s:
+            removed = PersonGroupService(s).remove_person_from_group(alice, gid)
+        assert removed is False
