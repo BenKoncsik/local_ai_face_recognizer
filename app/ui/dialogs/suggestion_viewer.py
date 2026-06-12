@@ -76,16 +76,33 @@ def _load_thumb_pixmap(path: Optional[str], size: int) -> Optional[QPixmap]:
     )
 
 
-def _load_faces_for_person(person_id: int) -> List[FaceGalleryEntry]:
+def _load_faces_for_person(
+    person_id: int, exclude_pending: bool = False
+) -> List[FaceGalleryEntry]:
+    """Gallery entries for *person_id*.
+
+    When *exclude_pending* is set, faces still awaiting auto-merge review are
+    left out, so the gallery shows only the person's confirmed reference faces
+    (used by the merge-review comparison panel).
+    """
+    from sqlalchemy import or_  # local import to avoid touching module header
+
     with session_scope() as session:
-        faces = (
+        query = (
             session.query(Face)
             .filter(
                 Face.person_id == person_id,
                 Face.is_excluded == False,  # noqa: E712
             )
-            .all()
         )
+        if exclude_pending:
+            query = query.filter(
+                or_(
+                    Face.auto_merge_review_status.is_(None),
+                    Face.auto_merge_review_status != "pending",
+                )
+            )
+        faces = query.all()
         return [
             FaceGalleryEntry(
                 face_id=f.id,
@@ -365,12 +382,14 @@ def _make_gallery_scroll(
     parent: QWidget,
     allow_merge_exclusion: bool = False,
     on_exclusion_toggled=None,
+    exclude_pending: bool = False,
 ) -> QScrollArea:
     """Return a QScrollArea containing a grid of face thumbnails for *person_id*.
 
     When *allow_merge_exclusion* is set, each thumbnail offers a right-click
     "exclude from merge" action; toggles are forwarded to
-    *on_exclusion_toggled(face_id, new_value)*.
+    *on_exclusion_toggled(face_id, new_value)*.  When *exclude_pending* is set,
+    faces still awaiting auto-merge review are omitted.
     """
     scroll = QScrollArea(parent)
     scroll.setWidgetResizable(True)
@@ -380,7 +399,7 @@ def _make_gallery_scroll(
     grid.setSpacing(6)
     scroll.setWidget(grid_widget)
 
-    entries = _load_faces_for_person(person_id)
+    entries = _load_faces_for_person(person_id, exclude_pending=exclude_pending)
     for i, entry in enumerate(entries):
         row_i, col_i = divmod(i, cols)
         thumb = _GalleryThumb(entry, allow_merge_exclusion=allow_merge_exclusion)

@@ -70,6 +70,12 @@ class Image(Base):
     # e.g. "1930-as évek", "1954", "1954.03.12", "kb. 1930"
     photo_date: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
+    # Optional *estimated* date, used only as a fallback when ``photo_date`` is
+    # empty (e.g. inferred from context/family data).  Same flexible-string
+    # format; surfaced with an "estimated" flag in the UI.  See
+    # app.services.face_date_service.FaceDateResolver.
+    estimated_date: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
     # Free-text note attached to the image by the user.
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -556,6 +562,14 @@ class Face(Base):
     # auto-confirm (high-similarity) clearance.
     auto_merge_confirmed_by_user: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+    # Serialized decision graph captured when this face was auto-moved from an
+    # Unknown cluster: the ranked target scores, the threshold/margin gates and
+    # the outcome.  Lets the review dialog show *why* the merge was suggested
+    # (and render the same flow graph as the AI debug view) long after the fact.
+    # NULL for faces merged before this column existed.
+    auto_merge_decision_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
     )
 
     # Face quality evaluation — populated by FaceQualityService after detection.

@@ -22,11 +22,12 @@ intelligent auto-confirm reuses
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -47,6 +48,13 @@ REVIEW_PENDING = "pending"
 # they are distinguishable from a deliberate manual assignment and are NOT used
 # as recognition training examples (not in ``_TRUSTED_MANUAL_SOURCES``).
 SOURCE_AUTO_MERGE = "auto_merge_unknown"
+
+# Schema version + rule id of the serialized decision graph stored on
+# ``Face.auto_merge_decision_json``.  Bump the version if the structure changes.
+DECISION_VERSION = 1
+RULE_UNKNOWN_SCATTER = "unknown_cluster_scatter"
+# How many ranked persons to keep in the stored decision (keeps the JSON small).
+_MAX_RANKED = 8
 
 
 def _utcnow_naive() -> datetime:
@@ -88,6 +96,15 @@ class PendingAutoMerge:
     image_id: Optional[int]
     image_path: Optional[str]
     assigned_at: Optional[datetime]
+    # (x, y, w, h) of the face on the original image — used to highlight the
+    # exact face the suggestion was based on in the full-image viewer.
+    bbox: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    # Best similarity score the merge engine measured for this face against the
+    # target (from the stored decision), or None when unknown.
+    confidence: Optional[float] = None
+    # Parsed decision graph (``Face.auto_merge_decision_json``) or None for rows
+    # merged before the decision was recorded.
+    decision: Optional[Dict[str, Any]] = None
 
 
 class UnknownMergeService:
@@ -186,9 +203,22 @@ class UnknownMergeService:
             flagged_ids.append(fid)
         self._session.commit()
 
+        # Always record a decision graph for every dragged-along face — even
+        # when auto-merge is disabled or the target has no profile — so the
+        # review dialog can later explain *why* each face was suggested.  The
+        # same pass auto-confirms the confident ones when enabled.
         n_auto = 0
-        if flagged_ids and self._rec_cfg.unknown_auto_merge_enabled:
-            n_auto = self.maybe_auto_confirm(flagged_ids, target_person_id)
+        if flagged_ids:
+            n_auto = self._evaluate_and_record(
+                flagged_ids,
+                target_person_id,
+                context={
+                    "selected_face_id": selected_face_id,
+                    "source_person_id": source_id,
+                    "source_person_name": source_name,
+                    "cluster_size": len(flagged_ids) + 1,
+                },
+            )
 
         result = UnknownMergeResult(
             selected_face_id=selected_face_id,
@@ -217,7 +247,7 @@ class UnknownMergeService:
     def maybe_auto_confirm(
         self, face_ids: List[int], target_person_id: int
     ) -> int:
-        """Clear the pending flag on faces that confidently match the target.
+        """Record decision graphs and auto-confirm the confident pending faces.
 
         A pending face is auto-confirmed only when **all** hold:
 
@@ -229,48 +259,176 @@ class UnknownMergeService:
         * the margin to the second-best person is ``>= min_margin`` (no strong
           conflict with another known identity).
 
-        Returns the number of faces auto-confirmed.
+        Every evaluated face also gets its decision graph stored on
+        ``Face.auto_merge_decision_json``.  Returns the number auto-confirmed.
         """
-        if not self._rec_cfg.unknown_auto_merge_enabled or not face_ids:
+        return self._evaluate_and_record(face_ids, target_person_id)
+
+    def _evaluate_and_record(
+        self,
+        face_ids: List[int],
+        target_person_id: int,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Score each pending face against the target, persist its decision
+        graph, and auto-confirm the confident matches.
+
+        Decisions are recorded for **all** evaluated faces — including when
+        auto-merge is disabled or the target has no profile (those simply get
+        ``outcome="pending"``).  Returns the number of faces auto-confirmed.
+        """
+        if not face_ids:
             return 0
 
-        rec = RecognitionService(self._session, self._rec_cfg)
-        profiles = rec.build_profiles()
-        if target_person_id not in profiles:
-            # No confirmed reference face for the target → leave all pending.
-            return 0
-
+        enabled = self._rec_cfg.unknown_auto_merge_enabled
         threshold = self._rec_cfg.unknown_auto_confirm_threshold
         margin = self._rec_cfg.min_margin
 
+        rec = RecognitionService(self._session, self._rec_cfg)
+        profiles = rec.build_profiles()
+        target_has_profile = target_person_id in profiles
+        target = self._session.get(Person, target_person_id)
+        target_name = target.name if target is not None else None
+
         confirmed = 0
+        dirty = False
         for fid in face_ids:
             face = self._session.get(Face, fid)
             if face is None or face.auto_merge_review_status != REVIEW_PENDING:
                 continue
             embedding = face.get_embedding()
-            if embedding is None:
-                continue
-            ranked = rec.rank_persons(embedding, profiles)
-            if not ranked:
-                continue
-            best_pid, _name, best_score = ranked[0]
-            second = ranked[1][2] if len(ranked) > 1 else 0.0
-            if (
-                best_pid == target_person_id
+            ranked = (
+                rec.rank_persons(embedding, profiles)
+                if embedding is not None
+                else []
+            )
+
+            best_pid = ranked[0][0] if ranked else None
+            best_score = ranked[0][2] if ranked else None
+            second_score = ranked[1][2] if len(ranked) > 1 else 0.0
+
+            passes = bool(
+                enabled
+                and target_has_profile
+                and best_pid == target_person_id
+                and best_score is not None
                 and best_score >= threshold
-                and (best_score - second) >= margin
-            ):
+                and (best_score - second_score) >= margin
+            )
+            outcome = "auto_confirmed" if passes else "pending"
+
+            decision = self._build_decision(
+                face=face,
+                target_person_id=target_person_id,
+                target_name=target_name,
+                ranked=ranked,
+                best_score=best_score,
+                second_score=second_score,
+                threshold=threshold,
+                margin=margin,
+                enabled=enabled,
+                target_has_profile=target_has_profile,
+                outcome=outcome,
+                context=context,
+            )
+            face.auto_merge_decision_json = json.dumps(decision, ensure_ascii=False)
+            dirty = True
+
+            if passes:
                 self._apply_confirm(face, by_user=False, score=best_score)
                 confirmed += 1
 
-        if confirmed:
+        if dirty:
             self._session.commit()
+        if confirmed:
             log.info(
                 "Unknown-merge auto-confirmed %d face(s) for person %d",
                 confirmed, target_person_id,
             )
         return confirmed
+
+    def _build_decision(
+        self,
+        *,
+        face: Face,
+        target_person_id: int,
+        target_name: Optional[str],
+        ranked: List[Tuple[int, str, float]],
+        best_score: Optional[float],
+        second_score: float,
+        threshold: float,
+        margin: float,
+        enabled: bool,
+        target_has_profile: bool,
+        outcome: str,
+        context: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build the serializable decision graph for one pending face.
+
+        The ``gates`` list mirrors the open-set rejection gates of the AI debug
+        view (``app.deep.debug_info.GateResult``) so the review dialog can
+        render the exact same flow graph: *is the target the best match → is it
+        above the confirm threshold → is the margin to the runner-up wide
+        enough*.  The first failing gate is where auto-confirmation stopped.
+        """
+        ctx = context or {}
+        best_pid = ranked[0][0] if ranked else None
+        target_is_best = best_pid == target_person_id and best_pid is not None
+
+        gates: List[Dict[str, Any]] = [
+            {
+                # Target is the single best match in embedding space.
+                "name": "best_match",
+                "passed": bool(target_is_best),
+                "value": float(best_score) if (target_is_best and best_score is not None) else 0.0,
+                "threshold": float(second_score),
+            },
+            {
+                # Similarity to the target clears the confirm threshold.
+                "name": "sim_floor",
+                "passed": bool(best_score is not None and best_score >= threshold),
+                "value": float(best_score) if best_score is not None else 0.0,
+                "threshold": float(threshold),
+            },
+            {
+                # Margin to the runner-up is wide enough (no rival identity).
+                "name": "margin",
+                "passed": bool(
+                    best_score is not None and (best_score - second_score) >= margin
+                ),
+                "value": float(best_score - second_score) if best_score is not None else 0.0,
+                "threshold": float(margin),
+            },
+        ]
+
+        return {
+            "version": DECISION_VERSION,
+            "rule": RULE_UNKNOWN_SCATTER,
+            "face_id": face.id,
+            "selected_face_id": ctx.get("selected_face_id"),
+            "source_person_id": (
+                ctx.get("source_person_id")
+                if ctx.get("source_person_id") is not None
+                else face.auto_merge_source_person_id
+            ),
+            "source_person_name": ctx.get("source_person_name"),
+            "cluster_size": ctx.get("cluster_size"),
+            "target_person_id": target_person_id,
+            "target_person_name": target_name,
+            "ranked": [
+                [int(pid), str(name), float(score)]
+                for pid, name, score in ranked[:_MAX_RANKED]
+            ],
+            "best_person_id": int(best_pid) if best_pid is not None else None,
+            "best_score": float(best_score) if best_score is not None else None,
+            "second_score": float(second_score),
+            "threshold": float(threshold),
+            "min_margin": float(margin),
+            "auto_merge_enabled": bool(enabled),
+            "target_has_profile": bool(target_has_profile),
+            "gates": gates,
+            "outcome": outcome,
+        }
 
     # ------------------------------------------------------------------
     # Per-face review operations
@@ -376,6 +534,10 @@ class UnknownMergeService:
             image_path = None
             if f.image is not None:
                 image_path = f.image.file_path
+            decision = self._parse_decision(f.auto_merge_decision_json)
+            confidence = (
+                decision.get("best_score") if decision is not None else None
+            )
             rows.append(
                 PendingAutoMerge(
                     face_id=f.id,
@@ -387,6 +549,21 @@ class UnknownMergeService:
                     image_id=f.image_id,
                     image_path=image_path,
                     assigned_at=f.assigned_at,
+                    bbox=(f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h),
+                    confidence=confidence,
+                    decision=decision,
                 )
             )
         return rows
+
+    @staticmethod
+    def _parse_decision(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Parse a stored decision JSON, tolerating missing/corrupt values."""
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            log.warning("Unparseable auto_merge_decision_json: %r", raw[:120])
+            return None
+        return data if isinstance(data, dict) else None

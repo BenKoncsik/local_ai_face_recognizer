@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -347,6 +349,98 @@ def test_list_and_count_pending(db):
             # Emptied Unknown is gone → synthetic fallback label.
             assert r.source_person_name == f"Unknown #{unknown_id}"
             assert r.image_path == "/tmp/a.jpg"
+
+
+# ---------------------------------------------------------------------------
+# 8. Decision graph capture (per-suggestion, serializable)
+# ---------------------------------------------------------------------------
+
+def test_pending_face_gets_decision_graph(db):
+    """Every dragged-along face stores a parseable decision graph."""
+    with session_scope() as session:
+        img = _img(session, "/tmp/a.jpg")
+        unknown = _person(session, "Unknown 11", is_auto_named=True)
+        target = _person(session, "Anikó")
+        _face(session, img, target, embedding=E_A, source="manual")  # reference
+        selected = _face(session, img, unknown, embedding=E_A)
+        sib_diff = _face(session, img, unknown, embedding=E_B)  # stays pending
+        sel_id, target_id, diff_id = selected.id, target.id, sib_diff.id
+
+    with session_scope() as session:
+        UnknownMergeService(session).assign_unknown_face(sel_id, target_id)
+
+    with session_scope() as session:
+        diff = session.get(Face, diff_id)
+        assert diff.auto_merge_decision_json is not None
+        decision = json.loads(diff.auto_merge_decision_json)
+        assert decision["version"] == 1
+        assert decision["rule"] == "unknown_cluster_scatter"
+        assert decision["target_person_id"] == target_id
+        assert decision["selected_face_id"] == sel_id
+        assert decision["outcome"] == "pending"
+        assert isinstance(decision["gates"], list) and decision["gates"]
+        assert isinstance(decision["ranked"], list)
+
+
+def test_list_pending_exposes_decision_and_bbox(db):
+    with session_scope() as session:
+        img = _img(session, "/tmp/a.jpg")
+        unknown = _person(session, "Unknown 12", is_auto_named=True)
+        target = _person(session, "Anikó")
+        faces = [_face(session, img, unknown) for _ in range(2)]
+        sel_id, target_id = faces[0].id, target.id
+
+    with session_scope() as session:
+        UnknownMergeService(session).assign_unknown_face(sel_id, target_id)
+
+    with session_scope() as session:
+        rows = UnknownMergeService(session).list_pending()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.bbox == (1, 2, 3, 4)
+        assert row.person_id == target_id  # person_id IS the target
+        # No embeddings → empty ranking, but a decision is still recorded.
+        assert row.decision is not None
+        assert row.decision["outcome"] == "pending"
+
+
+def test_decision_recorded_when_auto_merge_disabled(db):
+    cfg = RecognitionConfig(unknown_auto_merge_enabled=False)
+    with session_scope() as session:
+        img = _img(session, "/tmp/a.jpg")
+        unknown = _person(session, "Unknown 13", is_auto_named=True)
+        target = _person(session, "Anikó")
+        _face(session, img, target, embedding=E_A, source="manual")
+        selected = _face(session, img, unknown, embedding=E_A)
+        sib = _face(session, img, unknown, embedding=E_A)
+        sel_id, target_id, sib_id = selected.id, target.id, sib.id
+
+    with session_scope() as session:
+        UnknownMergeService(session, cfg).assign_unknown_face(sel_id, target_id)
+
+    with session_scope() as session:
+        sib = session.get(Face, sib_id)
+        assert sib.auto_merge_review_status == REVIEW_PENDING
+        decision = json.loads(sib.auto_merge_decision_json)
+        assert decision["auto_merge_enabled"] is False
+        assert decision["outcome"] == "pending"
+
+
+def test_old_row_without_decision_is_tolerated(db):
+    with session_scope() as session:
+        img = _img(session, "/tmp/a.jpg")
+        unknown = _person(session, "Unknown 14", is_auto_named=True)
+        target = _person(session, "Anikó")
+        f = _face(session, img, target, source=SOURCE_AUTO_MERGE)
+        f.auto_merged_from_unknown = True
+        f.auto_merge_review_status = REVIEW_PENDING
+        f.auto_merge_decision_json = None  # legacy row
+        session.flush()
+
+    with session_scope() as session:
+        rows = UnknownMergeService(session).list_pending()
+        assert rows[0].decision is None
+        assert rows[0].confidence is None
 
 
 def test_delete_face_removes_row(db):

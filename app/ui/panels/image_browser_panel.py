@@ -1997,6 +1997,17 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.editingFinished.connect(self._save_photo_date)
         info_layout.addWidget(self._photo_date_edit)
 
+        # Estimated date — fallback used only when no photo date is known.
+        self._estimated_date_hdr = QLabel(t("ibp_estimated_date_hdr"))
+        self._estimated_date_hdr.setStyleSheet(
+            "font-weight: bold; color: #888; font-size: 11px;"
+        )
+        info_layout.addWidget(self._estimated_date_hdr)
+        self._estimated_date_edit = QLineEdit()
+        self._estimated_date_edit.returnPressed.connect(self._save_estimated_date)
+        self._estimated_date_edit.editingFinished.connect(self._save_estimated_date)
+        info_layout.addWidget(self._estimated_date_edit)
+
         # EXIF suggestion section — header on its own line, value + button below
         exif_row = QWidget()
         exif_row_layout = QVBoxLayout(exif_row)
@@ -2258,6 +2269,9 @@ class ImageBrowserPanel(QWidget):
         self._date_hdr.setText(t("ibp_date_hdr"))
         self._photo_date_edit.setPlaceholderText(t("ibp_date_placeholder"))
         self._photo_date_edit.setToolTip(t("ibp_date_tooltip"))
+        self._estimated_date_hdr.setText(t("ibp_estimated_date_hdr"))
+        self._estimated_date_edit.setPlaceholderText(t("ibp_estimated_date_placeholder"))
+        self._estimated_date_edit.setToolTip(t("ibp_estimated_date_tooltip"))
         self._exif_suggestion_hdr.setText(t("ibp_exif_suggestion"))
         self._exif_accept_btn.setText(t("ibp_accept_exif"))
         self._exif_accept_btn.setToolTip(t("ibp_accept_exif_tooltip"))
@@ -3544,6 +3558,7 @@ class ImageBrowserPanel(QWidget):
             self.image_displayed.emit(image_id, img.file_path)
             self._detection_done = img.detection_done
             photo_date = img.photo_date or ""
+            estimated_date = img.estimated_date or ""
             note = img.note or ""
             current_place_id = img.place_id
             current_place_name = img.place.name if img.place else ""
@@ -3602,6 +3617,8 @@ class ImageBrowserPanel(QWidget):
                     ]
                     if not photo_date:
                         photo_date = orig.photo_date or ""
+                    if not estimated_date:
+                        estimated_date = orig.estimated_date or ""
 
         # Re-read through the service so duplicate/missing crop paths are
         # repaired before any preview state is rendered.
@@ -3610,6 +3627,9 @@ class ImageBrowserPanel(QWidget):
         self._photo_date_edit.blockSignals(True)
         self._photo_date_edit.setText(photo_date)
         self._photo_date_edit.blockSignals(False)
+        self._estimated_date_edit.blockSignals(True)
+        self._estimated_date_edit.setText(estimated_date)
+        self._estimated_date_edit.blockSignals(False)
         self._note_edit.blockSignals(True)
         self._note_edit.setPlainText(note)
         self._note_edit.blockSignals(False)
@@ -5139,6 +5159,18 @@ class ImageBrowserPanel(QWidget):
                 return
             img.photo_date = value
         log.debug("photo_date saved for image %d: %r", target_id, value)
+
+    def _save_estimated_date(self) -> None:
+        target_id = self._deol_pair_orig_id or self._current_image_id
+        if target_id is None:
+            return
+        value = self._estimated_date_edit.text().strip() or None
+        with session_scope() as session:
+            img = session.get(Image, target_id)
+            if img is None:
+                return
+            img.estimated_date = value
+        log.debug("estimated_date saved for image %d: %r", target_id, value)
 
     def _save_note(self) -> None:
         target_id = self._deol_pair_orig_id or self._current_image_id

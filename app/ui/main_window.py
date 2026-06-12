@@ -712,6 +712,8 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(7, t("tab_collage"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
+        if hasattr(self, "_cluster_panel"):
+            self._cluster_panel.retranslate()
         if hasattr(self, "_image_browser"):
             self._image_browser.retranslate()
         if hasattr(self, "_family_search"):
@@ -2402,7 +2404,12 @@ class MainWindow(QMainWindow):
             is_auto_named = person.is_auto_named
             for f in faces:
                 _ = f.image  # noqa: F841
-            self._cluster_panel.show_person(person.name, faces)
+            self._cluster_panel.show_person(
+                person.name,
+                faces,
+                birth_date=person.birth_date,
+                death_date=person.death_date,
+            )
             self._preview_panel.clear()
 
         self._rename_btn.setEnabled(not is_protected)

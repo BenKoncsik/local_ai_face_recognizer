@@ -30,6 +30,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui.dialogs.merge_decision_graph_dialog import (
+    MergeDecisionGraphDialog,
+    MergeReviewDetailDialog,
+)
+
 from app.config import RecognitionConfig
 from app.db.database import session_scope
 from app.db.models import Person
@@ -40,6 +45,22 @@ from app.ui.widgets.person_search_select import PersonSearchSelect
 log = logging.getLogger(__name__)
 
 _CROP_SIZE = 96
+
+
+class _ClickableCrop(QLabel):
+    """Face-crop label that opens the detail modal when clicked."""
+
+    clicked = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(t("amerge_open_full"))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class _PersonPickerDialog(QDialog):
@@ -158,12 +179,13 @@ class AutoMergeReviewDialog(QDialog):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(10)
 
-        crop = QLabel()
+        crop = _ClickableCrop()
         crop.setFixedSize(_CROP_SIZE, _CROP_SIZE)
         crop.setAlignment(Qt.AlignCenter)
         crop.setStyleSheet("background:#1a1a1a; border:1px solid #333;")
         pix = self._load_crop(row.crop_path)
         crop.setPixmap(pix) if pix is not None else crop.setText("?")
+        crop.clicked.connect(lambda: self._open_detail(row))
         lay.addWidget(crop)
 
         info = QVBoxLayout()
@@ -172,6 +194,10 @@ class AutoMergeReviewDialog(QDialog):
         name.setStyleSheet("font-weight:bold; color:#fff;")
         info.addWidget(name)
         info.addWidget(self._dim_label(t("amerge_col_source", name=row.source_person_name)))
+        if row.confidence is not None:
+            score_lbl = QLabel(t("amerge_score") + f": {row.confidence:.0%}")
+            score_lbl.setStyleSheet("color:#8ab98a; font-size:11px;")
+            info.addWidget(score_lbl)
         if row.image_path:
             info.addWidget(self._dim_label(Path(row.image_path).name))
         if row.assigned_at is not None:
@@ -187,12 +213,24 @@ class AutoMergeReviewDialog(QDialog):
         move_btn.clicked.connect(lambda: self._on_move(row.face_id))
         del_btn = QPushButton("🗑 " + t("amerge_delete"))
         del_btn.clicked.connect(lambda: self._on_delete(row.face_id))
-        for b in (accept_btn, move_btn, del_btn):
+        graph_btn = QPushButton("📊 " + t("amerge_graph_btn"))
+        graph_btn.clicked.connect(lambda: self._open_graph(row))
+        for b in (accept_btn, move_btn, del_btn, graph_btn):
             b.setFixedWidth(190)
             actions.addWidget(b)
         actions.addStretch()
         lay.addLayout(actions)
         return card
+
+    def _open_detail(self, row: PendingAutoMerge) -> None:
+        try:
+            MergeReviewDetailDialog(row, self).exec()
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to open merge review detail for face %d", row.face_id)
+            QMessageBox.warning(self, t("error"), t("amerge_full_image_missing"))
+
+    def _open_graph(self, row: PendingAutoMerge) -> None:
+        MergeDecisionGraphDialog(row.decision, self).exec()
 
     @staticmethod
     def _dim_label(text: str) -> QLabel:
