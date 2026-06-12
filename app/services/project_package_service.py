@@ -121,6 +121,10 @@ class ImportResult:
     crops_dir: Path
     manifest: dict = field(default_factory=dict)
     remapped_crops: int = 0
+    # Archive members that could not be extracted on this machine (e.g. a name
+    # the target filesystem rejects even after sanitisation).  Reported to the
+    # user so a missing original is never silently swallowed.
+    skipped_members: List[str] = field(default_factory=list)
 
 
 class ProjectPackageError(Exception):
@@ -676,6 +680,7 @@ class ProjectPackageService:
             images_dir=images_dir,
             crops_dir=crops_dir,
             manifest=manifest,
+            skipped_members=skipped,
         )
 
     @staticmethod
@@ -709,12 +714,15 @@ class ProjectPackageService:
             if not archive_path or image_id is None:
                 # Not bundled (missing/foreign at export) — keep existing paths.
                 continue
-            rel = _archive_path_to_image_rel(archive_path)
+            # Extraction sanitises every path component (Windows-illegal chars,
+            # trailing dots, long paths…); mirror that here so the rewritten
+            # relative_path points at the file that actually landed on disk.
+            rel = _archive_path_to_image_rel(_sanitize_archive_path(archive_path))
             if rel is None:
                 continue
             # Only repoint when the bundled file actually landed on disk, so a
             # member that failed to extract never hides behind a broken path.
-            if not (images_dir / Path(*rel.split("/"))).exists():
+            if not _os_exists(images_dir / _from_archive_rel(rel)):
                 continue
             image = session.get(Image, image_id)
             if image is None:
@@ -874,23 +882,116 @@ def _is_unsafe_member(name: str) -> bool:
     return any(part == ".." for part in parts)
 
 
+# Characters that are illegal in a Windows path component, plus control chars.
+_WINDOWS_ILLEGAL_CHARS = set('<>:"/\\|?*') | {chr(c) for c in range(0, 32)}
+# Reserved DOS device names (case-insensitive, with or without an extension).
+_WINDOWS_RESERVED_NAMES = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _sanitize_component(comp: str) -> str:
+    """Make a single path component safe on every supported filesystem.
+
+    Replaces characters Windows rejects with ``_``, strips trailing dots and
+    spaces (also forbidden on Windows), avoids reserved device names, and clamps
+    over-long names.  Ordinary photo names (letters, digits, spaces, ``-_.`` and
+    unicode) pass through unchanged, so same-OS round-trips are unaffected and
+    only pathological cross-OS names are rewritten.
+    """
+    if not comp or comp in (".", ".."):
+        return comp
+    out = "".join("_" if ch in _WINDOWS_ILLEGAL_CHARS else ch for ch in comp)
+    out = out.rstrip(" .")
+    if not out:
+        out = "_"
+    stem = out.split(".", 1)[0].upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        out = "_" + out
+    return _safe_component(out)
+
+
+def _sanitize_archive_path(name: str) -> str:
+    """Sanitise every component of an archive member path (POSIX separators).
+
+    Honours both ``/`` and ``\\`` as separators so a path written by either OS
+    is split correctly.  Returns a forward-slash relative path with each
+    component made filesystem-safe.
+    """
+    norm = name.replace("\\", "/")
+    parts = [_sanitize_component(p) for p in norm.split("/") if p and p != "."]
+    return "/".join(p for p in parts if p)
+
+
+def _from_archive_rel(rel: str) -> Path:
+    """Turn a sanitised POSIX archive-relative path into a native ``Path``."""
+    parts = [p for p in rel.split("/") if p]
+    return Path(*parts) if parts else Path(".")
+
+
+def _os_path(path: Path) -> str:
+    r"""Return a string path that bypasses the Windows ``MAX_PATH`` (260) limit.
+
+    On Windows an absolute target is prefixed with the extended-length marker
+    (``\\?\`` for local paths, ``\\?\UNC\`` for UNC shares) so deeply nested
+    ``images/`` trees still open.  A no-op on other platforms.
+    """
+    if os.name != "nt":
+        return str(path)
+    s = str(path)
+    if s.startswith("\\\\?\\"):
+        return s
+    if s.startswith("\\\\"):  # UNC path: \\server\share\...
+        return "\\\\?\\UNC\\" + s[2:]
+    return "\\\\?\\" + s
+
+
+def _os_mkdir(path: Path) -> None:
+    """``mkdir -p`` that tolerates the Windows long-path prefix."""
+    os.makedirs(_os_path(path), exist_ok=True)
+
+
+def _os_exists(path: Path) -> bool:
+    """Existence check that survives the Windows long-path limit, never raises."""
+    try:
+        return os.path.exists(_os_path(path))
+    except OSError as exc:
+        log.warning("File existence check failed for %r: %s", str(path), exc)
+        return False
+
+
 def _safe_extract_member(
     zf: zipfile.ZipFile, member: zipfile.ZipInfo, dest: Path
 ) -> None:
-    """Extract a single member into *dest*, guaranteeing it stays inside it."""
+    """Extract a single member into *dest*, guaranteeing it stays inside it.
+
+    The archive path is sanitised per component (see
+    :func:`_sanitize_archive_path`) so a name produced on one OS — e.g. a macOS
+    photo path containing characters Windows forbids (``: ? * " | < >``), a
+    trailing dot/space, or a reserved device name — does not make extraction
+    fail on the importing machine.  On Windows the on-disk target is opened
+    through an extended-length (``\\\\?\\``) path so a deep ``images/`` tree
+    that exceeds the legacy 260-character ``MAX_PATH`` limit still extracts.
+    :func:`remap_image_paths` applies the exact same sanitiser, so the rewritten
+    ``relative_path`` always matches the file that actually landed on disk.
+    """
+    safe_rel = _sanitize_archive_path(member.filename)
     if member.is_dir():
-        (dest / member.filename).mkdir(parents=True, exist_ok=True)
+        if safe_rel:
+            _os_mkdir(dest / _from_archive_rel(safe_rel))
         return
 
-    target = (dest / member.filename).resolve()
+    target = (dest / _from_archive_rel(safe_rel)).resolve()
     dest_resolved = dest.resolve()
     if not _is_within(target, dest_resolved):
         raise ProjectPackageError(
             f"Path traversal blokkolva: {member.filename}"
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
+    _os_mkdir(target.parent)
     # Stream the member so large images never load fully into memory.
-    with zf.open(member, "r") as src, open(target, "wb") as out:
+    with zf.open(member, "r") as src, open(_os_path(target), "wb") as out:
         while True:
             chunk = src.read(1024 * 1024)
             if not chunk:
@@ -944,11 +1045,11 @@ def _restore_image_mtimes(dest: Path, manifest: dict) -> int:
         epoch = _entry_mtime_epoch(entry)
         if epoch is None:
             continue
-        target = dest / archive_path
-        if not target.exists():
+        target = dest / _from_archive_rel(_sanitize_archive_path(archive_path))
+        if not _os_exists(target):
             continue
         try:
-            os.utime(target, (epoch, epoch))
+            os.utime(_os_path(target), (epoch, epoch))
             restored += 1
         except (OSError, OverflowError, ValueError):
             # e.g. Windows cannot set negative (pre-1970) times — skip quietly.

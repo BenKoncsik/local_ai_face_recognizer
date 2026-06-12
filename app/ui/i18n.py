@@ -753,6 +753,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                           "hu": "Projekt importálva ide:\n{dest}\n\nMegnyitja most?"},
     "pkg_import_opened": {"en": "Imported project is now active.",
                           "hu": "Az importált projekt mostantól aktív."},
+    "pkg_import_missing": {"en": "\n\nNote: {missing} original image(s) could not "
+                                 "be located after import (see log).",
+                           "hu": "\n\nMegjegyzés: {missing} eredeti kép nem található "
+                                 "az import után (részletek a logban)."},
     "pkg_import_later":  {"en": "Imported project is ready at:\n{dest}",
                           "hu": "Az importált projekt készen áll itt:\n{dest}"},
     "pkg_error_title":   {"en": "Project package error", "hu": "Projektcsomag hiba"},

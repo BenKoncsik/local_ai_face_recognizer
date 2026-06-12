@@ -3541,6 +3541,7 @@ class MainWindow(QMainWindow):
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("Relative-path migration after import failed")
+            missing_originals = self._count_unresolved_images(session)
 
         self._current_person_id = None
         self._current_face_id = None
@@ -3554,10 +3555,45 @@ class MainWindow(QMainWindow):
             self._persons_panel.refresh()
         if hasattr(self, "_objects_panel"):
             self._objects_panel.refresh()
-        QMessageBox.information(
-            self, t("pkg_import_title"), t("pkg_import_opened")
-        )
+        msg = t("pkg_import_opened")
+        if missing_originals:
+            msg += t("pkg_import_missing", missing=missing_originals)
+            log.warning(
+                "%d imported image(s) could not be located on disk",
+                missing_originals,
+            )
+        QMessageBox.information(self, t("pkg_import_title"), msg)
         log.info("Activated imported project: %s", new_db)
+
+    @staticmethod
+    def _count_unresolved_images(session) -> int:
+        """Count images whose original file cannot be found after import.
+
+        Resolves each :class:`Image` against the (now reconfigured) library
+        root and counts those whose file is absent on disk, so the user is told
+        plainly when some originals did not survive the round-trip instead of
+        only discovering it later as a broken preview.
+        """
+        import os
+
+        from app.db.models import Image
+        from app.services.image_library_service import resolve_image_path
+
+        missing = 0
+        for image in session.query(Image).all():
+            try:
+                resolved = resolve_image_path(image)
+            except Exception:  # noqa: BLE001
+                resolved = None
+            if resolved is None:
+                missing += 1
+                continue
+            try:
+                if not os.path.exists(str(resolved)):
+                    missing += 1
+            except OSError:
+                missing += 1
+        return missing
 
     # ------------------------------------------------------------------
     # AI visualization window

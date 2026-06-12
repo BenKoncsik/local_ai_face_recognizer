@@ -527,3 +527,93 @@ def test_import_remaps_legacy_absolute_only_image(tmp_path):
         # ...and resolves to a file that actually exists on this machine.
         resolved = resolve_image_path(img)
         assert resolved is not None and resolved.exists()
+
+
+# ---------------------------------------------------------------------------
+# Cross-OS path sanitisation (macOS/Linux export → Windows import)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_component_handles_windows_illegal_names():
+    from app.services.project_package_service import _sanitize_component
+
+    # Illegal characters are replaced, the extension is kept.
+    assert _sanitize_component('pho:to?.jpg') == "pho_to_.jpg"
+    # Trailing dot / space (forbidden on Windows) are stripped.
+    assert _sanitize_component("folder. ") == "folder"
+    # Reserved DOS device names are escaped, even with an extension.
+    assert _sanitize_component("CON") == "_CON"
+    assert _sanitize_component("nul.txt") == "_nul.txt"
+    # Ordinary unicode photo names pass through untouched.
+    assert _sanitize_component("nyár_2024.JPG") == "nyár_2024.JPG"
+
+
+def test_sanitize_archive_path_splits_both_separators():
+    from app.services.project_package_service import _sanitize_archive_path
+
+    assert (
+        _sanitize_archive_path("images\\a:b/c?.jpg") == "images/a_b/c_.jpg"
+    )
+
+
+def test_safe_extract_sanitizes_illegal_member_name(tmp_path):
+    """A member with Windows-illegal chars lands at the sanitised path."""
+    from app.services.project_package_service import _safe_extract_member
+
+    archive = tmp_path / "src.zip"
+    member_name = "images/sub:dir/pho?to.jpg"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(member_name, b"jpeg-bytes")
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with zipfile.ZipFile(archive, "r") as zf:
+        _safe_extract_member(zf, zf.getinfo(member_name), dest)
+
+    landed = dest / "images" / "sub_dir" / "pho_to.jpg"
+    assert landed.exists()
+    assert landed.read_bytes() == b"jpeg-bytes"
+    # The original, illegal-char path was NOT created.
+    assert not (dest / "images" / "sub:dir").exists()
+
+
+def test_remap_image_paths_matches_sanitized_extraction(tmp_path):
+    """remap_image_paths repoints to the sanitised on-disk path, not the raw one."""
+    init_db(tmp_path / "faces.db")
+
+    images_dir = tmp_path / "images"
+    # The file landed under the sanitised name (as extraction would write it).
+    landed = images_dir / "sub_dir" / "pho_to.jpg"
+    landed.parent.mkdir(parents=True)
+    landed.write_bytes(b"x")
+
+    with session_scope() as session:
+        session.add(
+            Image(
+                file_path="/Users/someone/lib/sub:dir/pho?to.jpg",
+                relative_path=None,
+                file_hash="h",
+                file_mtime=0.0,
+                width=10,
+                height=10,
+                detection_done=True,
+            )
+        )
+
+    # Manifest still references the raw (pre-sanitisation) archive path.
+    with session_scope() as session:
+        image_id = session.query(Image).first().id
+    manifest = {
+        "images": {
+            "entries": [
+                {"id": image_id, "archive_path": "images/sub:dir/pho?to.jpg"}
+            ]
+        }
+    }
+
+    with session_scope() as session:
+        remapped = ProjectPackageService.remap_image_paths(
+            session, manifest, images_dir
+        )
+        assert remapped == 1
+        img = session.query(Image).first()
+        assert img.relative_path == "sub_dir/pho_to.jpg"
