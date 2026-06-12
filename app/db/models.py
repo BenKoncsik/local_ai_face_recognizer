@@ -288,11 +288,12 @@ class Person(Base):
     thumbnail_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Structured personal data.
-    # Uniqueness is NOT enforced at the column level: friend/acquaintance codes
-    # (those containing "B") are relational markers that several people may
-    # share. A partial unique index (ux_persons_family_code, created in
-    # _migrate_add_indexes) enforces uniqueness only for identity codes, and
-    # FamilyService.ensure_unique_family_code mirrors this at the program level.
+    # Format and uniqueness are NOT enforced at the DB level: validation
+    # follows the user-editable family code scheme
+    # (app/services/family_code_schemes.py) and is soft — the edit dialog
+    # warns about format problems and duplicate identity codes
+    # (FamilyService.ensure_unique_family_code), but the user may save anyway,
+    # so any string can end up here.
     family_code: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
     )

@@ -224,6 +224,9 @@ class PersonsPanel(QWidget):
         self._count_lbl.setStyleSheet("color: #888;")
         filters.addWidget(self._count_lbl)
         filters.addStretch()
+        self._schemes_btn = QPushButton()
+        self._schemes_btn.clicked.connect(self._on_edit_schemes)
+        filters.addWidget(self._schemes_btn)
         root.addLayout(filters)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -354,6 +357,7 @@ class PersonsPanel(QWidget):
         self._name_filter.setPlaceholderText(t("persons_filter_name"))
         self._code_filter.setPlaceholderText(t("persons_filter_code"))
         self._filter_btn.setText(t("persons_filter_apply"))
+        self._schemes_btn.setText(t("persons_schemes_btn"))
         self._table.setHorizontalHeaderLabels([
             t("persons_col_id"),
             t("persons_col_thumbnail"),
@@ -654,6 +658,11 @@ class PersonsPanel(QWidget):
     def _on_edit(self) -> None:
         if self._current_person_id is not None:
             self._open_edit_dialog(self._current_person_id)
+
+    def _on_edit_schemes(self) -> None:
+        from app.ui.dialogs.family_code_scheme_dialog import FamilyCodeSchemeDialog
+
+        FamilyCodeSchemeDialog(parent=self).exec()
 
     def _open_edit_dialog(self, person_id: int) -> None:
         with session_scope() as session:

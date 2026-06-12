@@ -19,6 +19,13 @@ The external identifier (#root#path) describes the *external* person's own
 family. It lives in a separate field (Person.external_family_code) and never
 appears in the main family code; validate_extended_code() rejects it, while
 validate_external_family_code() accepts only that form.
+
+The grammar's letters are no longer hard-coded: the root persons, the marker
+letters (F/T/H/B by default) and the optional notations all come from a
+user-editable :class:`~app.services.family_code_schemes.FamilyCodeScheme`.
+Every public function accepts an optional ``scheme`` argument; when omitted,
+the process-wide active scheme is used, which defaults to the built-in
+example scheme (the original hard-coded grammar).
 """
 
 from __future__ import annotations
@@ -27,18 +34,19 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from app.services.family_code_schemes import (
+    FamilyCodeScheme,
+    builtin_example_scheme,
+    get_active_scheme,
+)
+
 
 # ── Root person registry ──────────────────────────────────────────────────────
 
-# The four root persons of the family (siblings). Each gets its own initial
-# letter rather than a T-sibling code, per the specification. Names use the
-# same short/given form as the examples (Cikky, not Pósa Anna Mária).
-DEFAULT_ROOT_NAMES: dict[str, str] = {
-    "C": "Cikky",
-    "G": "Gábor",
-    "J": "Jerne",
-    "I": "Ildi",
-}
+# Root letters/names of the built-in example scheme, kept as a module constant
+# for backwards compatibility. The authoritative roots come from the active
+# scheme (app/services/family_code_schemes.py).
+DEFAULT_ROOT_NAMES: dict[str, str] = builtin_example_scheme().root_names()
 
 # ── Regex ─────────────────────────────────────────────────────────────────────
 
@@ -51,18 +59,72 @@ _EXTERNAL_RE = re.compile(r"^#([^#]+)#(.*)$")
 # Internal code: a single root letter, then the path + optional suffix.
 _INTERNAL_RE = re.compile(r"^([A-Z])(.*)$")
 
-# Trailing suffix marker (anchored at the end of the path string).
-#   F[12]+        ancestors (1=father, 2=mother per step)
-#   T[1-9]...     siblings / collateral relatives
-#   H[1-9]...     numbered spouse (+ optional brought-child path)
-#   B             friend / acquaintance
-_SUFFIX_RE = re.compile(r"(F[12]+|T[1-9][0-9]*|H[1-9][0-9]*|B)$")
-
 # A base-path token: a single digit, or a {n} brace annotating the next child.
 _BASE_TOKEN_RE = re.compile(r"\{([1-9][0-9]*)\}|([0-9])")
 
-# Range notation: ROOT[start-end]B  e.g. C[1-9]B or C[81-82]B
-_RANGE_RE = re.compile(r"^([A-Z])\[([0-9]+)-([0-9]+)\]B$")
+
+# ── Scheme-dependent patterns ─────────────────────────────────────────────────
+
+# The trailing suffix marker and the range notation depend on the scheme's
+# marker letters, so they are compiled per marker-letter combination:
+#   <ancestor>[12]+      ancestors (1=father, 2=mother per step)
+#   <sibling>[1-9]...    siblings / collateral relatives
+#   <spouse>[1-9]...     numbered spouse (+ optional brought-child path)
+#   <friend>             friend / acquaintance
+#   ROOT[start-end]<friend>   range notation, e.g. C[1-9]B
+
+@dataclass(frozen=True)
+class _CompiledScheme:
+    suffix_re: Optional[re.Pattern]
+    range_re: Optional[re.Pattern]
+    # Marker letter → "ancestor" | "sibling" | "spouse" | "friend"
+    letter_to_kind: dict
+
+
+_COMPILE_CACHE: dict[tuple[str, str, str, str], _CompiledScheme] = {}
+
+
+def _resolve_scheme(scheme: Optional[FamilyCodeScheme]) -> FamilyCodeScheme:
+    return scheme if scheme is not None else get_active_scheme()
+
+
+def _compiled(scheme: FamilyCodeScheme) -> _CompiledScheme:
+    key = (
+        scheme.ancestor_letter,
+        scheme.sibling_letter,
+        scheme.spouse_letter,
+        scheme.friend_letter,
+    )
+    cached = _COMPILE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    alts: list[str] = []
+    letter_to_kind: dict[str, str] = {}
+    if scheme.ancestor_letter:
+        alts.append(f"{re.escape(scheme.ancestor_letter)}[12]+")
+        letter_to_kind[scheme.ancestor_letter] = "ancestor"
+    if scheme.sibling_letter:
+        alts.append(f"{re.escape(scheme.sibling_letter)}[1-9][0-9]*")
+        letter_to_kind[scheme.sibling_letter] = "sibling"
+    if scheme.spouse_letter:
+        alts.append(f"{re.escape(scheme.spouse_letter)}[1-9][0-9]*")
+        letter_to_kind[scheme.spouse_letter] = "spouse"
+    if scheme.friend_letter:
+        alts.append(re.escape(scheme.friend_letter))
+        letter_to_kind[scheme.friend_letter] = "friend"
+    suffix_re = re.compile("(" + "|".join(alts) + ")$") if alts else None
+    range_re = (
+        re.compile(
+            rf"^([A-Z])\[([0-9]+)-([0-9]+)\]{re.escape(scheme.friend_letter)}$"
+        )
+        if scheme.friend_letter
+        else None
+    )
+    compiled = _CompiledScheme(
+        suffix_re=suffix_re, range_re=range_re, letter_to_kind=letter_to_kind
+    )
+    _COMPILE_CACHE[key] = compiled
+    return compiled
 
 
 # ── Hungarian ancestor terms (nominative, possessive) ────────────────────────
@@ -106,13 +168,19 @@ class ExtendedCodeInfo:
 
 # ── Low-level parsing ─────────────────────────────────────────────────────────
 
-def _parse_base_path(base: str) -> tuple[tuple[int, ...], tuple[Optional[int], ...]]:
+def _parse_base_path(
+    base: str,
+    *,
+    allow_braces: bool = True,
+    markers_display: str = "",
+) -> tuple[tuple[int, ...], tuple[Optional[int], ...]]:
     """Split a base path string into digits and parallel {n} spouse annotations.
 
-    ``base`` is the part between the root and any F/T/H/B suffix — only digits
+    ``base`` is the part between the root and any marker suffix — only digits
     and ``{n}`` braces.  A brace annotates the child digit that follows it
     (``G1{2}3`` → the ``3`` came from the 2nd spouse).  Raises ValueError for
-    malformed input (stray characters, a brace not followed by a child digit).
+    malformed input (stray characters, a brace not followed by a child digit,
+    or a brace when the scheme disabled them).
     """
     digits: list[int] = []
     spouse_nums: list[Optional[int]] = []
@@ -121,10 +189,22 @@ def _parse_base_path(base: str) -> tuple[tuple[int, ...], tuple[Optional[int], .
     while pos < len(base):
         m = _BASE_TOKEN_RE.match(base, pos)
         if not m:
+            ch = base[pos]
+            if ch.isalpha() and markers_display:
+                raise ValueError(
+                    f"Érvénytelen betű a számkódban: '{ch}' — jelölőbetű "
+                    f"({markers_display}) csak a kód végén állhat, és csak az "
+                    "aktív sémában engedélyezett betű használható."
+                )
             raise ValueError(
-                f"Érvénytelen karakter a számkódban: '{base[pos]}'"
+                f"Érvénytelen karakter a számkódban: '{ch}'"
             )
         if m.group(1) is not None:          # {n} brace
+            if not allow_braces:
+                raise ValueError(
+                    "A kapcsos zárójeles {n} jelölés nincs engedélyezve az "
+                    "aktív sémában."
+                )
             if pending is not None:
                 raise ValueError(
                     "Két kapcsos zárójel között gyermek-sorszámnak kell állnia."
@@ -197,20 +277,29 @@ def _detect_stepchild(path_digits: tuple[int, ...], external: bool = False) -> b
     return (n - 2) > 0
 
 
-def parse_extended_code(code: str) -> ExtendedCodeInfo:
+def parse_extended_code(
+    code: str, *, scheme: Optional[FamilyCodeScheme] = None
+) -> ExtendedCodeInfo:
     """Parse an extended family code into its components.
 
     Accepts internal codes (``C81B``) and external codes (``#Zoli#31``).
     Internal codes are upper-cased; for external codes the ``#...#`` root keeps
     its original case while the relationship path is upper-cased.  Raises
-    ValueError for malformed codes.
+    ValueError for malformed codes or notations the scheme disabled.
     """
+    s = _resolve_scheme(scheme)
+    compiled = _compiled(s)
+
     code = code.strip()
     if not code:
         raise ValueError("Üres kód nem fogadható el.")
 
     ext_m = _EXTERNAL_RE.fullmatch(code)
     if ext_m:
+        if not s.allow_external:
+            raise ValueError(
+                "A külső (#gyökér#) kódforma nincs engedélyezve az aktív sémában."
+            )
         external_root = ext_m.group(1).strip()
         if not external_root:
             raise ValueError("A külső gyökérelem (#...#) nem lehet üres.")
@@ -228,8 +317,14 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
         is_external = False
         external_root = None
         raw = code_u
+        if not s.allow_unlisted_roots and root_token not in s.root_letters():
+            allowed = ", ".join(sorted(s.root_letters())) or "—"
+            raise ValueError(
+                f"Ismeretlen gyökérbetű: '{root_token}'. Az aktív sémában "
+                f"engedélyezett gyökérbetűk: {allowed}."
+            )
 
-    suffix_m = _SUFFIX_RE.search(rest)
+    suffix_m = compiled.suffix_re.search(rest) if compiled.suffix_re else None
     if suffix_m:
         suffix_str = suffix_m.group(1)
         base = rest[: suffix_m.start()]
@@ -237,7 +332,11 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
         suffix_str = ""
         base = rest
 
-    path_digits, path_spouse_nums = _parse_base_path(base)
+    path_digits, path_spouse_nums = _parse_base_path(
+        base,
+        allow_braces=s.allow_braces,
+        markers_display=s.marker_display(),
+    )
 
     if not _path_is_valid(path_digits, external=is_external):
         raise ValueError(
@@ -250,8 +349,9 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
     # External codes attach the suffix directly to the implicit root person
     # (#Zoli#F1 = Zoli's father), so no leading path is required there.
     if suffix_str and not path_digits and not is_external:
+        markers = s.marker_display() or "F/T/H/B"
         raise ValueError(
-            f"Érvénytelen kód '{code}': a jelző (F/T/H/B) előtt meg kell adni "
+            f"Érvénytelen kód '{code}': a jelző ({markers}) előtt meg kell adni "
             "a személy számkódját (pl. C0F1, nem CF1)."
         )
 
@@ -260,17 +360,14 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
     sibling_path: tuple[int, ...] = ()
     spouse_path: tuple[int, ...] = ()
 
-    if suffix_str.startswith("F"):
-        suffix_type = "ancestor"
-        ancestor_path = tuple(int(c) for c in suffix_str[1:])
-    elif suffix_str.startswith("T"):
-        suffix_type = "sibling"
-        sibling_path = tuple(int(c) for c in suffix_str[1:])
-    elif suffix_str.startswith("H"):
-        suffix_type = "spouse"
-        spouse_path = tuple(int(c) for c in suffix_str[1:])
-    elif suffix_str == "B":
-        suffix_type = "friend"
+    if suffix_str:
+        suffix_type = compiled.letter_to_kind.get(suffix_str[0])
+        if suffix_type == "ancestor":
+            ancestor_path = tuple(int(c) for c in suffix_str[1:])
+        elif suffix_type == "sibling":
+            sibling_path = tuple(int(c) for c in suffix_str[1:])
+        elif suffix_type == "spouse":
+            spouse_path = tuple(int(c) for c in suffix_str[1:])
 
     return ExtendedCodeInfo(
         raw=raw,
@@ -287,13 +384,17 @@ def parse_extended_code(code: str) -> ExtendedCodeInfo:
     )
 
 
-def validate_extended_code(code: str) -> str:
+def validate_extended_code(
+    code: str, *, scheme: Optional[FamilyCodeScheme] = None
+) -> str:
     """Validate and return the canonical form of a *main* family code.
 
-    Accepts single codes, multi-codes and range notation.  External ``#root#``
-    codes are rejected here — they belong in the external family code field
-    (see :func:`validate_external_family_code`).  Raises ValueError if invalid.
+    Accepts single codes, multi-codes and range notation (where the scheme
+    allows them).  External ``#root#`` codes are rejected here — they belong
+    in the external family code field (see
+    :func:`validate_external_family_code`).  Raises ValueError if invalid.
     """
+    s = _resolve_scheme(scheme)
     code = code.strip()
     if not code:
         raise ValueError("Üres kód nem fogadható el.")
@@ -320,15 +421,20 @@ def validate_extended_code(code: str) -> str:
     parts = _split_multi(code)
     if not parts:
         raise ValueError("Üres kód nem fogadható el.")
+    if len(parts) > 1 and not s.allow_multi_codes:
+        raise ValueError(
+            "Több kód együtt (vesszővel/szóközzel elválasztva) nincs "
+            "engedélyezve az aktív sémában."
+        )
 
     canonical: list[str] = []
     for part in parts:
-        canonical.append(_validate_single_code(part))
+        canonical.append(_validate_single_code(part, s))
 
     return " ".join(canonical) if len(canonical) > 1 else canonical[0]
 
 
-def _validate_single_code(part: str) -> str:
+def _validate_single_code(part: str, scheme: FamilyCodeScheme) -> str:
     """Validate a single family code token and return its canonical form.
 
     Accepts either range notation ('C[81-86]B') or a plain extended code
@@ -347,14 +453,20 @@ def _validate_single_code(part: str) -> str:
 
     # Range notation?
     if "[" in part or "]" in part:
-        if not _RANGE_RE.fullmatch(part.upper()):
+        compiled = _compiled(scheme)
+        if not scheme.allow_ranges or compiled.range_re is None:
+            raise ValueError(
+                "A tartományjelölés (pl. C[1-9]B) nincs engedélyezve az aktív "
+                "sémában."
+            )
+        if not compiled.range_re.fullmatch(part.upper()):
             raise ValueError(f"Érvénytelen tartományjelölés: '{part}'")
-        expanded = expand_range_code(part)
+        expanded = expand_range_code(part, scheme=scheme)
         if not expanded:
             raise ValueError(f"Érvénytelen tartományjelölés: '{part}'")
         return part.upper()
 
-    info = parse_extended_code(part)   # raises on invalid
+    info = parse_extended_code(part, scheme=scheme)   # raises on invalid
     if info.is_external:
         raise ValueError(
             "A külső családi azonosító (#...#) nem a fő családi azonosító "
@@ -363,26 +475,58 @@ def _validate_single_code(part: str) -> str:
     return part.upper()
 
 
-def validate_external_family_code(code: Optional[str]) -> Optional[str]:
+def validate_external_family_code(
+    code: Optional[str], *, scheme: Optional[FamilyCodeScheme] = None
+) -> Optional[str]:
     """Validate and canonicalise an *external* family code (``#root#path``).
 
     Returns None for an empty value.  Requires the ``#root#`` form and rejects
-    plain internal codes.  Raises ValueError if invalid.
+    plain internal codes.  Raises ValueError if invalid or when the scheme
+    disabled external codes.
     """
     if code is None:
         return None
     code = code.strip()
     if not code:
         return None
+    s = _resolve_scheme(scheme)
+    if not s.allow_external:
+        raise ValueError(
+            "A külső (#gyökér#) családi azonosító nincs engedélyezve az aktív "
+            "sémában."
+        )
     if not code.startswith("#"):
         raise ValueError(
             "A külső családi azonosítónak #gyökér# alakkal kell kezdődnie "
             "(pl. #Zoli# vagy #Zoli#31)."
         )
-    info = parse_extended_code(code)
+    info = parse_extended_code(code, scheme=s)
     if not info.is_external:
         raise ValueError(f"Érvénytelen külső családi azonosító: '{code}'")
     return info.raw
+
+
+def code_is_relational_marker(
+    code: str, *, scheme: Optional[FamilyCodeScheme] = None
+) -> bool:
+    """True when *code* marks a shared relation rather than a unique identity.
+
+    Friend/acquaintance codes, range codes and their multi-code lists may be
+    assigned to several different people, so uniqueness must not be enforced
+    for them.  Invalid tokens simply count as non-relational.
+    """
+    s = _resolve_scheme(scheme)
+    compiled = _compiled(s)
+    for part in _split_multi(code):
+        if compiled.range_re is not None and compiled.range_re.fullmatch(part.upper()):
+            return True
+        try:
+            info = parse_extended_code(part, scheme=s)
+        except ValueError:
+            continue
+        if info.suffix_type == "friend":
+            return True
+    return False
 
 
 # ── Multi-code helpers ────────────────────────────────────────────────────────
@@ -393,12 +537,18 @@ def _split_multi(value: str) -> list[str]:
     return [p.strip() for p in normalized.split() if p.strip()]
 
 
-def expand_range_code(value: str) -> list[str]:
+def expand_range_code(
+    value: str, *, scheme: Optional[FamilyCodeScheme] = None
+) -> list[str]:
     """Expand 'C[1-9]B' → ['C1B', 'C2B', ..., 'C9B'].
 
     Returns an empty list when the range is invalid or backwards.
     """
-    m = _RANGE_RE.fullmatch(value.strip().upper())
+    s = _resolve_scheme(scheme)
+    compiled = _compiled(s)
+    if compiled.range_re is None:
+        return []
+    m = compiled.range_re.fullmatch(value.strip().upper())
     if not m:
         return []
     root = m.group(1)
@@ -408,7 +558,7 @@ def expand_range_code(value: str) -> list[str]:
         return []
     if start > end:
         return []
-    return [f"{root}{i}B" for i in range(start, end + 1)]
+    return [f"{root}{i}{s.friend_letter}" for i in range(start, end + 1)]
 
 
 # ── Hungarian article helper ──────────────────────────────────────────────────
@@ -559,34 +709,42 @@ def _spouse_desc(spouse_path: tuple[int, ...]) -> str:
 def describe_family_code(
     code: str,
     root_names: Optional[dict[str, str]] = None,
+    *,
+    scheme: Optional[FamilyCodeScheme] = None,
 ) -> str:
     """Return a human-readable Hungarian description for a family code.
 
     Handles single codes, multi-codes (comma/space separated), range notation
-    and external ``#root#`` codes.  Unknown internal root letters are shown
-    as-is; external roots use the ``#...#`` string itself as the person's name.
+    and external ``#root#`` codes.  Root names come from the scheme; the
+    ``root_names`` argument overrides them.  Unknown internal root letters are
+    shown as-is; external roots use the ``#...#`` string itself as the
+    person's name.
     """
-    names: dict[str, str] = {**DEFAULT_ROOT_NAMES, **(root_names or {})}
+    s = _resolve_scheme(scheme)
+    compiled = _compiled(s)
+    names: dict[str, str] = {**s.root_names(), **(root_names or {})}
     code = code.strip()
 
     # External code (single root path)
     if code.startswith("#"):
-        return _describe_single(code, names)
+        return _describe_single(code, names, s)
 
     # Range notation
-    if _RANGE_RE.fullmatch(code.upper()):
-        return _describe_range(code.upper(), names)
+    if compiled.range_re is not None and compiled.range_re.fullmatch(code.upper()):
+        return _describe_range(code.upper(), names, s)
 
     # Multi-code or single
     parts = _split_multi(code)
     if len(parts) > 1:
-        return _describe_multi(parts, names)
+        return _describe_multi(parts, names, s)
 
-    return _describe_single(parts[0], names)
+    return _describe_single(parts[0], names, s)
 
 
-def _describe_single(code: str, names: dict[str, str]) -> str:
-    info = parse_extended_code(code)
+def _describe_single(
+    code: str, names: dict[str, str], scheme: FamilyCodeScheme
+) -> str:
+    info = parse_extended_code(code, scheme=scheme)
     root_name = info.external_root if info.is_external else names.get(info.root, info.root)
     first_zero_is_root = not info.is_external
     base_segs = _path_segments(
@@ -615,11 +773,13 @@ def _describe_single(code: str, names: dict[str, str]) -> str:
     return _join_nominative(root_name, base_segs)
 
 
-def _describe_multi(parts: list[str], names: dict[str, str]) -> str:
+def _describe_multi(
+    parts: list[str], names: dict[str, str], scheme: FamilyCodeScheme
+) -> str:
     """'C81B, C82B' → 'X és Y közös barátja/ismerőse'."""
     base_descs: list[str] = []
     for part in parts:
-        info = parse_extended_code(part)
+        info = parse_extended_code(part, scheme=scheme)
         root_name = info.external_root if info.is_external else names.get(info.root, info.root)
         first_zero_is_root = not info.is_external
         base_segs = _path_segments(
@@ -634,12 +794,15 @@ def _describe_multi(parts: list[str], names: dict[str, str]) -> str:
     return f"{joined} és {base_descs[-1]} közös barátja/ismerőse"
 
 
-def _describe_range(raw: str, names: dict[str, str]) -> str:
+def _describe_range(
+    raw: str, names: dict[str, str], scheme: FamilyCodeScheme
+) -> str:
     """'C[1-9]B' → 'C1–C9 közös barátja/ismerőse'."""
-    m = _RANGE_RE.fullmatch(raw)
+    compiled = _compiled(scheme)
+    m = compiled.range_re.fullmatch(raw) if compiled.range_re else None
     if not m:
         raise ValueError(f"Érvénytelen tartományjelölés: '{raw}'")
     root, start, end = m.group(1), m.group(2), m.group(3)
     if start == end:
-        return _describe_single(f"{root}{start}B", names)
+        return _describe_single(f"{root}{start}{scheme.friend_letter}", names, scheme)
     return f"{root}{start}–{root}{end} közös barátja/ismerőse"

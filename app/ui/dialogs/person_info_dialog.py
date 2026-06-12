@@ -84,8 +84,11 @@ class PersonInfoDialog(QDialog):
         form.addRow(t("gender"), self._gender)
 
         self._family_code = QLineEdit(person.family_code or "")
-        self._family_code.setPlaceholderText(t("example_family_code"))
-        self._add_help_action(self._family_code, t("family_code_help"))
+        self._family_code_help_action = self._add_help_action(
+            self._family_code, self._family_code_help_text()
+        )
+        self._add_scheme_editor_action(self._family_code)
+        self._refresh_family_code_help()
         form.addRow(t("family_code"), self._family_code)
 
         self._external_family_code = QLineEdit(person.external_family_code or "")
@@ -186,51 +189,135 @@ class PersonInfoDialog(QDialog):
         self._load_groups()
         self._load_objects()
 
-    def _add_help_action(self, field: QLineEdit, help_text: str) -> None:
+    @staticmethod
+    def _help_tooltip_html(help_text: str) -> str:
+        """Render plain help text as a multi-line rich-text tooltip.
+
+        The <html> wrapper guarantees Qt treats the tooltip as rich text on
+        every platform.  Newline-separated texts keep their own lines; legacy
+        single-line texts are wrapped after each comma-separated example.
+        """
+        import html as _html
+
+        text = _html.escape(help_text)
+        if "\n" in text:
+            body = text.replace("\n", "<br>")
+        else:
+            body = text.replace(", ", ",<br>")
+        return f"<html>{body}</html>"
+
+    def _add_help_action(self, field: QLineEdit, help_text: str):
         """Attach a trailing ``?`` help icon inside *field*.
 
         The icon lives inside the line edit (so editing/clicking the field is
         never blocked by a wrapping container) and reveals the full *help_text*
         as a multi-line tooltip on hover. The detail is kept out of the layout,
-        so the dialog stays compact.
+        so the dialog stays compact.  Returns the created action so callers
+        can update the tooltip later.
         """
-        # The <html> wrapper guarantees Qt treats the tooltip as rich text on
-        # every platform; each example then sits on its own wrapped line.
-        tooltip_html = "<html>" + help_text.replace(", ", ",<br>") + "</html>"
+        tooltip_html = self._help_tooltip_html(help_text)
         field.setToolTip(tooltip_html)
 
         icon = self.style().standardIcon(QStyle.SP_TitleBarContextHelpButton)
         action = field.addAction(icon, QLineEdit.TrailingPosition)
         action.setToolTip(tooltip_html)
-        # Clicking the icon should reveal the same help, not just hovering it.
+        # Clicking the icon should reveal the field's current help, not just
+        # hovering it. The tooltip is read from the field at click time, so a
+        # scheme change updates the click-help too.
         action.triggered.connect(
-            lambda _=False, w=field, html=tooltip_html: QToolTip.showText(
-                QCursor.pos(), html, w
-            )
+            lambda _=False, w=field: QToolTip.showText(QCursor.pos(), w.toolTip(), w)
+        )
+        return action
+
+    def _add_scheme_editor_action(self, field: QLineEdit) -> None:
+        """Attach a trailing icon that opens the family code scheme editor."""
+        icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+        action = field.addAction(icon, QLineEdit.TrailingPosition)
+        action.setToolTip(t("family_code_open_scheme_editor"))
+        action.triggered.connect(self._open_scheme_editor)
+
+    def _open_scheme_editor(self) -> None:
+        from app.ui.dialogs.family_code_scheme_dialog import FamilyCodeSchemeDialog
+
+        dlg = FamilyCodeSchemeDialog(parent=self)
+        dlg.exec()
+        # The active scheme (and with it the examples) may have changed.
+        self._refresh_family_code_help()
+
+    def _family_code_help_text(self) -> str:
+        """Help text generated from the active scheme, so the examples always
+        use the letters the user actually configured."""
+        from app.services.family_code_schemes import (
+            get_active_scheme,
+            scheme_example_codes,
         )
 
-    def accept(self) -> None:
-        try:
-            with session_scope() as session:
-                canonical = FamilyService(session).ensure_unique_family_code(
-                    self.family_code(),
-                    current_person_id=self._person_id,
-                )
-        except ValueError as exc:
-            QMessageBox.warning(self, t("family_code_invalid_title"), str(exc))
-            return
-        self._family_code.setText(canonical or "")
+        scheme = get_active_scheme()
+        lines = [t("family_code_help_scheme", name=scheme.name)]
+        lines += [f"{code} = {desc}" for code, desc in scheme_example_codes(scheme)]
+        lines.append(t("family_code_help_editor_hint"))
+        return "\n".join(lines)
 
+    def _refresh_family_code_help(self) -> None:
+        from app.services.family_code_schemes import (
+            get_active_scheme,
+            scheme_example_codes,
+        )
+
+        tooltip_html = self._help_tooltip_html(self._family_code_help_text())
+        self._family_code.setToolTip(tooltip_html)
+        self._family_code_help_action.setToolTip(tooltip_html)
+        examples = scheme_example_codes(get_active_scheme())
+        sample = examples[1][0] if len(examples) > 1 else "C85"
+        self._family_code.setPlaceholderText(t("placeholder_example", code=sample))
+
+    def _confirm_code_field(self, field: QLineEdit, validator, title: str) -> bool:
+        """Validate one code field; let the user save even when it fails.
+
+        Valid values are canonicalised in place.  Invalid values (format
+        problems or duplicate identity codes) show a warning that explains the
+        problem, and the user chooses between saving the raw text as typed or
+        returning to the editor.
+        """
+        raw = field.text().strip()
         try:
             with session_scope() as session:
-                external_canonical = FamilyService(session).ensure_unique_external_family_code(
-                    self.external_family_code(),
-                    current_person_id=self._person_id,
-                )
+                canonical = validator(FamilyService(session), raw)
         except ValueError as exc:
-            QMessageBox.warning(self, t("external_family_code_invalid_title"), str(exc))
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(title)
+            box.setText(t("code_save_anyway_msg", error=str(exc)))
+            save_btn = box.addButton(t("code_save_anyway_btn"), QMessageBox.AcceptRole)
+            box.addButton(t("code_back_to_edit_btn"), QMessageBox.RejectRole)
+            box.setDefaultButton(save_btn)
+            box.exec()
+            if box.clickedButton() is not save_btn:
+                return False
+            field.setText(raw)
+            return True
+        field.setText(canonical or "")
+        return True
+
+    def accept(self) -> None:
+        ok = self._confirm_code_field(
+            self._family_code,
+            lambda svc, value: svc.ensure_unique_family_code(
+                value, current_person_id=self._person_id
+            ),
+            t("family_code_invalid_title"),
+        )
+        if not ok:
             return
-        self._external_family_code.setText(external_canonical or "")
+        ok = self._confirm_code_field(
+            self._external_family_code,
+            lambda svc, value: svc.ensure_unique_external_family_code(
+                value, current_person_id=self._person_id
+            ),
+            t("external_family_code_invalid_title"),
+        )
+        if not ok:
+            return
 
         # Save group memberships (skipped for protected persons)
         if not self._is_protected:

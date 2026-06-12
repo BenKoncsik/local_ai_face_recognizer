@@ -547,27 +547,18 @@ def _migrate_add_indexes(engine: Engine) -> None:
     """Create indexes used by person/image and family queries."""
     statements = [
         "CREATE INDEX IF NOT EXISTS ix_persons_gender ON persons(gender)",
-        # Friend/acquaintance codes (containing "B") are relational markers, not
-        # unique identities, so they are excluded from the uniqueness rule.
-        # Older databases may have an unconditional unique index on family_code
-        # (from the column-level unique=True) or a NOT NULL-only partial index;
-        # drop both and recreate them with the friend-aware definitions.
+        # Family code validation/uniqueness is soft since the user-editable
+        # scheme feature: the editor dialog warns about format problems and
+        # duplicate identity codes (FamilyService.ensure_unique_family_code),
+        # but the user may explicitly save anyway, so the DB must not enforce
+        # uniqueness. Older databases had an unconditional unique index on
+        # family_code (from the column-level unique=True) or a partial ux_
+        # index; drop them all and keep plain lookup indexes only.
         "DROP INDEX IF EXISTS ix_persons_family_code",
-        "CREATE INDEX IF NOT EXISTS ix_persons_family_code ON persons(family_code)",
         "DROP INDEX IF EXISTS ux_persons_family_code",
-        (
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_family_code "
-            "ON persons(family_code) "
-            "WHERE family_code IS NOT NULL AND family_code NOT LIKE '%B%'"
-        ),
-        # External family identifiers are unique identities (each #root#path is
-        # one external person), so enforce uniqueness where present.
+        "CREATE INDEX IF NOT EXISTS ix_persons_family_code ON persons(family_code)",
+        "DROP INDEX IF EXISTS ux_persons_external_family_code",
         "CREATE INDEX IF NOT EXISTS ix_persons_external_family_code ON persons(external_family_code)",
-        (
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_persons_external_family_code "
-            "ON persons(external_family_code) "
-            "WHERE external_family_code IS NOT NULL"
-        ),
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",
         (

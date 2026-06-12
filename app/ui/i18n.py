@@ -313,6 +313,267 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Invalid external family code",
         "hu": "Hibás külső családi azonosító",
     },
+    "placeholder_example": {"en": "e.g. {code}", "hu": "pl. {code}"},
+    "code_save_anyway_msg": {
+        "en": "There is a problem with this code:\n\n{error}\n\n"
+              "You can still save it exactly as typed.",
+        "hu": "A megadott kóddal probléma van:\n\n{error}\n\n"
+              "Ettől függetlenül elmentheted pontosan úgy, ahogy beírtad.",
+    },
+    "code_save_anyway_btn": {"en": "Save anyway", "hu": "Mentés így is"},
+    "code_back_to_edit_btn": {
+        "en": "Back to editing",
+        "hu": "Vissza a szerkesztéshez",
+    },
+    "family_code_open_scheme_editor": {
+        "en": "Edit family code schemes…",
+        "hu": "Családi kód sémák szerkesztése…",
+    },
+    "family_code_help_scheme": {
+        "en": "Active scheme: {name}",
+        "hu": "Aktív séma: {name}",
+    },
+    "family_code_help_editor_hint": {
+        "en": "Any code can be saved — one that does not match the scheme only "
+              "shows a warning. Use the scheme editor (list icon) to customise "
+              "the coding system.",
+        "hu": "Bármilyen kód elmenthető — a sémának nem megfelelő kód csak "
+              "figyelmeztetést ad. A sémaszerkesztőben (lista ikon) "
+              "testreszabhatod a kódrendszert.",
+    },
+
+    # ── Family code scheme editor ───────────────────────────────────────────
+    "fcs_title": {"en": "Family code schemes", "hu": "Családi kód sémák"},
+    "fcs_intro": {
+        "en": "A scheme describes how your family codes are built: which letters "
+              "start a code (the family roots), which letters mark special "
+              "relationships, and which extra notations are allowed. Create your "
+              "own scheme, activate it, and share it via export/import — no "
+              "programming needed.",
+        "hu": "A séma azt írja le, hogyan épülnek fel a családi kódok: melyik "
+              "betűkkel kezdődhet a kód (a család gyökerei), melyik betűk jelölik "
+              "a különleges kapcsolatokat, és milyen extra jelölések megengedettek. "
+              "Készítsd el a saját sémádat, aktiváld, és exporttal/importtal meg is "
+              "oszthatod — programozói tudás nem kell hozzá.",
+    },
+    "fcs_list_label": {"en": "Schemes", "hu": "Sémák"},
+    "fcs_active_suffix": {"en": "active", "hu": "aktív"},
+    "fcs_builtin_suffix": {"en": "built-in", "hu": "beépített"},
+    "fcs_btn_new": {"en": "New", "hu": "Új"},
+    "fcs_btn_duplicate": {"en": "Duplicate", "hu": "Másolat"},
+    "fcs_btn_delete": {"en": "Delete", "hu": "Törlés"},
+    "fcs_btn_activate": {"en": "Set active", "hu": "Aktiválás"},
+    "fcs_btn_import": {"en": "Import…", "hu": "Importálás…"},
+    "fcs_btn_export": {"en": "Export…", "hu": "Exportálás…"},
+    "fcs_btn_save": {"en": "Save scheme", "hu": "Séma mentése"},
+    "fcs_saved_status": {"en": "Scheme saved.", "hu": "Séma elmentve."},
+    "fcs_builtin_note": {
+        "en": "This is the built-in example scheme — it cannot be edited or "
+              "deleted. Click 'Duplicate' to create an editable copy for your "
+              "own family.",
+        "hu": "Ez a beépített példa séma — nem szerkeszthető és nem törölhető. "
+              "A 'Másolat' gombbal készíthetsz belőle szerkeszthető változatot a "
+              "saját családodra.",
+    },
+    "fcs_name_label": {"en": "Scheme name:", "hu": "Séma neve:"},
+    "fcs_desc_label": {"en": "Description:", "hu": "Leírás:"},
+    "fcs_desc_placeholder": {
+        "en": "Free-form notes about this coding system (who is who, where it "
+              "came from, …)",
+        "hu": "Szabad jegyzet erről a kódrendszerről (ki kicsoda, honnan ered, …)",
+    },
+    "fcs_roots_group": {
+        "en": "Root persons — the first letter of every code",
+        "hu": "Gyökérszemélyek — minden kód első betűje",
+    },
+    "fcs_roots_hint": {
+        "en": "Every code starts with one of these letters; the letter stands "
+              "for the person the family tree is counted from. Example: C = "
+              "Cikky, so C85 means Cikky's 8th child's 5th child.",
+        "hu": "Minden kód ezen betűk egyikével kezdődik; a betű azt a személyt "
+              "jelöli, akitől a családfát számoljuk. Példa: C = Cikky, így a C85 "
+              "Cikky 8. gyermekének 5. gyermekét jelenti.",
+    },
+    "fcs_root_col_letter": {"en": "Letter", "hu": "Betű"},
+    "fcs_root_col_name": {"en": "Name", "hu": "Név"},
+    "fcs_root_col_note": {"en": "Note", "hu": "Megjegyzés"},
+    "fcs_btn_add_root": {"en": "Add root", "hu": "Gyökér hozzáadása"},
+    "fcs_btn_remove_root": {"en": "Remove selected", "hu": "Kijelölt törlése"},
+    "fcs_markers_group": {
+        "en": "Marker letters — special relationships at the end of the code",
+        "hu": "Jelölőbetűk — különleges kapcsolatok a kód végén",
+    },
+    "fcs_markers_hint": {
+        "en": "Each marker is a single letter written after the person's number "
+              "code. Untick a marker to disable it, or change its letter to "
+              "match your own system.",
+        "hu": "Mindegyik jelölő egyetlen betű, amely a személy számkódja után áll. "
+              "A pipa kivételével kikapcsolhatod, a betű átírásával pedig a saját "
+              "rendszeredhez igazíthatod.",
+    },
+    "fcs_marker_ancestor": {"en": "Ancestors", "hu": "Ősök (felmenők)"},
+    "fcs_marker_sibling": {"en": "Siblings", "hu": "Testvérek"},
+    "fcs_marker_spouse": {
+        "en": "Numbered spouses",
+        "hu": "Sorszámozott házastársak",
+    },
+    "fcs_marker_friend": {
+        "en": "Friends / acquaintances",
+        "hu": "Barátok / ismerősök",
+    },
+    "fcs_marker_ancestor_hint": {
+        "en": "After the marker: 1 = father, 2 = mother; steps can be chained "
+              "(12 = father's mother).",
+        "hu": "A jelölő után: 1 = apa, 2 = anya; a lépések láncolhatók "
+              "(12 = apai nagymama).",
+    },
+    "fcs_marker_sibling_hint": {
+        "en": "The number selects which sibling; the code may continue with "
+              "children or a spouse.",
+        "hu": "A szám azt mondja meg, hányadik testvér; a kód folytatódhat "
+              "gyermekekkel vagy házastárssal.",
+    },
+    "fcs_marker_spouse_hint": {
+        "en": "Marks a 2nd/3rd/… marriage; digits after it may describe brought "
+              "children.",
+        "hu": "Második/harmadik/… házasság jelölése; az utána álló számok hozott "
+              "gyermekeket írhatnak le.",
+    },
+    "fcs_marker_friend_hint": {
+        "en": "A friend of the given person. Several people may share the same "
+              "friend code, so it is never forced to be unique.",
+        "hu": "Az adott személy barátja/ismerőse. Ugyanazt a barát-kódot több "
+              "személy is kaphatja, ezért sosem kell egyedinek lennie.",
+    },
+    "fcs_options_group": {"en": "Extra notations", "hu": "További jelölések"},
+    "fcs_opt_unlisted_roots": {
+        "en": "Accept root letters that are not in the list above",
+        "hu": "A fenti listában nem szereplő gyökérbetűk elfogadása",
+    },
+    "fcs_opt_multi": {
+        "en": "Several codes separated by commas — shared friend (C81B,C82B)",
+        "hu": "Több kód vesszővel elválasztva — közös barát (C81B,C82B)",
+    },
+    "fcs_opt_ranges": {
+        "en": "Range notation — friend of a whole range (C[1-9]B)",
+        "hu": "Tartományjelölés — egy egész tartomány barátja (C[1-9]B)",
+    },
+    "fcs_opt_braces": {
+        "en": "Braces naming the other parent (G1{2}3 = G1's 3rd child from "
+              "the 2nd spouse)",
+        "hu": "Kapcsos zárójel a másik szülő megadására (G1{2}3 = G1 3. "
+              "gyermeke a 2. házastárstól)",
+    },
+    "fcs_opt_external": {
+        "en": "External family codes (#Zoli#31 = the 1st child of Zoli's 3rd "
+              "child)",
+        "hu": "Külső családi azonosítók (#Zoli#31 = Zoli 3. gyermekének 1. "
+              "gyermeke)",
+    },
+    "fcs_guide_btn": {
+        "en": "How does a code work? (step-by-step guide)",
+        "hu": "Hogyan épül fel egy kód? (lépésről lépésre)",
+    },
+    "fcs_guide_digits": {
+        "en": "<b>1. First letter</b> — the root person of the family tree "
+              "(e.g. {root} = {rootname}).<br>"
+              "<b>2. Digits</b> — the descent, step by step:<br>"
+              "&nbsp;&nbsp;• {root}0 = the root person, {root}00 = their "
+              "spouse<br>"
+              "&nbsp;&nbsp;• 1–9 = which child: {root}8 = the 8th child, "
+              "{root}85 = the 8th child's 5th child<br>"
+              "&nbsp;&nbsp;• 0 at the end = that person's spouse: {root}80<br>"
+              "&nbsp;&nbsp;• a digit after a 0 = the spouse's child from an "
+              "earlier relationship: {root}805",
+        "hu": "<b>1. Kezdőbetű</b> — a családfa gyökérszemélye "
+              "(pl. {root} = {rootname}).<br>"
+              "<b>2. Számjegyek</b> — a leszármazás lépésről lépésre:<br>"
+              "&nbsp;&nbsp;• {root}0 = maga a gyökérszemély, {root}00 = a "
+              "házastársa<br>"
+              "&nbsp;&nbsp;• 1–9 = hányadik gyermek: {root}8 = a 8. gyermek, "
+              "{root}85 = a 8. gyermek 5. gyermeke<br>"
+              "&nbsp;&nbsp;• 0 a kód végén = az adott személy házastársa: "
+              "{root}80<br>"
+              "&nbsp;&nbsp;• 0 után újabb szám = a házastárs korábbi "
+              "kapcsolatból hozott gyermeke: {root}805",
+    },
+    "fcs_guide_markers_title": {
+        "en": "<b>3. Marker letter at the end</b> (when enabled):",
+        "hu": "<b>3. Jelölőbetű a kód végén</b> (ha engedélyezett):",
+    },
+    "fcs_guide_marker_anc": {
+        "en": "&nbsp;&nbsp;• {letter} = ancestors: 1 = father, 2 = mother, "
+              "chainable — {example}",
+        "hu": "&nbsp;&nbsp;• {letter} = felmenők: 1 = apa, 2 = anya, "
+              "láncolható — {example}",
+    },
+    "fcs_guide_marker_sib": {
+        "en": "&nbsp;&nbsp;• {letter} = sibling — {example}",
+        "hu": "&nbsp;&nbsp;• {letter} = testvér — {example}",
+    },
+    "fcs_guide_marker_spo": {
+        "en": "&nbsp;&nbsp;• {letter} = numbered spouse — {example}",
+        "hu": "&nbsp;&nbsp;• {letter} = többedik házastárs — {example}",
+    },
+    "fcs_guide_marker_fri": {
+        "en": "&nbsp;&nbsp;• {letter} = friend/acquaintance — {example}",
+        "hu": "&nbsp;&nbsp;• {letter} = barát/ismerős — {example}",
+    },
+    "fcs_guide_extras_title": {
+        "en": "<b>4. Extra notations</b> (when enabled):",
+        "hu": "<b>4. Extra jelölések</b> (ha engedélyezettek):",
+    },
+    "fcs_tester_group": {"en": "Try it out", "hu": "Kipróbálás"},
+    "fcs_tester_hint": {
+        "en": "Type a code and see immediately what it means under this scheme:",
+        "hu": "Írj be egy kódot, és azonnal látod, mit jelent ebben a sémában:",
+    },
+    "fcs_tester_empty": {
+        "en": "Type a code above to test it.",
+        "hu": "Írj be egy kódot fent a kipróbáláshoz.",
+    },
+    "fcs_tester_ok": {"en": "✓ Valid: {desc}", "hu": "✓ Érvényes: {desc}"},
+    "fcs_tester_bad": {"en": "✗ {error}", "hu": "✗ {error}"},
+    "fcs_examples_label": {
+        "en": "Examples with the current letters:",
+        "hu": "Példák a jelenlegi betűkkel:",
+    },
+    "fcs_unsaved_title": {"en": "Unsaved changes", "hu": "Nem mentett módosítások"},
+    "fcs_unsaved_msg": {
+        "en": "Discard the changes made to scheme '{name}'?",
+        "hu": "Elveted a(z) '{name}' sémán végzett módosításokat?",
+    },
+    "fcs_discard_btn": {"en": "Discard changes", "hu": "Módosítások elvetése"},
+    "fcs_keep_btn": {"en": "Keep editing", "hu": "Szerkesztés folytatása"},
+    "fcs_delete_title": {"en": "Delete scheme", "hu": "Séma törlése"},
+    "fcs_delete_msg": {
+        "en": "Delete scheme '{name}'? This cannot be undone.",
+        "hu": "Törlöd a(z) '{name}' sémát? Ez nem vonható vissza.",
+    },
+    "fcs_problems_title": {
+        "en": "The scheme cannot be saved yet",
+        "hu": "A séma még nem menthető",
+    },
+    "fcs_problems_msg": {
+        "en": "Please fix the following:\n\n{problems}",
+        "hu": "Kérlek, javítsd a következőket:\n\n{problems}",
+    },
+    "fcs_import_title": {"en": "Import scheme", "hu": "Séma importálása"},
+    "fcs_export_title": {"en": "Export scheme", "hu": "Séma exportálása"},
+    "fcs_file_filter": {
+        "en": "Family code scheme (*.json)",
+        "hu": "Családi kód séma (*.json)",
+    },
+    "fcs_import_error_title": {"en": "Import failed", "hu": "Sikertelen importálás"},
+    "fcs_export_done_msg": {
+        "en": "Scheme exported to:\n{path}",
+        "hu": "A séma exportálva ide:\n{path}",
+    },
+    "fcs_new_scheme_name": {"en": "My family", "hu": "Saját családom"},
+    "persons_schemes_btn": {
+        "en": "Family code schemes…",
+        "hu": "Családi kód sémák…",
+    },
 
     # ── Family search ───────────────────────────────────────────────────────
     "family_person_a":    {"en": "First person", "hu": "Első személy"},

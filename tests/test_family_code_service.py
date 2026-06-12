@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from app.db.database import init_db, session_scope
 from app.db.models import Person
@@ -100,11 +99,16 @@ def test_extended_codes_have_no_simple_tree_derivation():
     assert parse_family_code("C85") is not None
 
 
-def test_duplicate_family_code_is_rejected(db):
-    with pytest.raises(IntegrityError):
-        with session_scope() as session:
-            session.add(Person(name="Anna", is_auto_named=False, family_code="C8"))
-            session.add(Person(name="Bela", is_auto_named=False, family_code="C8"))
+def test_duplicate_family_code_is_allowed_at_db_level(db):
+    # Since the save-anyway feature the DB no longer enforces uniqueness: the
+    # edit dialog warns (via ensure_unique_family_code) but the user decides.
+    with session_scope() as session:
+        session.add(Person(name="Anna", is_auto_named=False, family_code="C8"))
+        session.add(Person(name="Bela", is_auto_named=False, family_code="C8"))
+
+    with session_scope() as session:
+        codes = [p.family_code for p in session.query(Person).all()]
+        assert codes.count("C8") == 2
 
 
 def test_service_reports_duplicate_family_code(db):
@@ -137,13 +141,16 @@ def test_friend_codes_can_be_duplicated_at_db_level(db):
         session.add(Person(name="Shared2", is_auto_named=False, family_code="C[81-86]B"))
 
 
-def test_identity_codes_are_unique_at_db_level(db):
-    from sqlalchemy.exc import IntegrityError
+def test_identity_codes_not_unique_at_db_level_but_service_warns(db):
+    # The DB accepts the duplicate (the user may have chosen "save anyway")…
+    with session_scope() as session:
+        session.add(Person(name="A", is_auto_named=False, family_code="C81"))
+        session.add(Person(name="B", is_auto_named=False, family_code="C81"))
 
-    with pytest.raises(IntegrityError):
-        with session_scope() as session:
-            session.add(Person(name="A", is_auto_named=False, family_code="C81"))
-            session.add(Person(name="B", is_auto_named=False, family_code="C81"))
+    # …while the service still reports it, so the dialog can warn first.
+    with session_scope() as session:
+        with pytest.raises(ValueError):
+            FamilyService(session).ensure_unique_family_code("C81")
 
 
 def test_migration_converts_legacy_unconditional_unique_index(tmp_path):

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image, Person, Place, Relationship
 from app.services.family_code_interpreter import (
+    code_is_relational_marker,
     parse_extended_code,
     validate_extended_code,
     validate_external_family_code,
@@ -245,10 +246,11 @@ class FamilyService:
         code = validate_family_code(family_code)
         if code is None:
             return None
-        # Friend/acquaintance codes (B) are relational markers, not unique
+        # Friend/acquaintance codes are relational markers, not unique
         # identities — several different external people may share e.g. "C81B".
-        # Only the actual family identity codes are enforced as unique.
-        if "B" in code:
+        # Only the actual family identity codes are enforced as unique. The
+        # friend marker letter comes from the active scheme.
+        if code_is_relational_marker(code):
             return code
         q = self._session.query(Person).filter(Person.family_code == code)
         if current_person_id is not None:
@@ -256,7 +258,8 @@ class FamilyService:
         existing = q.first()
         if existing is not None:
             raise ValueError(
-                f"Family code {code} is already assigned to {existing.name}."
+                f"A(z) {code} családi azonosító már hozzá van rendelve egy "
+                f"másik személyhez: {existing.name}."
             )
         return code
 
@@ -281,7 +284,8 @@ class FamilyService:
         existing = q.first()
         if existing is not None:
             raise ValueError(
-                f"External family code {code} is already assigned to {existing.name}."
+                f"A(z) {code} külső családi azonosító már hozzá van rendelve "
+                f"egy másik személyhez: {existing.name}."
             )
         return code
 

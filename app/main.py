@@ -115,6 +115,14 @@ def main() -> None:
     from app.app_settings import migrate_legacy_settings
     migrate_legacy_settings()
 
+    # Family code scheme — make the persisted active scheme the runtime default
+    from app.services.family_code_schemes import FamilyCodeSchemeStore
+    try:
+        active = FamilyCodeSchemeStore().load_active_into_runtime()
+        log.info("Active family code scheme: %s", active.name)
+    except Exception:
+        log.exception("Could not load the active family code scheme")
+
     from app.ui.main_window import MainWindow
 
     window = MainWindow(config=config)
