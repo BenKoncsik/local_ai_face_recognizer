@@ -107,8 +107,7 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self._config = config
-        self._worker: Optional[PipelineWorker] = None
-        # The scan / AI pipeline now runs as a Task Manager task; these hold the
+        # The scan / AI pipeline runs as a Task Manager task; these hold the
         # live task handle and its worker (kept alive while it runs).
         self._active_pipeline_task = None
         self._active_pipeline_worker = None
@@ -956,7 +955,6 @@ class MainWindow(QMainWindow):
             worker = PipelineWorker(
                 root_folder="",          # unused in Drive mode
                 config=self._config,
-                parent=self,
                 high_accuracy=high_accuracy,
                 db_path_override=self._db_path,
                 drive_client=self._gdrive_session._client,
@@ -967,7 +965,6 @@ class MainWindow(QMainWindow):
             worker = PipelineWorker(
                 root_folder=self._root_folder,
                 config=self._config,
-                parent=self,
                 high_accuracy=high_accuracy,
                 db_path_override=self._db_path,
             )
@@ -1068,7 +1065,6 @@ class MainWindow(QMainWindow):
                 root_folder="",          # unused in Drive mode
                 config=self._config,
                 mode=mode,
-                parent=self,
                 db_path_override=self._db_path,
                 drive_client=self._gdrive_session._client,
                 drive_root_folder_id=root_id,
@@ -1081,7 +1077,6 @@ class MainWindow(QMainWindow):
                 root_folder=self._root_folder,
                 config=self._config,
                 mode=mode,
-                parent=self,
                 db_path_override=self._db_path,
                 ai_visualization=ai_viz,
                 ai_debug_log=ai_log,
@@ -2417,20 +2412,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Pipeline slots
     # ------------------------------------------------------------------
-
-    @Slot(int, int, str, str)
-    def _on_progress(self, current: int, total: int, stage: str, detail: str) -> None:
-        if total > 0:
-            self._progress_bar.setValue(int(current / total * 100))
-        self._status_label.setText(f"{stage}: {detail}")
-
-    @Slot(int)
-    def _on_suggestions_ready(self, count: int) -> None:
-        self._pending_suggestion_count = count
-
-    @Slot(int)
-    def _on_auto_assignments_ready(self, count: int) -> None:
-        self._pending_auto_assignment_count = count
 
     @Slot(bool, str)
     def _on_pipeline_finished(self, success: bool, summary: str) -> None:

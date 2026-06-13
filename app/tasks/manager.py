@@ -283,7 +283,13 @@ class TaskManager(QObject):
     #: Completed/failed/cancelled tasks kept for the Task Manager history.
     HISTORY_LIMIT = 50
 
-    def __init__(self, max_concurrent: int = 2) -> None:
+    def __init__(self, max_concurrent: int = 1) -> None:
+        # One heavy task at a time by default: the highest-priority task gets the
+        # machine to itself, and a higher-priority arrival preempts a running
+        # lower-priority one (which resumes automatically afterwards).  This
+        # matches the product rule "AI recognition outranks export" and avoids
+        # thrashing the CPU with two heavy ML/image jobs at once — intra-task
+        # parallelism (e.g. the export thread pool) provides throughput instead.
         super().__init__()
         self.max_concurrent = max_concurrent
         self._queue: List[BackgroundTask] = []
@@ -414,14 +420,19 @@ class TaskManager(QObject):
         while progressed:
             progressed = False
 
-            # (1) Preemption: free a slot for a higher-priority queued task.
-            if self._queue and len(self._running) >= self.max_concurrent:
-                top = self._top_queued()
-                victim = self._preemption_victim(top.priority)
-                if victim is not None:
-                    self._auto_pause(victim)
-                    progressed = True
-                    continue
+            # (1) Preemption: free a slot for a higher-priority *waiter* — either
+            # a queued task or a resume-eligible paused one (e.g. the user just
+            # resumed a HIGH task that should reclaim the slot from a running
+            # lower-priority task).  Each preemption replaces a running task with
+            # a strictly higher-priority one, so this always terminates.
+            if len(self._running) >= self.max_concurrent:
+                waiter = self._highest_waiting_priority()
+                if waiter is not None:
+                    victim = self._preemption_victim(waiter)
+                    if victim is not None:
+                        self._auto_pause(victim)
+                        progressed = True
+                        continue
 
             # (2) Resume an eligible paused task into a free slot.
             if len(self._running) < self.max_concurrent:
@@ -455,6 +466,15 @@ class TaskManager(QObject):
     def _top_queued(self) -> BackgroundTask:
         """Highest-priority queued task (FIFO within a priority level)."""
         return max(self._queue, key=lambda t: (t.priority.value, -t.id))
+
+    def _highest_waiting_priority(self) -> Optional[TaskPriority]:
+        """Top priority among tasks wanting a slot (queued + resume-eligible)."""
+        waiting = list(self._queue) + [
+            t for t in self._paused if t._resume_eligible
+        ]
+        if not waiting:
+            return None
+        return max(t.priority for t in waiting)
 
     def _pop_top_queued(self) -> BackgroundTask:
         task = self._top_queued()

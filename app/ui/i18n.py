@@ -3244,6 +3244,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "task_metadata_export": {"en": "Face metadata embed",     "hu": "Arc-metaadatok beágyazása"},
     "task_thumbnail_build": {"en": "Thumbnail generation",    "hu": "Bélyegképek készítése"},
     "task_rerecognition":   {"en": "Re-recognition",          "hu": "Újra-felismerés"},
+    "task_metadata_table":  {"en": "Metadata table export",   "hu": "Metaadat-tábla export"},
 }
 
 

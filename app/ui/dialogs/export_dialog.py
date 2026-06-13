@@ -528,19 +528,24 @@ class ExportDialog(QDialog):
 
         person_mode = PERSON_MODE_COLS if self._meta_persons_cols.isChecked() else PERSON_MODE_LIST
 
-        try:
+        # Building the table can be slow on a large library, so run it as a
+        # low-priority background task instead of blocking the UI thread.
+        def work(ctx):  # noqa: ANN001 — runs on the task thread
             with session_scope() as session:
                 svc = ImageMetadataExportService(session)
                 if use_xlsx:
-                    out = svc.export_xlsx(path, fields, person_mode)
-                else:
-                    out = svc.export_csv(path, fields, person_mode)
-        except ImportError as exc:
-            QMessageBox.critical(self, t("export_error"), str(exc))
-            return
+                    return svc.export_xlsx(path, fields, person_mode)
+                return svc.export_csv(path, fields, person_mode)
 
-        QMessageBox.information(
-            self, t("export_metadata_done"), t("export_metadata_saved", path=out)
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_metadata_table"),
+            work,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self, t("export_metadata_done"), t("export_metadata_saved", path=out)
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, t("export_error"), msg),
         )
 
     def _selected_fields(self) -> Set[str]:

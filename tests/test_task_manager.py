@@ -123,6 +123,24 @@ def test_manual_pause_frees_slot_and_resume_waits(qapp):
     assert first.state is TaskState.RUNNING
 
 
+def test_resume_reclaims_slot_from_lower_priority(qapp):
+    """Resuming a paused HIGH task preempts a running lower-priority task."""
+    mgr = TaskManager(max_concurrent=1)
+    low = mgr.submit("export", _noop, supports_pause=True, priority=TaskPriority.LOW)
+    high = mgr.submit("scan", _noop, supports_pause=True, priority=TaskPriority.HIGH)
+    assert high.state is TaskState.RUNNING and low.is_preempted
+
+    # User pauses the scan → the preempted export resumes to fill the slot.
+    high.pause()
+    assert high.state is TaskState.PAUSED
+    assert low.state is TaskState.RUNNING
+
+    # User resumes the scan → it must reclaim the slot from the lower export.
+    high.resume()
+    assert high.state is TaskState.RUNNING
+    assert low.state is TaskState.PAUSED
+
+
 def test_set_priority_reorders_queue(qapp):
     """Raising a queued task's priority moves it ahead in the queue."""
     mgr = TaskManager(max_concurrent=1)
@@ -139,8 +157,8 @@ def test_set_priority_reorders_queue(qapp):
 def test_counts_and_active_count(qapp):
     """active_count reflects running + queued + paused."""
     mgr = TaskManager(max_concurrent=1)
-    running = mgr.submit("r", _noop, supports_pause=True, priority=TaskPriority.LOW)
-    queued = mgr.submit("q", _noop, priority=TaskPriority.LOW)
+    mgr.submit("r", _noop, supports_pause=True, priority=TaskPriority.LOW)
+    mgr.submit("q", _noop, priority=TaskPriority.LOW)
     assert mgr.running_count == 1
     assert mgr.queued_count == 1
     assert mgr.active_count == 2

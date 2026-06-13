@@ -2997,7 +2997,6 @@ class ImageBrowserPanel(QWidget):
             auto_threshold=auto_thr,
             suggest_threshold=suggest_thr,
             engine=engine,
-            parent=self,
         )
         self._rerec_worker = worker  # keep a reference so it isn't GC'd
 

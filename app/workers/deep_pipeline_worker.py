@@ -44,7 +44,6 @@ from app.deep.dataset import TRUSTED_MANUAL_SOURCES
 from app.detectors.factory import create_detector
 from app.embeddings.tflite_embedder import TFLiteEmbedder
 from app.jobs.cancellation import OperationCancelled
-from app.workers.pipeline_worker import PipelineResult
 from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.deep_recognition_service import (
     DeepRecognitionService,
@@ -62,6 +61,7 @@ from app.services.overlap_resolution_service import (
 )
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
+from app.workers.pipeline_worker import PipelineResult
 
 log = logging.getLogger(__name__)
 
