@@ -343,6 +343,17 @@ def _no_message_boxes(monkeypatch):
     monkeypatch.setattr(QMessageBox, "exec", fail_exec)
 
 
+def _flush_code_check(dlg):
+    """Run the debounced code validation immediately.
+
+    The dialog validates codes ~350 ms after typing pauses (keystrokes no
+    longer run DB queries synchronously); tests flush the timer instead of
+    waiting for it.
+    """
+    dlg._code_check_timer.stop()
+    dlg._refresh_all_code_warnings()
+
+
 def test_person_dialog_valid_code_is_canonicalised(qtbot, person_db, monkeypatch):
     from PySide6.QtWidgets import QDialog
     from app.db.database import session_scope
@@ -376,6 +387,7 @@ def test_person_dialog_invalid_code_saved_with_inline_marker(
     qtbot.addWidget(dlg)
 
     dlg._family_code.setText("rossz-kód!!")
+    _flush_code_check(dlg)
     # The inline warning marker appears live, without any dialog…
     assert dlg._family_code_warn.isVisible()
     assert dlg._family_code_warn.toolTip()  # tooltip explains the problem
@@ -399,8 +411,10 @@ def test_person_dialog_marker_toggles_live(qtbot, person_db, monkeypatch):
     # Empty → no marker; invalid → marker on; valid → marker off again.
     assert not dlg._family_code_warn.isVisible()
     dlg._family_code.setText("???")
+    _flush_code_check(dlg)
     assert dlg._family_code_warn.isVisible()
     dlg._family_code.setText("C85")
+    _flush_code_check(dlg)
     assert not dlg._family_code_warn.isVisible()
 
 
@@ -419,6 +433,7 @@ def test_person_dialog_flags_preexisting_invalid_code(qtbot, monkeypatch, tmp_pa
         session.flush()
         dlg = PersonInfoDialog(session.get(Person, person.id))
     qtbot.addWidget(dlg)
+    _flush_code_check(dlg)
     assert dlg._family_code_warn.isVisible()
 
 

@@ -49,7 +49,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -2980,58 +2979,51 @@ class ImageBrowserPanel(QWidget):
                 self, t("rerec_progress_title"), t("rerec_disabled")
             )
             return
-        if getattr(self, "_rerec_worker", None) is not None:
+        task = getattr(self, "_rerec_task", None)
+        if task is not None and not task.state.is_final:
             return  # a run is already in flight
 
         auto_thr, suggest_thr = self._rerecognition_thresholds()
 
+        from app.tasks import TaskPriority, get_task_manager
         from app.workers.rerecognition_worker import ReRecognitionWorker
 
-        progress = QProgressDialog(
-            t("rerec_progress_body", done=0, total=0, auto=0, suggest=0),
-            t("rerec_cancel"),
-            0, 0, self,
-        )
-        progress.setWindowTitle(t("rerec_progress_title"))
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumWidth(360)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        self._rerec_progress = progress
-
+        # Runs as a Task Manager task (pause/resume/stop there) — no modal
+        # dialog, so the UI is never blocked.  NORMAL priority: more important
+        # than exports, below the full scan/AI pipeline.
         worker = ReRecognitionWorker(
             image_ids,
             self._config,
             auto_threshold=auto_thr,
             suggest_threshold=suggest_thr,
             engine=engine,
+            parent=self,
         )
-        self._rerec_worker = worker
+        self._rerec_worker = worker  # keep a reference so it isn't GC'd
 
-        def _on_progress(done: int, total: int, auto: int, suggest: int) -> None:
-            progress.setMaximum(max(total, 1))
-            progress.setValue(done)
-            progress.setLabelText(
-                t("rerec_progress_body", done=done, total=total,
-                  auto=auto, suggest=suggest)
-            )
+        def work(ctx):  # noqa: ANN001 — runs on the task thread
+            return worker.run_in_task(ctx)
 
-        worker.progress.connect(_on_progress)
-        worker.finished_result.connect(self._on_rerecognition_finished)
-        worker.failed.connect(self._on_rerecognition_failed)
-        progress.canceled.connect(worker.cancel)
-        worker.start()
-        progress.show()
+        self._rerec_task = get_task_manager().submit(
+            t("task_rerecognition"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.NORMAL,
+            on_done=self._on_rerecognition_finished,
+            on_error=self._on_rerecognition_failed,
+            on_cancelled=self._on_rerecognition_cancelled,
+        )
 
     def _cleanup_rerec_worker(self) -> None:
-        progress = getattr(self, "_rerec_progress", None)
-        if progress is not None:
-            progress.close()
-        self._rerec_progress = None
-        worker = getattr(self, "_rerec_worker", None)
-        if worker is not None:
-            worker.wait(50)
+        self._rerec_task = None
         self._rerec_worker = None
+
+    def _on_rerecognition_cancelled(self) -> None:
+        self._cleanup_rerec_worker()
+        QMessageBox.information(
+            self, t("rerec_progress_title"), t("rerec_cancelled")
+        )
+        self._refresh_after_rerecognition()
 
     def _on_rerecognition_failed(self, message: str) -> None:
         self._cleanup_rerec_worker()

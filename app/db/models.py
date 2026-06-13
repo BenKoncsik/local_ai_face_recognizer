@@ -502,19 +502,13 @@ class Face(Base):
     # Path to the stored crop thumbnail (relative to crops_dir)
     crop_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Embedding stored as raw bytes (numpy float32 array → tobytes())
-    # Use Face.get_embedding() / Face.set_embedding() helpers.
-    _embedding: Mapped[Optional[bytes]] = mapped_column(
-        "embedding", LargeBinary, nullable=True
-    )
-
-    # 5 facial landmarks (right-eye, left-eye, nose, right-mouth, left-mouth)
-    # stored as raw bytes (numpy float32 (5, 2) array → tobytes()).  NULL when
-    # the detector did not produce landmarks (Coral, Caffe SSD, Haar).  Used by
-    # the "aligned" crop mode.  Use get_landmarks() / set_landmarks() helpers.
-    _landmarks: Mapped[Optional[bytes]] = mapped_column(
-        "landmarks", LargeBinary, nullable=True
-    )
+    # Embedding + landmark blobs live in the face_blobs side table (see
+    # FaceBlob): inline ~2 KB blobs made every full faces scan read the whole
+    # table.  Use the unchanged Face.get_embedding()/set_embedding() and
+    # get_landmarks()/set_landmarks() helpers; for SQL filters use
+    # Face.embedding_exists().  lazy="selectin" batch-loads blob rows whenever
+    # Face entities load, so per-face access never degrades to N+1; large
+    # Face loads that don't need blobs opt out with lazyload(Face.blob).
 
     # Whether this face was manually excluded from clustering
     is_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -609,25 +603,42 @@ class Face(Base):
         cascade="all, delete-orphan",
     )
 
+    blob: Mapped[Optional["FaceBlob"]] = relationship(
+        "FaceBlob",
+        back_populates="face",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     # ------------------------------------------------------------------
     # Embedding helpers
     # ------------------------------------------------------------------
 
+    @classmethod
+    def embedding_exists(cls):
+        """SQL filter: the face has a stored embedding (EXISTS on face_blobs)."""
+        return cls.blob.has(FaceBlob.embedding.isnot(None))
+
     def get_embedding(self) -> Optional[np.ndarray]:
         """Deserialise the stored embedding bytes to a float32 numpy array."""
-        if self._embedding is None:
+        if self.blob is None or self.blob.embedding is None:
             return None
-        return np.frombuffer(self._embedding, dtype=np.float32).copy()
+        return np.frombuffer(self.blob.embedding, dtype=np.float32).copy()
 
     def set_embedding(self, vector: np.ndarray) -> None:
         """Serialise a float32 numpy array and store it."""
-        self._embedding = vector.astype(np.float32).tobytes()
+        if self.blob is None:
+            self.blob = FaceBlob()
+        self.blob.embedding = vector.astype(np.float32).tobytes()
 
     def get_landmarks(self) -> Optional[np.ndarray]:
         """Deserialise the stored landmarks to a float32 ``(5, 2)`` array."""
-        if self._landmarks is None:
+        if self.blob is None or self.blob.landmarks is None:
             return None
-        return np.frombuffer(self._landmarks, dtype=np.float32).reshape(5, 2).copy()
+        return np.frombuffer(
+            self.blob.landmarks, dtype=np.float32
+        ).reshape(5, 2).copy()
 
     def set_landmarks(self, points: Optional[object]) -> None:
         """Serialise 5×2 facial landmarks and store them.
@@ -635,12 +646,15 @@ class Face(Base):
         Accepts any array-like of shape ``(5, 2)``; ``None`` clears the field.
         """
         if points is None:
-            self._landmarks = None
+            if self.blob is not None:
+                self.blob.landmarks = None
             return
         arr = np.asarray(points, dtype=np.float32)
         if arr.shape != (5, 2):
             raise ValueError(f"landmarks must be 5x2, got {arr.shape}")
-        self._landmarks = arr.tobytes()
+        if self.blob is None:
+            self.blob = FaceBlob()
+        self.blob.landmarks = arr.tobytes()
 
     def __repr__(self) -> str:
         return (
@@ -648,6 +662,32 @@ class Face(Base):
             f"bbox=({self.bbox_x},{self.bbox_y},{self.bbox_w},{self.bbox_h}) "
             f"conf={self.confidence:.2f}>"
         )
+
+
+class FaceBlob(Base):
+    """Embedding + landmark bytes for one face, split out of ``faces``.
+
+    The blobs dominated the faces row size (~2 KB each), which made every
+    full-table scan — counts, crop lookups, exports — read the entire table.
+    Keeping them in a 1:1 side table keeps the hot ``faces`` table small.
+    """
+
+    __tablename__ = "face_blobs"
+
+    face_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("faces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    # numpy float32 array → tobytes(); use the Face helpers to (de)serialise.
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+
+    # numpy float32 (5, 2) array → tobytes(); NULL when the detector did not
+    # produce landmarks (Coral, Caffe SSD, Haar).
+    landmarks: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+
+    face: Mapped["Face"] = relationship("Face", back_populates="blob")
 
 
 # ---------------------------------------------------------------------------

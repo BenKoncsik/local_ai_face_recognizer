@@ -63,6 +63,10 @@ def init_db(db_path: Path | str) -> Engine:
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
+    # Per-statement timing + slow-query warnings (negligible overhead).
+    from app.perf import attach_sql_timing
+    attach_sql_timing(engine)
+
     # Create all tables that don't exist yet (idempotent)
     Base.metadata.create_all(engine)
 
@@ -130,7 +134,8 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("quality_score", "FLOAT"),
             ("quality_reasons", "VARCHAR(256)"),
             ("is_low_quality", "BOOLEAN"),
-            ("landmarks", "BLOB"),
+            # NOTE: "landmarks" intentionally NOT here any more — blobs moved
+            # to the face_blobs side table (_migrate_face_blobs).
             ("is_merge_excluded", "BOOLEAN NOT NULL DEFAULT 0"),
             ("auto_merged_from_unknown", "BOOLEAN NOT NULL DEFAULT 0"),
             ("auto_merge_review_status", "VARCHAR(16)"),
@@ -155,6 +160,7 @@ def _migrate_add_columns(engine: Engine) -> None:
                     )
                     log.info("Migration: added column %s.%s", table, col_name)
         conn.commit()
+    _migrate_face_blobs(engine)
     _migrate_add_indexes(engine)
     _migrate_person_groups(engine)
     _migrate_collage_locations_to_places(engine)
@@ -163,6 +169,94 @@ def _migrate_add_columns(engine: Engine) -> None:
     _migrate_place_display_name(engine)
     _migrate_object_tagging(engine)
     _migrate_deep_recognition_tables(engine)
+
+
+def _migrate_face_blobs(engine: Engine) -> None:
+    """Move embedding/landmark blobs from ``faces`` into ``face_blobs``.
+
+    One-time migration: the inline blobs made every full scan of ``faces``
+    read the whole table (~2 KB/row), which is why person counts, crop
+    lookups and exports took seconds at scale.  Copies the bytes into the
+    1:1 side table, then drops the old columns (SQLite ≥ 3.35; when DROP
+    COLUMN is unavailable the stale columns are left in place — harmless,
+    just not reclaimed).  Idempotent: a no-op once the columns are gone.
+    """
+    import time as _time
+
+    with engine.begin() as conn:
+        cols = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(faces)")).fetchall()
+        }
+        movable = [c for c in ("embedding", "landmarks") if c in cols]
+        if not movable:
+            return
+
+        t0 = _time.perf_counter()
+        # create_all normally creates face_blobs already; be defensive.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS face_blobs (
+                    face_id   INTEGER PRIMARY KEY
+                        REFERENCES faces(id) ON DELETE CASCADE,
+                    embedding BLOB,
+                    landmarks BLOB
+                )
+                """
+            )
+        )
+        select_cols = ", ".join(movable)
+        not_null = " OR ".join(f"{c} IS NOT NULL" for c in movable)
+        copied = conn.execute(
+            text(
+                f"INSERT OR IGNORE INTO face_blobs (face_id, {select_cols}) "
+                f"SELECT id, {select_cols} FROM faces WHERE {not_null}"
+            )
+        ).rowcount
+
+        # Drop each column INDEPENDENTLY (no early break): on a SQLite build
+        # where DROP COLUMN fails for one, the other must still be attempted,
+        # otherwise a half-dropped table would re-enter this migration on every
+        # startup and keep retrying the same column.  The blob data is already
+        # safely in face_blobs, so a column that cannot be dropped just stays
+        # unused.
+        n_dropped = 0
+        for col in movable:
+            try:
+                conn.execute(text(f"ALTER TABLE faces DROP COLUMN {col}"))
+                n_dropped += 1
+            except Exception as exc:  # noqa: BLE001 — pre-3.35 SQLite
+                log.warning(
+                    "Migration: could not drop faces.%s (%s) — data already "
+                    "copied to face_blobs, the stale column stays unused.",
+                    col,
+                    exc,
+                )
+        dropped = n_dropped == len(movable)
+
+        log.info(
+            "Migration: moved %d face blob row(s) to face_blobs in %.1fs "
+            "(%d/%d old columns dropped)",
+            copied,
+            _time.perf_counter() - t0,
+            n_dropped,
+            len(movable),
+        )
+
+    if dropped and copied:
+        # The copy briefly doubled the blob payload in the file; reclaim it.
+        # One-time cost alongside the one-time migration.  VACUUM must run
+        # outside a transaction.
+        t1 = _time.perf_counter()
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            conn.execute(text("VACUUM"))
+        log.info(
+            "Migration: VACUUM after blob move took %.1fs",
+            _time.perf_counter() - t1,
+        )
 
 
 def _migrate_deep_recognition_tables(engine: Engine) -> None:
@@ -576,6 +670,16 @@ def _migrate_add_indexes(engine: Engine) -> None:
         "CREATE INDEX IF NOT EXISTS ix_persons_external_family_code ON persons(external_family_code)",
         "CREATE INDEX IF NOT EXISTS ix_faces_person_image ON faces(person_id, image_id)",
         "CREATE INDEX IF NOT EXISTS ix_faces_image_person ON faces(image_id, person_id)",
+        # Covering index for person-list/sidebar aggregates.  The faces table
+        # rows embed ~2 KB embedding blobs, so ANY full scan reads the whole
+        # table (hundreds of MB at scale); counting faces or picking the
+        # best-confidence crop per person took many seconds.  This index
+        # answers those queries without touching the table: 7–13 s → 10–60 ms
+        # at 100k faces.
+        (
+            "CREATE INDEX IF NOT EXISTS ix_faces_person_listing "
+            "ON faces(person_id, is_excluded, confidence DESC, crop_path, image_id)"
+        ),
         (
             "CREATE INDEX IF NOT EXISTS ix_faces_auto_merge_review "
             "ON faces(auto_merge_review_status)"

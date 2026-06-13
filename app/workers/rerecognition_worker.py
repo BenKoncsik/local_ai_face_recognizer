@@ -67,13 +67,28 @@ class ReRecognitionWorker(QThread):
         self._engine = engine
         self._token = CancellationToken()
         self._last_emit = 0.0
+        # Set when running under the Task Manager (cancel/pause + progress).
+        self._ctx = None
 
     def cancel(self) -> None:
         self._token.cancel()
 
     # ------------------------------------------------------------------
 
-    def run(self) -> None:  # noqa: D401 — QThread entry point
+    def run_in_task(self, ctx) -> ReRecognitionResult:  # noqa: ANN001
+        """Run under the Task Manager; return the ReRecognitionResult.
+
+        Reuses the task's cancellation token (so Stop/Pause in the Task Manager
+        control this run) and routes progress through ``ctx``.  Raises
+        :class:`OperationCancelled` on cancel; raises on hard failure.
+        """
+        self._ctx = ctx
+        self._token = ctx.token
+        result = self._execute_deep() if self._engine == "deep" else self._execute()
+        self._run_ai_face_detection(result)
+        return result
+
+    def run(self) -> None:  # noqa: D401 — QThread entry point (legacy)
         try:
             result = self._execute_deep() if self._engine == "deep" else self._execute()
         except OperationCancelled:
@@ -140,7 +155,7 @@ class ReRecognitionWorker(QThread):
                     "Re-recognition: nothing to do (%d profile(s), %d candidate(s))",
                     len(profiles), total,
                 )
-                self.progress.emit(total, total, 0, 0)
+                self._emit_progress(total, total, 0, 0, force=True)
                 return result
 
             auto_items: List[AutoItem] = []
@@ -157,7 +172,7 @@ class ReRecognitionWorker(QThread):
                 self._emit_progress(i, total, result.n_auto, result.n_suggest)
 
             # Final progress tick (always emitted, not throttled).
-            self.progress.emit(total, total, result.n_auto, result.n_suggest)
+            self._emit_progress(total, total, result.n_auto, result.n_suggest, force=True)
 
             # One batch id per run, so any later review-dialog merges group with
             # this run's automatic merges (and undo together).
@@ -190,7 +205,7 @@ class ReRecognitionWorker(QThread):
             total = len(candidates)
 
             if total == 0:
-                self.progress.emit(0, 0, 0, 0)
+                self._emit_progress(0, 0, 0, 0, force=True)
                 return result
 
             # Load the saved deep model (no retraining — use whatever is on disk)
@@ -200,7 +215,7 @@ class ReRecognitionWorker(QThread):
             classifier = DeepFaceClassifier(self._config.deep_recognition)
             if not classifier.load(model_dir / "deep_face_model.pkl"):
                 log.warning("Deep re-recognition: no trained model found")
-                self.progress.emit(total, total, 0, 0)
+                self._emit_progress(total, total, 0, 0, force=True)
                 return result
 
             auto_thr = self._auto_threshold or self._config.recognition.rerecognition_auto_threshold
@@ -242,7 +257,7 @@ class ReRecognitionWorker(QThread):
 
                 self._emit_progress(i, total, result.n_auto, result.n_suggest)
 
-            self.progress.emit(total, total, result.n_auto, result.n_suggest)
+            self._emit_progress(total, total, result.n_auto, result.n_suggest, force=True)
 
             batch_id = uuid.uuid4().hex
             result.batch_id = batch_id
@@ -256,10 +271,21 @@ class ReRecognitionWorker(QThread):
             return result
 
     def _emit_progress(
-        self, processed: int, total: int, auto: int, suggest: int
+        self, processed: int, total: int, auto: int, suggest: int,
+        *, force: bool = False,
     ) -> None:
-        now = time.monotonic() * 1000.0
-        if now - self._last_emit < _PROGRESS_THROTTLE_MS and processed < total:
-            return
-        self._last_emit = now
-        self.progress.emit(processed, total, auto, suggest)
+        if not force:
+            now = time.monotonic() * 1000.0
+            if now - self._last_emit < _PROGRESS_THROTTLE_MS and processed < total:
+                return
+            self._last_emit = now
+        if self._ctx is not None:
+            pct = int(processed / total * 100) if total else 0
+            self._ctx.report(
+                min(max(pct, 0), 100),
+                f"{processed}/{total} (auto {auto}, ? {suggest})",
+            )
+            # Block while paused; raises OperationCancelled on cancel.
+            self._ctx.token.wait_if_paused()
+        else:
+            self.progress.emit(processed, total, auto, suggest)

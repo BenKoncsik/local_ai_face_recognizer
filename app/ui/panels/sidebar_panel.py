@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 import cv2
-import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QImageReader, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
@@ -18,12 +17,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from app.db.models import Person
 from app.ui.i18n import t
 from app.ui.widgets.person_search_select import PersonSearchSelect
 from app.utils.person_search import PersonEntry
@@ -45,49 +42,24 @@ class _FaceData:
     bbox: Optional[Tuple[int, int, int, int]]  # x, y, w, h
 
 
-def _build_face_data(person: Person) -> _FaceData:
-    """Extract the representative face data from a Person.
+# Public alias — main_window builds these when refreshing the sidebar.
+FaceData = _FaceData
 
-    When ``person.thumbnail_path`` is set we look for the matching face so
-    the hover-popup bbox/image stays consistent with the thumbnail crop.
-    Falls back to the first face that has a crop_path.
+
+@dataclass
+class SidebarPerson:
+    """Lightweight sidebar row — plain values only, no live ORM objects.
+
+    Loading full Person/Face ORM graphs (including embedding blobs) for the
+    sidebar froze the UI for many seconds at scale; the refresh now runs a few
+    aggregate queries and builds these instead.
     """
-    thumb = person.thumbnail_path
-    rep_face = None
 
-    if thumb:
-        # Find the exact face whose crop_path matches the stored thumbnail so
-        # the bbox shown in the hover popup matches the visible thumbnail.
-        rep_face = next((f for f in person.faces if f.crop_path == thumb), None)
-
-    if rep_face is None:
-        # No thumbnail set, or no matching face — use first face with a crop.
-        rep_face = next((f for f in person.faces if f.crop_path), None)
-
-    if rep_face is None:
-        return _FaceData(
-            face_id=None,
-            person_id=person.id,
-            crop_path=None,
-            image_path=None,
-            bbox=None,
-        )
-
-    crop = thumb if (thumb and rep_face.crop_path == thumb) else rep_face.crop_path
-    image_path = rep_face.image.file_path if rep_face.image else None
-    # bbox lives on the face row itself, always available
-    bbox: Optional[Tuple[int, int, int, int]] = (
-        rep_face.bbox_x, rep_face.bbox_y,
-        rep_face.bbox_w, rep_face.bbox_h
-    )
-
-    return _FaceData(
-        face_id=rep_face.id,
-        person_id=person.id,
-        crop_path=crop,
-        image_path=image_path,
-        bbox=bbox,
-    )
+    id: int
+    name: str
+    is_protected: bool
+    face_count: int
+    face: _FaceData
 
 
 def _crop_mtime(crop_path: Optional[str]) -> Optional[float]:
@@ -232,22 +204,36 @@ class _PersonThumb(QLabel):
 
     clicked = Signal(int)
 
-    def __init__(self, person: Person, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, person: SidebarPerson, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._person_id = person.id
         self._person_name = person.name
-        self._face_data = _build_face_data(person)
+        self._face_data = person.face
+        self._pixmap_loaded = False
         self.setObjectName(f"person-thumb-{person.id}")
         self.setProperty("person_id", person.id)
         self.setProperty("face_id", self._face_data.face_id or 0)
-        self._load_pixmap()
         self.setFixedSize(_FACE_THUMB, _FACE_THUMB)
         self.setAlignment(Qt.AlignCenter)
+        # Placeholder look until the crop is actually loaded — the pixmap is
+        # only read from disk when the thumb scrolls into the viewport, so
+        # populating thousands of persons stays instant.
+        self.setStyleSheet(
+            "QLabel { background: #2a2a2a; border: 1px solid #555; border-radius: 4px; }"
+            "QLabel:hover { border: 2px solid #88aaff; }"
+        )
+        self.setMouseTracking(True)
+
+    def ensure_pixmap(self) -> None:
+        """Load the crop image once, the first time the thumb is visible."""
+        if self._pixmap_loaded:
+            return
+        self._pixmap_loaded = True
         self.setStyleSheet(
             "QLabel { border: 1px solid #555; border-radius: 4px; }"
             "QLabel:hover { border: 2px solid #88aaff; }"
         )
-        self.setMouseTracking(True)
+        self._load_pixmap()
 
     def _load_pixmap(self) -> None:
         crop = self._face_data.crop_path
@@ -296,13 +282,20 @@ class SidebarPanel(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._all_persons: list[Person] = []
+        self._all_persons: list[SidebarPerson] = []
         # Incremental thumb-grid state: person_id → live widget, and the
         # signature that widget was built from (so unchanged persons keep
         # their existing widget instead of being re-created on every refresh).
         self._thumbs: dict[int, _PersonThumb] = {}
         self._thumb_sigs: dict[int, tuple] = {}
         self._build_ui()
+        # Debounced viewport-visibility pass: crop pixmaps load only for
+        # thumbs that are (nearly) visible, batched across scroll events.
+        from PySide6.QtCore import QTimer
+        self._visible_load_timer = QTimer(self)
+        self._visible_load_timer.setSingleShot(True)
+        self._visible_load_timer.setInterval(40)
+        self._visible_load_timer.timeout.connect(self._load_visible_thumbs)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -324,6 +317,10 @@ class SidebarPanel(QWidget):
         scroll.setMinimumHeight(200)
         face_box_layout.addWidget(scroll)
         layout.addWidget(face_box, stretch=1)
+        self._thumb_scroll = scroll
+        scroll.verticalScrollBar().valueChanged.connect(
+            lambda _=0: self._schedule_visible_load()
+        )
 
         # --- Searchable person list below ---
         search_box = QGroupBox(t("people_label"))
@@ -351,7 +348,7 @@ class SidebarPanel(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def populate(self, persons: list[Person]) -> None:
+    def populate(self, persons: list[SidebarPerson]) -> None:
         """Rebuild the list and thumbnail grid with the given persons."""
         self._all_persons = persons
         self._rebuild_thumb_grid(persons)
@@ -359,7 +356,7 @@ class SidebarPanel(QWidget):
             PersonEntry(
                 person_id=p.id,
                 name=p.name,
-                display_text=f"{'🔒 ' if p.is_protected else ''}{p.name}  ({len(p.faces)})",
+                display_text=f"{'🔒 ' if p.is_protected else ''}{p.name}  ({p.face_count})",
             )
             for p in persons
         ]
@@ -374,7 +371,7 @@ class SidebarPanel(QWidget):
 
     # ------------------------------------------------------------------
 
-    def _rebuild_thumb_grid(self, persons: list[Person]) -> None:
+    def _rebuild_thumb_grid(self, persons: list[SidebarPerson]) -> None:
         """Refresh the thumbnail grid, reusing widgets for unchanged persons.
 
         Re-creating every ``_PersonThumb`` reads a crop file from disk per
@@ -389,9 +386,9 @@ class SidebarPanel(QWidget):
         # Compute the desired order and a change-signature per person.
         desired_ids: list[int] = []
         desired_sig: dict[int, tuple] = {}
-        person_by_id: dict[int, Person] = {}
+        person_by_id: dict[int, SidebarPerson] = {}
         for p in visible:
-            fd = _build_face_data(p)
+            fd = p.face
             desired_ids.append(p.id)
             desired_sig[p.id] = (
                 fd.face_id, fd.crop_path, fd.image_path, fd.bbox,
@@ -421,6 +418,43 @@ class SidebarPanel(QWidget):
                 self._thumb_sigs[pid] = desired_sig[pid]
             row, col = divmod(i, _FACE_COLS)
             self._thumb_grid.addWidget(thumb, row, col)
+
+        # Load pixmaps for the initially visible window once layout settles.
+        self._schedule_visible_load()
+
+    # ------------------------------------------------------------------
+    # Viewport-lazy pixmap loading
+    # ------------------------------------------------------------------
+
+    #: Extra margin (px) above/below the viewport that is preloaded, so fast
+    #: scrolling shows images instead of placeholders.
+    _VISIBLE_BUFFER_PX = 160
+
+    def _schedule_visible_load(self) -> None:
+        self._visible_load_timer.start()
+
+    def _load_visible_thumbs(self) -> None:
+        """Load crop pixmaps for thumbs inside (or near) the viewport."""
+        from PySide6.QtCore import QPoint, QRect
+
+        viewport = self._thumb_scroll.viewport()
+        region = viewport.rect().adjusted(
+            0, -self._VISIBLE_BUFFER_PX, 0, self._VISIBLE_BUFFER_PX
+        )
+        for thumb in self._thumbs.values():
+            if thumb._pixmap_loaded:
+                continue
+            top_left = thumb.mapTo(viewport, QPoint(0, 0))
+            if region.intersects(QRect(top_left, thumb.size())):
+                thumb.ensure_pixmap()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        self._schedule_visible_load()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._schedule_visible_load()
 
     # ------------------------------------------------------------------
     # Slots

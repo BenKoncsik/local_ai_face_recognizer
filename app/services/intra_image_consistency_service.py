@@ -382,7 +382,7 @@ class IntraImageConsistencyService:
         """Return ``{image_id: [faces]}`` for images with >=2 embedded faces."""
         query = (
             self._session.query(Face)
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
         )
         if self._exclude_low_quality:

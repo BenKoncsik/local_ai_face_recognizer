@@ -212,7 +212,7 @@ class IntraImageDuplicateService:
         query = self._session.query(Face).filter(
             Face.person_id.is_(None),
             Face.detector_backend != "manual",
-            Face._embedding.isnot(None),
+            Face.embedding_exists(),
             Face.is_excluded == False,  # noqa: E712
         )
         if self._exclude_low_quality:
@@ -230,7 +230,7 @@ class IntraImageDuplicateService:
             self._session.query(Face)
             .filter(
                 Face.image_id == image_id,
-                Face._embedding.isnot(None),
+                Face.embedding_exists(),
                 (Face.detector_backend == "manual") | (Face.person_id.isnot(None)),
             )
             .all()

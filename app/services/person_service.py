@@ -110,21 +110,29 @@ class PersonService:
 
         # Representative face crop per person — used as a thumbnail fallback when
         # the person has no explicit ``thumbnail_path`` yet (the common case for
-        # freshly clustered "Unknown N" people).  One query, best confidence wins.
+        # freshly clustered "Unknown N" people).  Window function riding the
+        # ix_faces_person_listing covering index: one small row per person
+        # instead of sorting and transferring every face row (the old ORDER BY
+        # variant took ~13 s at 100k faces because any faces scan also reads
+        # the inline embedding blobs).
+        from sqlalchemy import text as _sql
+
         fallback_crop: dict[int, str] = {}
-        crop_rows = (
-            self._session.query(Face.person_id, Face.crop_path)
-            .filter(
-                Face.person_id.isnot(None),
-                Face.crop_path.isnot(None),
-                Face.is_excluded == False,  # noqa: E712
+        crop_rows = self._session.execute(
+            _sql(
+                "SELECT person_id, crop_path FROM ("
+                "  SELECT f.person_id, f.crop_path,"
+                "         ROW_NUMBER() OVER (PARTITION BY f.person_id"
+                "                            ORDER BY f.confidence DESC) AS rn"
+                "  FROM faces f"
+                "  WHERE f.person_id IS NOT NULL"
+                "    AND f.crop_path IS NOT NULL"
+                "    AND f.is_excluded = 0"
+                ") WHERE rn = 1"
             )
-            .order_by(Face.person_id, Face.confidence.desc())
-            .all()
-        )
+        ).fetchall()
         for pid, crop in crop_rows:
-            if pid not in fallback_crop:
-                fallback_crop[pid] = crop
+            fallback_crop[pid] = crop
 
         name = filters.name.strip()
         if name:

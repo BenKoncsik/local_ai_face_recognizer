@@ -520,7 +520,7 @@ class RecognitionService:
         query = (
             self._session.query(Face)
             .outerjoin(Person, Face.person_id == Person.id)
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
             .filter(
                 or_(

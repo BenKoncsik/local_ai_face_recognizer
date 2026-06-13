@@ -43,6 +43,8 @@ from app.db.models import Face, Image, Person
 from app.deep.dataset import TRUSTED_MANUAL_SOURCES
 from app.detectors.factory import create_detector
 from app.embeddings.tflite_embedder import TFLiteEmbedder
+from app.jobs.cancellation import OperationCancelled
+from app.workers.pipeline_worker import PipelineResult
 from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.deep_recognition_service import (
     DeepRecognitionService,
@@ -119,6 +121,8 @@ class DeepPipelineWorker(QThread):
         self._drive_mirror_dir = drive_mirror_dir
         self._ai_visualization = ai_visualization
         self._ai_debug_log = ai_debug_log
+        # Set when running under the Task Manager (cancel/pause + progress).
+        self._ctx = None
 
     @property
     def _drive_mode(self) -> bool:
@@ -129,9 +133,37 @@ class DeepPipelineWorker(QThread):
         return self._mode
 
     def abort(self) -> None:
-        """Request a graceful stop (checked between pipeline stages)."""
+        """Request a graceful stop (legacy QThread mode)."""
         self._abort = True
         log.info("Deep pipeline abort requested")
+
+    # ------------------------------------------------------------------
+    # Progress / log / cancel routing (mode-aware)
+    # ------------------------------------------------------------------
+
+    def _emit_progress(self, current: int, total: int, stage: str, detail: str) -> None:
+        if self._ctx is not None:
+            pct = int(current / total * 100) if total else 0
+            self._ctx.report(min(max(pct, 0), 100), f"{stage}: {detail}")
+            self._ctx.checkpoint()  # responsive pause/cancel mid-stage
+        else:
+            self.progress.emit(current, total, stage, detail)
+
+    def _emit_log(self, message: str) -> None:
+        # Queued cross-thread signal in both modes (worker lives on UI thread).
+        self.log_message.emit(message)
+
+    def _checkpoint(self) -> None:
+        """Raise OperationCancelled on cancel; block while paused."""
+        if self._ctx is not None:
+            self._ctx.checkpoint()
+        elif self._abort:
+            raise OperationCancelled()
+
+    def _is_cancel_requested(self) -> bool:
+        if self._ctx is not None:
+            return self._ctx.token.cancelled
+        return self._abort
 
     def _write_debug_log(self, info: object) -> None:
         """Append one JSON line to data/deep_debug.jsonl."""
@@ -173,47 +205,59 @@ class DeepPipelineWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             log.warning("Debug log write failed: %s", exc)
 
+    def run_in_task(self, ctx) -> PipelineResult:  # noqa: ANN001
+        """Run on the Task Manager's worker thread; return a PipelineResult.
+
+        Raises :class:`OperationCancelled` on cancel and blocks while paused
+        (both via ``ctx.checkpoint()``); raises on hard failure.
+        """
+        self._ctx = ctx
+        return self._run_pipeline()
+
     def run(self) -> None:
+        """Execute the deep pipeline as a standalone QThread (legacy)."""
         try:
-            self._run_pipeline()
+            result = self._run_pipeline()
+        except OperationCancelled:
+            self.finished.emit(False, "Aborted")
         except Exception as exc:  # noqa: BLE001
             msg = f"Deep pipeline error: {exc}\n{traceback.format_exc()}"
             log.error(msg)
             self.error.emit(str(exc))
             self.finished.emit(False, str(exc))
+        else:
+            self.suggestions_ready.emit(result.n_suggestions)
+            self.auto_assignments_ready.emit(result.n_auto_assignments)
+            self.finished.emit(result.success, result.summary)
 
     # ------------------------------------------------------------------
 
-    def _run_pipeline(self) -> None:
+    def _run_pipeline(self) -> PipelineResult:
         db_path = self._db_path_override or str(self._config.db_path_resolved)
         init_db(db_path)
 
         if self._mode == MODE_TRAIN:
-            self._run_train_only_pipeline()
-            return
+            return self._run_train_only_pipeline()
 
         if self._mode == MODE_DETECT_FACES:
-            self._run_detect_only_pipeline()
-            return
+            return self._run_detect_only_pipeline()
 
         n_stages = 10 if self._mode == MODE_REBUILD else 9
         stage = [0]
 
         def announce(message: str) -> None:
             stage[0] += 1
-            self.log_message.emit(f"Stage {stage[0]}/{n_stages}: {message}")
+            self._emit_log(f"Stage {stage[0]}/{n_stages}: {message}")
 
         # --- Rebuild only: wipe automatic data, keep human decisions ---
         if self._mode == MODE_REBUILD:
             announce("Rebuilding from scratch — clearing automatic data …")
             n_deleted, n_kept = self._reset_for_rebuild()
-            self.log_message.emit(
+            self._emit_log(
                 f"  Removed {n_deleted} automatic face box(es); "
                 f"kept {n_kept} human-confirmed face(s) as training data."
             )
-            if self._abort:
-                self.finished.emit(False, "Aborted during rebuild reset")
-                return
+            self._checkpoint()
 
         # --- Scan ---
         announce(
@@ -222,24 +266,18 @@ class DeepPipelineWorker(QThread):
             else "Scanning image folder …"
         )
         new_ids = self._run_scan()
-        if self._abort:
-            self.finished.emit(False, "Aborted after scan")
-            return
+        self._checkpoint()
 
         # --- Detection ---
         pending = self._get_pending_detection_ids()
         announce(f"Detecting faces in {len(pending)} image(s) …")
         total_faces = self._run_detection(pending)
-        if self._abort:
-            self.finished.emit(False, "Aborted after detection")
-            return
+        self._checkpoint()
 
         # --- AI face detection (analysis only, best-effort) ---
         announce(f"AI face detection on {len(pending)} image(s) …")
         ai_stats = self._run_ai_face_detection(pending)
-        if self._abort:
-            self.finished.emit(False, "Aborted after AI face detection")
-            return
+        self._checkpoint()
 
         # --- Embedding ---
         announce("Generating face embeddings …")
@@ -247,29 +285,23 @@ class DeepPipelineWorker(QThread):
             embedded = self._run_embedding()
         except ImportError as exc:
             log.error("TFLite backend missing: %s", exc)
-            self.error.emit(
+            raise RuntimeError(
                 "Hiányzik a TFLite futtatókörnyezet. "
                 "Telepítsd/javítsd a függőségeket:\n"
                 "  pip install ai-edge-litert\n"
                 f"Részletek: {exc}"
-            )
-            self.finished.emit(False, "Missing TFLite runtime — embedding skipped")
-            return
-        if self._abort:
-            self.finished.emit(False, "Aborted after embedding")
-            return
+            ) from exc
+        self._checkpoint()
 
         # --- Overlapping-box resolution ---
         announce("Resolving overlapping face boxes …")
         overlap_stats = self._run_overlap_resolution()
         if overlap_stats.faces_removed:
-            self.log_message.emit(
+            self._emit_log(
                 f"  Removed {overlap_stats.faces_removed} duplicate box(es); "
                 f"assigned faces always kept."
             )
-        if self._abort:
-            self.finished.emit(False, "Aborted after overlap resolution")
-            return
+        self._checkpoint()
 
         # --- Permanently-ignored face filter ---
         self._run_ignored_filter()
@@ -280,9 +312,7 @@ class DeepPipelineWorker(QThread):
             "(this may take a while — accuracy over speed) …"
         )
         result = self._run_deep_train_and_recognize()
-        if self._abort:
-            self.finished.emit(False, "Aborted after recognition")
-            return
+        self._checkpoint()
 
         # --- Cluster the remaining unknown faces into groups ---
         announce("Grouping remaining unknown faces …")
@@ -295,8 +325,6 @@ class DeepPipelineWorker(QThread):
         # --- Suggestions / review counters ---
         announce("Collecting review items …")
         n_suggestions = self._run_suggestions()
-        self.suggestions_ready.emit(n_suggestions)
-        self.auto_assignments_ready.emit(result.recognition.n_assigned)
 
         train = result.train
         rec = result.recognition
@@ -326,44 +354,44 @@ class DeepPipelineWorker(QThread):
             f"intra-image fixes: {consistency_stats.n_faces_reassigned} | "
             f"{n_suggestions} suggestion(s)"
         )
-        self.log_message.emit(summary)
-        self.finished.emit(True, summary)
+        self._emit_log(summary)
+        return PipelineResult(
+            True, summary,
+            n_suggestions=n_suggestions,
+            n_auto_assignments=rec.n_assigned,
+        )
 
     # ------------------------------------------------------------------
     # Train-only pipeline
     # ------------------------------------------------------------------
 
-    def _run_train_only_pipeline(self) -> None:
+    def _run_train_only_pipeline(self) -> PipelineResult:
         """Retrain the model from every person-assigned face; touch nothing.
 
         Walks the already-recognized faces only: no scan, no detection, no
         assignment — the user's data stays exactly as it is.  Always retrains
         (the explicit action must not be skipped as "data unchanged").
         """
-        self.log_message.emit("Stage 1/2: Generating missing face embeddings …")
+        self._emit_log("Stage 1/2: Generating missing face embeddings …")
         try:
             embedded = self._run_embedding()
         except ImportError as exc:
             log.error("TFLite backend missing: %s", exc)
-            self.error.emit(
+            raise RuntimeError(
                 "Hiányzik a TFLite futtatókörnyezet. "
                 "Telepítsd/javítsd a függőségeket:\n"
                 "  pip install ai-edge-litert\n"
                 f"Részletek: {exc}"
-            )
-            self.finished.emit(False, "Missing TFLite runtime — embedding skipped")
-            return
-        if self._abort:
-            self.finished.emit(False, "Aborted after embedding")
-            return
+            ) from exc
+        self._checkpoint()
 
-        self.log_message.emit(
+        self._emit_log(
             "Stage 2/2: Training the neural network from your categorized "
             "faces (this may take a while — accuracy over speed) …"
         )
 
         def train_cb(current, total, detail):
-            self.progress.emit(current, total or 0, "Training", detail)
+            self._emit_progress(current, total or 0, "Training", detail)
 
         with session_scope() as session:
             svc = DeepRecognitionService(
@@ -388,14 +416,14 @@ class DeepPipelineWorker(QThread):
             f"{train.n_persons} person(s) (+{train.n_augmented} synthetic), "
             f"accuracy {acc} | no faces were modified"
         )
-        self.log_message.emit(summary)
-        self.finished.emit(True, summary)
+        self._emit_log(summary)
+        return PipelineResult(True, summary)
 
     # ------------------------------------------------------------------
     # AI face detection (analysis only)
     # ------------------------------------------------------------------
 
-    def _run_detect_only_pipeline(self) -> None:
+    def _run_detect_only_pipeline(self) -> PipelineResult:
         """Run only the AI face-detection analysis, over every image.
 
         Stores where the AI sees faces (bounding box + confidence) in the
@@ -408,30 +436,24 @@ class DeepPipelineWorker(QThread):
         )
 
         def cb(current, total, path):
-            self.progress.emit(current, total or 0, "AI Detect", Path(path).name)
+            self._emit_progress(current, total or 0, "AI Detect", Path(path).name)
 
         with session_scope() as session:
             svc = AiFaceDetectionService(session, self._config.ai_face_detection)
             image_ids = svc.all_image_ids()
-            self.log_message.emit(
+            self._emit_log(
                 f"Stage 1/1: AI face detection on {len(image_ids)} image(s) …"
             )
             stats = svc.detect_images(
                 image_ids,
                 source=SOURCE_MANUAL,
                 progress_cb=cb,
-                cancel_check=lambda: self._abort,
+                cancel_check=self._is_cancel_requested,
             )
 
         if not stats.available:
-            self.error.emit(
-                f"AI face detection unavailable: {stats.error}"
-            )
-            self.finished.emit(False, f"AI face detection unavailable: {stats.error}")
-            return
-        if self._abort:
-            self.finished.emit(False, "Aborted during AI face detection")
-            return
+            raise RuntimeError(f"AI face detection unavailable: {stats.error}")
+        self._checkpoint()
 
         summary = (
             f"Done (AI face detection) — {stats.faces_found} face(s) found on "
@@ -439,8 +461,8 @@ class DeepPipelineWorker(QThread):
             f"({stats.images_failed} unreadable) | detector: {stats.detector_name} | "
             f"analysis only — no face was assigned, moved or deleted"
         )
-        self.log_message.emit(summary)
-        self.finished.emit(True, summary)
+        self._emit_log(summary)
+        return PipelineResult(True, summary)
 
     def _run_ai_face_detection(self, image_ids: list):
         """Best-effort AI face-detection stage inside rescan/rebuild.
@@ -456,7 +478,7 @@ class DeepPipelineWorker(QThread):
         )
 
         def cb(current, total, path):
-            self.progress.emit(current, total or 0, "AI Detect", Path(path).name)
+            self._emit_progress(current, total or 0, "AI Detect", Path(path).name)
 
         try:
             with session_scope() as session:
@@ -467,15 +489,15 @@ class DeepPipelineWorker(QThread):
                     image_ids,
                     source=SOURCE_PIPELINE,
                     progress_cb=cb,
-                    cancel_check=lambda: self._abort,
+                    cancel_check=self._is_cancel_requested,
                 )
             if stats.available:
-                self.log_message.emit(
+                self._emit_log(
                     f"  AI detected {stats.faces_found} face(s) on "
                     f"{stats.images_processed} image(s)."
                 )
             else:
-                self.log_message.emit(
+                self._emit_log(
                     f"  AI face detection skipped: {stats.error}"
                 )
             return stats
@@ -557,9 +579,9 @@ class DeepPipelineWorker(QThread):
         def cb(current, total, path):
             detail = Path(path).name
             label = "Drive Scan" if self._drive_mode else "Scanning"
-            self.progress.emit(current, total or 0, label, detail)
+            self._emit_progress(current, total or 0, label, detail)
             if current % 50 == 0:
-                self.log_message.emit(f"  Scanned {current}/{total or '?'} files …")
+                self._emit_log(f"  Scanned {current}/{total or '?'} files …")
 
         if self._drive_mode:
             from app.gdrive.drive_scan_service import DriveScanService
@@ -598,10 +620,10 @@ class DeepPipelineWorker(QThread):
             return 0
 
         detector = create_detector(self._config.detection)
-        self.log_message.emit(f"  Using detector: {detector.backend_name}")
+        self._emit_log(f"  Using detector: {detector.backend_name}")
 
         def cb(current, total, path):
-            self.progress.emit(current, total or 0, "Detecting", Path(path).name)
+            self._emit_progress(current, total or 0, "Detecting", Path(path).name)
 
         with session_scope() as session:
             svc = DetectionService(
@@ -619,12 +641,12 @@ class DeepPipelineWorker(QThread):
             embedding_dim=self._config.embedding.embedding_dim,
             input_size=self._config.embedding.input_size,
         )
-        self.log_message.emit(
+        self._emit_log(
             f"  Embedder backend: {getattr(embedder, '_backend', '?')}"
         )
 
         def cb(current, total, face_id):
-            self.progress.emit(current, total or 0, "Embedding", f"face #{face_id}")
+            self._emit_progress(current, total or 0, "Embedding", f"face #{face_id}")
 
         with session_scope() as session:
             svc = EmbeddingService(
@@ -645,7 +667,7 @@ class DeepPipelineWorker(QThread):
                     config=self._config.overlap_resolution,
                 )
                 stats = svc.resolve()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Overlaps", f"{stats.faces_removed} duplicate(s) removed"
                 )
                 return stats
@@ -663,7 +685,7 @@ class DeepPipelineWorker(QThread):
                 )
                 stats = svc.suppress_matching_unassigned()
                 if stats.n_suppressed:
-                    self.log_message.emit(
+                    self._emit_log(
                         f"  Suppressed {stats.n_suppressed} permanently-ignored face(s)."
                     )
         except Exception as exc:  # noqa: BLE001
@@ -671,10 +693,10 @@ class DeepPipelineWorker(QThread):
 
     def _run_deep_train_and_recognize(self) -> TrainAndRecognizeResult:
         def train_cb(current, total, detail):
-            self.progress.emit(current, total or 0, "Training", detail)
+            self._emit_progress(current, total or 0, "Training", detail)
 
         def recognize_cb(current, total, detail):
-            self.progress.emit(current, total or 0, "Recognizing", detail)
+            self._emit_progress(current, total or 0, "Recognizing", detail)
 
         debug_cb = None
         if self._ai_visualization or self._ai_debug_log:
@@ -705,16 +727,16 @@ class DeepPipelineWorker(QThread):
             else "n/a"
         )
         if train.reused_existing_model:
-            self.log_message.emit(
+            self._emit_log(
                 "  Labeled data unchanged — reusing the previously trained model."
             )
         else:
-            self.log_message.emit(
+            self._emit_log(
                 f"  Model trained on {train.n_examples} face(s) of "
                 f"{train.n_persons} person(s) "
                 f"(+{train.n_augmented} synthetic), accuracy {acc}."
             )
-        self.log_message.emit(
+        self._emit_log(
             f"  AI placed {result.recognition.n_assigned} unknown face(s) "
             f"with known people."
         )
@@ -729,7 +751,7 @@ class DeepPipelineWorker(QThread):
                     exclude_low_quality=self._config.deep_recognition.strict_quality_filter,
                 )
                 stats = svc.cluster_unassigned()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Clustering", f"{stats.n_new_persons} new unknown group(s)"
                 )
                 return stats

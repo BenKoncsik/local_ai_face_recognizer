@@ -56,7 +56,7 @@ class EmbeddingService:
         """
         query = (
             self._session.query(Face)
-            .filter(Face._embedding.is_(None))
+            .filter(~Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
         )
         if exclude_low_quality:
@@ -101,12 +101,15 @@ class EmbeddingService:
         Returns:
             Number of faces re-embedded.
         """
+        from app.db.models import FaceBlob
+
         cleared = (
-            self._session.query(Face)
-            .filter(Face._embedding.isnot(None))
-            .update({Face._embedding: None}, synchronize_session=False)
+            self._session.query(FaceBlob)
+            .filter(FaceBlob.embedding.isnot(None))
+            .update({FaceBlob.embedding: None}, synchronize_session=False)
         )
         self._session.commit()
+        self._session.expire_all()  # drop stale blob state cached on Face rows
         log.info("Re-embed: cleared %d existing embedding(s)", cleared)
         return self.process_pending(exclude_low_quality=exclude_low_quality)
 

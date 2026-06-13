@@ -250,7 +250,7 @@ class IgnoredFaceService:
 
         candidates: List[Face] = (
             self._session.query(Face)
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
             .filter(Face.person_id.is_(None))
             .all()

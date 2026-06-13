@@ -116,7 +116,7 @@ class ClusteringService:
         """Load all embedded, non-excluded faces from DB."""
         query = (
             self._session.query(Face)
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
         )
         if self._exclude_low_quality:
@@ -423,7 +423,7 @@ class ClusteringService:
         """Load embedded faces that have no person assignment at all."""
         query = (
             self._session.query(Face)
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
             .filter(Face.person_id.is_(None))
         )

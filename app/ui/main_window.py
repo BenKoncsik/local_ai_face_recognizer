@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QIcon
@@ -15,12 +15,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
-    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -45,8 +43,8 @@ from app.services.match_scoring import (
     match_scores_for_faces,
     match_scores_for_person,
 )
-from app.services.unknown_merge_service import UnknownMergeService
 from app.services.recognition_service import RecognitionService
+from app.services.unknown_merge_service import UnknownMergeService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
 from app.ui.dialogs.merge_dialog import MergeDialog
@@ -73,7 +71,6 @@ from app.ui.panels.persons_panel import PersonsPanel
 from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
 from app.ui.widgets.flow_layout import FlowContainer
-from app.workers.match_job_worker import MatchJobWorker
 from app.workers.deep_pipeline_worker import (
     MODE_DETECT_FACES,
     MODE_REBUILD,
@@ -81,6 +78,7 @@ from app.workers.deep_pipeline_worker import (
     MODE_TRAIN,
     DeepPipelineWorker,
 )
+from app.workers.match_job_worker import MatchJobWorker
 from app.workers.pipeline_worker import PipelineWorker
 
 log = logging.getLogger(__name__)
@@ -110,6 +108,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._config = config
         self._worker: Optional[PipelineWorker] = None
+        # The scan / AI pipeline now runs as a Task Manager task; these hold the
+        # live task handle and its worker (kept alive while it runs).
+        self._active_pipeline_task = None
+        self._active_pipeline_worker = None
         self._match_worker: Optional[MatchJobWorker] = None
         self._current_person_id: Optional[int] = None
         self._current_face_id: Optional[int] = None
@@ -158,6 +160,8 @@ class MainWindow(QMainWindow):
         self._start_update_check()
         self._setup_shortcuts()
         self._start_match_worker()
+        self._task_manager_dialog = None
+        self._start_crop_repair_task()
 
     # ------------------------------------------------------------------
     # Keyboard shortcuts
@@ -279,6 +283,10 @@ class MainWindow(QMainWindow):
         self._settings_btn = QPushButton()
         self._settings_btn.clicked.connect(self._on_settings)
         tb.addWidget(self._settings_btn)
+
+        self._tasks_btn = QPushButton()
+        self._tasks_btn.clicked.connect(self._on_open_task_manager)
+        tb.addWidget(self._tasks_btn)
 
         tb.addSeparator()
 
@@ -524,6 +532,21 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background: #313244; }"
         )
         self._gdrive_chip_btn.clicked.connect(self._on_gdrive_chip_clicked)
+
+        # Background-task chip — shows "N task(s) running"; click opens the
+        # Task Manager window.
+        self._tasks_chip_btn = QPushButton()
+        self._tasks_chip_btn.setFlat(True)
+        self._tasks_chip_btn.setVisible(False)
+        self._tasks_chip_btn.setStyleSheet(
+            "QPushButton { color: #A6E3A1; font-size: 11px; padding: 1px 6px; "
+            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
+            "QPushButton:hover { background: #313244; }"
+        )
+        self._tasks_chip_btn.clicked.connect(self._on_open_task_manager)
+        status.addPermanentWidget(self._tasks_chip_btn)
+        from app.tasks import get_task_manager
+        get_task_manager().counts_changed.connect(self._on_task_counts_changed)
         status.addPermanentWidget(self._gdrive_chip_btn)
 
         # Background name-matching status chip (left of the message label).
@@ -538,6 +561,19 @@ class MainWindow(QMainWindow):
         self._match_chip_btn.setToolTip(t("match_chip_tip"))
         self._match_chip_btn.clicked.connect(self._on_match_chip_clicked)
         status.addPermanentWidget(self._match_chip_btn)
+
+        # Always-visible Task Manager button anchored at the bottom-left of the
+        # status bar (addWidget → left side). Unlike the right-side chip, which
+        # only appears while tasks run, this is always available.
+        self._tasks_status_btn = QPushButton()
+        self._tasks_status_btn.setFlat(True)
+        self._tasks_status_btn.setStyleSheet(
+            "QPushButton { color: #A6E3A1; font-size: 11px; padding: 1px 8px; "
+            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
+            "QPushButton:hover { background: #313244; }"
+        )
+        self._tasks_status_btn.clicked.connect(self._on_open_task_manager)
+        status.addWidget(self._tasks_status_btn)
 
         self._status_label = QLabel()
         status.addWidget(self._status_label)
@@ -691,6 +727,10 @@ class MainWindow(QMainWindow):
         self._suggestions_btn.setToolTip(t("suggestions_tip"))
         self._refresh_amerge_btn()
         self._settings_btn.setText(t("settings"))
+        self._tasks_btn.setText(t("tasks_btn"))
+        if hasattr(self, "_tasks_status_btn"):
+            self._update_tasks_button_text()
+            self._tasks_status_btn.setToolTip(t("tasks_title"))
         if hasattr(self, "_recording_controls"):
             self._recording_controls.retranslate()
         self._update_gdrive_toolbar_btn()
@@ -775,7 +815,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -829,12 +869,12 @@ class MainWindow(QMainWindow):
         if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return None
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return None
 
         with session_scope() as session:
-            from app.db.models import Face, Image
+            from app.db.models import Image
             n_images = session.query(Image).count()
 
         return n_images
@@ -903,18 +943,17 @@ class MainWindow(QMainWindow):
         self._refresh_persons()
 
     def _start_pipeline(self, high_accuracy: bool = False) -> None:
-        """Launch the pipeline worker with the given mode."""
+        """Launch the scan/recognition pipeline as a Task Manager task."""
         drive_active = self._gdrive_session is not None
         if not drive_active and not hasattr(self, "_root_folder"):
             return
-        self._set_scanning_state(True)
 
         # Drive mode: pass client + folder info; local mode: pass root folder.
         if drive_active and self._gdrive_session is not None:
             from app.paths import drive_mirror_dir
             folders = self._gdrive_session.folders
             root_id = folders.root_id if folders else ""
-            self._worker = PipelineWorker(
+            worker = PipelineWorker(
                 root_folder="",          # unused in Drive mode
                 config=self._config,
                 parent=self,
@@ -925,20 +964,15 @@ class MainWindow(QMainWindow):
                 drive_mirror_dir=drive_mirror_dir(root_id),
             )
         else:
-            self._worker = PipelineWorker(
+            worker = PipelineWorker(
                 root_folder=self._root_folder,
                 config=self._config,
                 parent=self,
                 high_accuracy=high_accuracy,
                 db_path_override=self._db_path,
             )
-        self._pending_suggestion_count = 0
-        self._worker.progress.connect(self._on_progress)
-        self._worker.log_message.connect(self._log_panel.append_plain)
-        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
-        self._worker.finished.connect(self._on_pipeline_finished)
-        self._worker.error.connect(self._on_pipeline_error)
-        self._worker.start()
+        worker.log_message.connect(self._log_panel.append_plain)
+        self._run_pipeline_task(worker, t("task_scan"))
 
     @Slot()
     def _on_open_scan_modes(self) -> None:
@@ -978,7 +1012,7 @@ class MainWindow(QMainWindow):
         if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return False
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return False
         return True
@@ -1016,11 +1050,10 @@ class MainWindow(QMainWindow):
         self._start_deep_pipeline(MODE_REBUILD)
 
     def _start_deep_pipeline(self, mode: str) -> None:
-        """Launch the deep-learning pipeline worker in the given mode."""
+        """Launch the deep-learning (AI) pipeline as a Task Manager task."""
         drive_active = self._gdrive_session is not None
         if not drive_active and not hasattr(self, "_root_folder"):
             return
-        self._set_scanning_state(True)
 
         from app.app_settings import app_qsettings
         _qs = app_qsettings()
@@ -1031,7 +1064,7 @@ class MainWindow(QMainWindow):
             from app.paths import drive_mirror_dir
             folders = self._gdrive_session.folders
             root_id = folders.root_id if folders else ""
-            self._worker = DeepPipelineWorker(
+            worker = DeepPipelineWorker(
                 root_folder="",          # unused in Drive mode
                 config=self._config,
                 mode=mode,
@@ -1044,7 +1077,7 @@ class MainWindow(QMainWindow):
                 ai_debug_log=ai_log,
             )
         else:
-            self._worker = DeepPipelineWorker(
+            worker = DeepPipelineWorker(
                 root_folder=self._root_folder,
                 config=self._config,
                 mode=mode,
@@ -1053,18 +1086,80 @@ class MainWindow(QMainWindow):
                 ai_visualization=ai_viz,
                 ai_debug_log=ai_log,
             )
-        self._pending_suggestion_count = 0
-        self._pending_auto_assignment_count = 0
-        self._worker.progress.connect(self._on_progress)
-        self._worker.log_message.connect(self._log_panel.append_plain)
-        self._worker.suggestions_ready.connect(self._on_suggestions_ready)
-        self._worker.auto_assignments_ready.connect(self._on_auto_assignments_ready)
-        self._worker.finished.connect(self._on_pipeline_finished)
-        self._worker.error.connect(self._on_pipeline_error)
+        worker.log_message.connect(self._log_panel.append_plain)
         if ai_viz:
             self._open_ai_viz_window()
-            self._worker.face_debug.connect(self._on_face_debug)
-        self._worker.start()
+            worker.face_debug.connect(self._on_face_debug)
+
+        name = {
+            MODE_RESCAN: t("task_deep_rescan"),
+            MODE_REBUILD: t("task_deep_rebuild"),
+            MODE_TRAIN: t("task_deep_train"),
+            MODE_DETECT_FACES: t("task_deep_detect"),
+        }.get(mode, t("task_deep_rescan"))
+        self._run_pipeline_task(worker, name)
+
+    def _run_pipeline_task(self, worker, name: str) -> None:
+        """Submit a scan/AI *worker* to the Task Manager at HIGH priority.
+
+        The pipeline is the app's most important work, so it runs at HIGH
+        priority — it preempts a lower-priority task (e.g. an export) when no
+        slot is free, and that task resumes automatically afterwards.  Nothing
+        blocks the UI: the toolbar progress bar and status label are passive.
+        """
+        from app.tasks import TaskPriority, get_task_manager
+
+        self._pending_suggestion_count = 0
+        self._pending_auto_assignment_count = 0
+        self._set_scanning_state(True)
+        self._active_pipeline_worker = worker
+
+        def work(ctx):  # noqa: ANN001 — runs on the task thread
+            return worker.run_in_task(ctx)
+
+        task = get_task_manager().submit(
+            name,
+            work,
+            supports_pause=True,
+            priority=TaskPriority.HIGH,
+            on_done=self._on_pipeline_task_done,
+            on_error=self._on_pipeline_task_error,
+            on_cancelled=self._on_pipeline_task_cancelled,
+        )
+        self._active_pipeline_task = task
+        task.progress_changed.connect(self._on_task_progress)
+
+    def _pipeline_busy(self) -> bool:
+        """True while a scan/AI pipeline task is queued, running or paused."""
+        task = self._active_pipeline_task
+        return task is not None and not task.state.is_final
+
+    @Slot(int, str)
+    def _on_task_progress(self, percent: int, message: str) -> None:
+        """Mirror the active pipeline task's progress onto the toolbar (passive)."""
+        self._progress_bar.setValue(percent)
+        if message:
+            self._status_label.setText(message)
+
+    def _on_pipeline_task_done(self, result: object) -> None:
+        self._active_pipeline_task = None
+        self._active_pipeline_worker = None
+        self._pending_suggestion_count = getattr(result, "n_suggestions", 0)
+        self._pending_auto_assignment_count = getattr(result, "n_auto_assignments", 0)
+        self._on_pipeline_finished(
+            getattr(result, "success", True), getattr(result, "summary", "")
+        )
+
+    def _on_pipeline_task_error(self, message: str) -> None:
+        self._active_pipeline_task = None
+        self._active_pipeline_worker = None
+        self._on_pipeline_error(message)
+
+    def _on_pipeline_task_cancelled(self) -> None:
+        self._active_pipeline_task = None
+        self._active_pipeline_worker = None
+        self._set_scanning_state(False)
+        self._status_label.setText(t("ready"))
 
     @Slot()
     def _on_reset_unknown_persons(self) -> None:
@@ -1079,7 +1174,7 @@ class MainWindow(QMainWindow):
         if self._gdrive_session is None and not hasattr(self, "_root_folder"):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1125,7 +1220,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_cleanup_empty_unknown_persons(self) -> None:
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1177,7 +1272,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
 
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1185,8 +1280,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_stop(self) -> None:
-        if self._worker:
-            self._worker.abort()
+        if self._active_pipeline_task is not None:
+            self._active_pipeline_task.cancel()
             self._stop_btn.setEnabled(False)
 
 
@@ -1247,7 +1342,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_find_overlapping_unknown_faces(self) -> None:
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1283,7 +1378,7 @@ class MainWindow(QMainWindow):
     def _on_find_embedding_duplicate_faces(self) -> None:
         """Embedding-based duplicate finder — catches the same face split across
         two different Unknown clusters, which the geometric search misses."""
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1404,7 +1499,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_identity_repair_scan(self) -> None:
-        if self._worker and self._worker.isRunning():
+        if self._pipeline_busy():
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
@@ -1622,7 +1717,7 @@ class MainWindow(QMainWindow):
     def _on_open_drive_project(self) -> None:
         """Start opening the Drive project session in a background thread."""
         from app.gdrive import preferences
-        from app.gdrive.connectivity import GDriveOfflineError, is_online
+        from app.gdrive.connectivity import is_online
 
         prefs = preferences.load()
         if not prefs.is_ready:
@@ -2669,7 +2764,8 @@ class MainWindow(QMainWindow):
         """Save a manually marked face from the face-recognition preview."""
         from app.db.models import Image
         from app.detectors.base import Detection
-        from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr, save_face_crop
+        from app.utils.image_utils import load_image_bgr_normalized as load_image_bgr
+        from app.utils.image_utils import save_face_crop
 
         log.debug(
             "face create: image_id=%d bbox=(%d,%d,%d,%d)", image_id, x, y, w, h
@@ -3210,6 +3306,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_recluster(self) -> None:
+        if getattr(self, "_recluster_running", False):
+            self._on_open_task_manager()
+            return
         reply = QMessageBox.question(
             self,
             t("recluster_title"),
@@ -3220,16 +3319,38 @@ class MainWindow(QMainWindow):
             return
 
         self._status_label.setText(t("reclustering"))
-        QApplication.processEvents()
+        self._recluster_running = True
+        recognition_config = self._config.recognition
 
-        with session_scope() as session:
-            assignments, _stats = RecognitionService(
-                session, self._config.recognition
-            ).recognize_pending()
-            n = len(assignments)
+        def work(ctx):  # noqa: ANN001 — worker thread
+            # recognize_pending() runs as one bulk pass with no UI-facing chunk
+            # boundary, so honour at least a cancel requested while the task was
+            # still queued before starting the (potentially long) work.
+            ctx.checkpoint()
+            with session_scope() as session:
+                assignments, _stats = RecognitionService(
+                    session, recognition_config
+                ).recognize_pending()
+                return len(assignments)
 
-        self._status_label.setText(t("recluster_done", n=n))
-        self._refresh_persons()
+        def on_done(n: object) -> None:
+            self._recluster_running = False
+            self._status_label.setText(t("recluster_done", n=n))
+            self._refresh_persons()
+
+        def on_error(message: str) -> None:
+            self._recluster_running = False
+            self._status_label.setText(t("ready"))
+            QMessageBox.critical(self, t("recluster_title"), message)
+
+        from app.tasks import get_task_manager
+        get_task_manager().submit(
+            t("task_recluster"),
+            work,
+            on_done=on_done,
+            on_error=on_error,
+            on_cancelled=lambda: setattr(self, "_recluster_running", False),
+        )
 
     # ------------------------------------------------------------------
     # Collage import / export
@@ -3300,17 +3421,33 @@ class MainWindow(QMainWindow):
             return
         _save_dir("paths/last_export", target)
 
-        try:
+        def work(ctx):  # noqa: ANN001 — runs on a worker thread
+            from app.services.export_service import ExportService
             with session_scope() as session:
-                from app.services.export_service import ExportService
-                out = ExportService(session).export_collage_html(target)
+                return ExportService(session).export_collage_html(
+                    target,
+                    progress_cb=ctx.report,
+                    cancel_token=ctx.token,
+                )
+
+        def on_done(out: object) -> None:
             QMessageBox.information(
                 self, t("collage_html_export"),
                 t("static_site_ready", path=out)
             )
-        except Exception as exc:
-            log.exception("Collage HTML export failed")
-            QMessageBox.critical(self, t("export_error"), str(exc))
+
+        def on_error(message: str) -> None:
+            QMessageBox.critical(self, t("export_error"), message)
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_html_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=on_done,
+            on_error=on_error,
+        )
 
     # ------------------------------------------------------------------
     # Export
@@ -3356,10 +3493,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_export_project_package(self) -> None:
-        from app.services.project_package_service import (
-            PACKAGE_EXTENSION,
-            ProjectPackageError,
-        )
+        from app.services.project_package_service import PACKAGE_EXTENSION
 
         default_name = f"face_local_project{PACKAGE_EXTENSION}"
         start_dir = _last_dir("paths/last_package", str(Path.home()))
@@ -3378,50 +3512,46 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             app_version = ""
 
-        progress = QProgressDialog(
-            t("pkg_progress_export"), None, 0, 100, self
-        )
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setValue(0)
+        svc = self._build_package_service()
 
-        def on_progress(cur: int, total: int, _msg: str) -> None:
-            pct = int(cur / total * 100) if total else 0
-            progress.setValue(min(pct, 100))
-            QApplication.processEvents()
+        def work(ctx):  # noqa: ANN001 — worker thread
+            def on_progress(cur: int, total: int, msg: str) -> None:
+                ctx.checkpoint()
+                pct = int(cur / total * 100) if total else 0
+                ctx.report(min(pct, 100), msg or "")
 
-        try:
-            svc = self._build_package_service()
-            result = svc.export_package(
+            return svc.export_package(
                 path, app_version=str(app_version), progress_cb=on_progress
             )
-        except ProjectPackageError as exc:
-            progress.close()
-            log.exception("Project package export failed")
-            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
-            return
-        except Exception as exc:  # noqa: BLE001
-            progress.close()
-            log.exception("Project package export failed")
-            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
-            return
-        finally:
-            progress.close()
 
-        msg = t(
-            "pkg_export_ok",
-            images=result.image_count,
-            crops=result.crop_count,
-            path=result.package_path,
+        def on_done(result: object) -> None:
+            msg = t(
+                "pkg_export_ok",
+                images=result.image_count,
+                crops=result.crop_count,
+                path=result.package_path,
+            )
+            if result.warning_count:
+                msg += t("pkg_export_warn", missing=result.warning_count)
+            QMessageBox.information(self, t("pkg_export_done"), msg)
+
+        def on_error(message: str) -> None:
+            QMessageBox.critical(self, t("pkg_error_title"), message)
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_pkg_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=on_done,
+            on_error=on_error,
         )
-        if result.warning_count:
-            msg += t("pkg_export_warn", missing=result.warning_count)
-        QMessageBox.information(self, t("pkg_export_done"), msg)
+        self._on_open_task_manager()
 
     @Slot()
     def _on_import_project_package(self) -> None:
-        from app.services.project_package_service import ProjectPackageError, ProjectPackageService
+        from app.services.project_package_service import ProjectPackageService
 
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -3460,49 +3590,44 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        progress = QProgressDialog(
-            t("pkg_progress_import"), None, 0, 100, self
-        )
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setValue(0)
+        def work(ctx):  # noqa: ANN001 — worker thread
+            def on_progress(cur: int, total: int, msg: str) -> None:
+                ctx.checkpoint()
+                pct = int(cur / total * 100) if total else 0
+                ctx.report(min(pct, 100), msg or "")
 
-        def on_progress(cur: int, total: int, _msg: str) -> None:
-            pct = int(cur / total * 100) if total else 0
-            progress.setValue(min(pct, 100))
-            QApplication.processEvents()
-
-        try:
-            result = ProjectPackageService.import_package(
+            return ProjectPackageService.import_package(
                 path, dest_dir, progress_cb=on_progress
             )
-        except ProjectPackageError as exc:
-            progress.close()
-            log.exception("Project package import failed")
-            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
-            return
-        except Exception as exc:  # noqa: BLE001
-            progress.close()
-            log.exception("Project package import failed")
-            QMessageBox.critical(self, t("pkg_error_title"), str(exc))
-            return
-        finally:
-            progress.close()
 
-        reply = QMessageBox.question(
-            self,
-            t("pkg_import_title"),
-            t("pkg_import_ok", dest=result.project_dir),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            self._activate_imported_project(result)
-        else:
-            QMessageBox.information(
-                self, t("pkg_import_title"),
-                t("pkg_import_later", dest=result.project_dir),
+        def on_done(result: object) -> None:
+            reply = QMessageBox.question(
+                self,
+                t("pkg_import_title"),
+                t("pkg_import_ok", dest=result.project_dir),
+                QMessageBox.Yes | QMessageBox.No,
             )
+            if reply == QMessageBox.Yes:
+                self._activate_imported_project(result)
+            else:
+                QMessageBox.information(
+                    self, t("pkg_import_title"),
+                    t("pkg_import_later", dest=result.project_dir),
+                )
+
+        def on_error(message: str) -> None:
+            QMessageBox.critical(self, t("pkg_error_title"), message)
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_pkg_import"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=on_done,
+            on_error=on_error,
+        )
+        self._on_open_task_manager()
 
     def _activate_imported_project(self, result) -> None:
         """Open the freshly imported project as the active database."""
@@ -3700,7 +3825,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_scanning_state(self, scanning: bool) -> None:
-        self._scan_modes_btn.setEnabled(not scanning)
+        # The pipeline now runs as a background task, so the UI is never locked
+        # — Scan & Maintenance stays enabled (a second start is guarded by
+        # ``_pipeline_busy``).  Only the Stop button and the passive progress
+        # bar reflect the running state.
         self._stop_btn.setEnabled(scanning)
         self._progress_bar.setVisible(scanning)
         if scanning:
@@ -3791,33 +3919,107 @@ class MainWindow(QMainWindow):
             dlg.exec()
 
     def _refresh_persons(self) -> None:
-        from sqlalchemy.orm import selectinload
-        with session_scope() as session:
-            # Eager-load faces and each face's image in two batched queries.
-            # The old code lazy-loaded them, which meant a SELECT per person
-            # for .faces plus a SELECT per face for .image (the explicit
-            # prewarm loop below).  With many persons/faces that N+1 fan-out
-            # blocked the UI thread for seconds on every refresh — e.g. after
-            # each single face assignment, which is what froze the browser.
-            persons: List[Person] = (
-                session.query(Person)
-                .order_by(Person.name)
-                .options(selectinload(Person.faces).selectinload(Face.image))
-                .all()
-            )
-            from app.services.face_crop_service import ensure_unique_face_crops
-            all_faces = [
-                f
-                for p in persons
-                for f in p.faces
-                if not f.is_excluded
-            ]
-            ensure_unique_face_crops(
-                session,
-                all_faces,
-                self._config.crops_dir_resolved,
-                self._config.scan.thumbnail_size,
-            )
+        # The sidebar only needs plain values (name, face count, one
+        # representative crop per person).  Loading the full Person→Face→Image
+        # ORM graph — embedding blobs included — took 15+ seconds at
+        # 5000 persons / 100k faces and ran on the UI thread after every
+        # single face assignment.  A handful of aggregate queries riding the
+        # ix_faces_person_listing covering index do the same work in
+        # milliseconds.  Crop-path repair (ensure_unique_face_crops) moved to
+        # a one-time startup background task — see _start_crop_repair_task.
+        from sqlalchemy import text as _sql
+
+        from app.perf import timed_block
+        from app.ui.panels.sidebar_panel import FaceData, SidebarPerson
+
+        with timed_block("ui.refresh_persons"):
+            with session_scope() as session:
+                person_rows = session.execute(
+                    _sql(
+                        "SELECT id, name, is_protected, thumbnail_path "
+                        "FROM persons ORDER BY name"
+                    )
+                ).fetchall()
+
+                count_rows = session.execute(
+                    _sql(
+                        "SELECT person_id, COUNT(*) FROM faces "
+                        "WHERE person_id IS NOT NULL GROUP BY person_id"
+                    )
+                ).fetchall()
+                face_counts = {pid: n for pid, n in count_rows}
+
+                # Best-confidence face id per person (index-only window scan).
+                best_rows = session.execute(
+                    _sql(
+                        "SELECT person_id, face_id FROM ("
+                        "  SELECT f.person_id AS person_id, f.id AS face_id,"
+                        "         ROW_NUMBER() OVER ("
+                        "             PARTITION BY f.person_id"
+                        "             ORDER BY f.confidence DESC) AS rn"
+                        "  FROM faces f"
+                        "  WHERE f.person_id IS NOT NULL"
+                        "    AND f.is_excluded = 0"
+                        "    AND f.crop_path IS NOT NULL"
+                        ") WHERE rn = 1"
+                    )
+                ).fetchall()
+                best_face_id = {pid: fid for pid, fid in best_rows}
+
+                # Faces matching a manually chosen person thumbnail override
+                # the best-confidence pick, so the hover popup bbox matches
+                # the visible crop.
+                thumb_rows = session.execute(
+                    _sql(
+                        "SELECT f.person_id, f.id FROM faces f "
+                        "JOIN persons p ON p.id = f.person_id "
+                        "WHERE p.thumbnail_path IS NOT NULL "
+                        "  AND f.crop_path = p.thumbnail_path"
+                    )
+                ).fetchall()
+                for pid, fid in thumb_rows:
+                    best_face_id[pid] = fid
+
+                face_detail: dict[int, tuple] = {}
+                wanted = list(best_face_id.values())
+                for start in range(0, len(wanted), 900):
+                    chunk = wanted[start:start + 900]
+                    placeholders = ",".join(str(int(fid)) for fid in chunk)
+                    detail_rows = session.execute(
+                        _sql(
+                            "SELECT f.id, f.person_id, f.crop_path, i.file_path,"
+                            "       f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h "
+                            f"FROM faces f JOIN images i ON i.id = f.image_id "
+                            f"WHERE f.id IN ({placeholders})"
+                        )
+                    ).fetchall()
+                    for fid, pid, crop, img, bx, by, bw, bh in detail_rows:
+                        face_detail[pid] = (fid, crop, img, (bx, by, bw, bh))
+
+            persons: list[SidebarPerson] = []
+            for pid, name, is_protected, thumbnail_path in person_rows:
+                detail = face_detail.get(pid)
+                if detail is not None:
+                    fid, crop, img, bbox = detail
+                    crop = thumbnail_path or crop
+                    fd = FaceData(
+                        face_id=fid, person_id=pid,
+                        crop_path=crop, image_path=img, bbox=bbox,
+                    )
+                else:
+                    fd = FaceData(
+                        face_id=None, person_id=pid,
+                        crop_path=thumbnail_path, image_path=None, bbox=None,
+                    )
+                persons.append(
+                    SidebarPerson(
+                        id=pid,
+                        name=name,
+                        is_protected=bool(is_protected),
+                        face_count=face_counts.get(pid, 0),
+                        face=fd,
+                    )
+                )
             self._sidebar.populate(persons)
         if hasattr(self, "_family_search"):
             self._family_search.refresh()
@@ -3833,6 +4035,88 @@ class MainWindow(QMainWindow):
     def _open_image_from_family_search(self, image_id: int) -> None:
         self._tabs.setCurrentIndex(1)
         self._image_browser.open_image_by_id(image_id)
+
+    # ------------------------------------------------------------------
+    # Background tasks
+    # ------------------------------------------------------------------
+
+    @Slot()
+    def _on_open_task_manager(self) -> None:
+        from app.ui.dialogs.task_manager_dialog import TaskManagerDialog
+
+        if self._task_manager_dialog is None:
+            self._task_manager_dialog = TaskManagerDialog(self)
+            self._task_manager_dialog.finished.connect(
+                lambda *_: setattr(self, "_task_manager_dialog", None)
+            )
+        self._task_manager_dialog.show()
+        self._task_manager_dialog.raise_()
+        self._task_manager_dialog.activateWindow()
+
+    @Slot(int, int, int)
+    def _on_task_counts_changed(
+        self, running: int, queued: int, paused: int
+    ) -> None:
+        total = running + queued + paused
+        # Bottom-left always-visible button mirrors the live total count
+        # (running + queued + paused) as a single number.
+        self._update_tasks_button_text(total)
+        # Right-side chip appears only while something is pending/running.
+        self._tasks_chip_btn.setVisible(total > 0)
+        if total:
+            self._tasks_chip_btn.setText(f"⚙ {t('tasks_running_chip', n=total)}")
+
+    def _update_tasks_button_text(self, total: Optional[int] = None) -> None:
+        """Set the bottom Task Manager button label to show the live count."""
+        if not hasattr(self, "_tasks_status_btn"):
+            return
+        if total is None:
+            from app.tasks import get_task_manager
+            total = get_task_manager().active_count
+        self._tasks_status_btn.setText(
+            t("tasks_btn_count", n=total) if total else t("tasks_btn")
+        )
+
+    def _start_crop_repair_task(self) -> None:
+        """Repair missing/duplicated crop paths once, in the background.
+
+        This used to run inside ``_refresh_persons`` — i.e. on the UI thread,
+        on every refresh, after every face assignment.  It is a consistency
+        safety net, so running it once per app start (off the UI thread) is
+        enough.
+        """
+        crops_dir = self._config.crops_dir_resolved
+        thumb_size = self._config.scan.thumbnail_size
+
+        def work(ctx) -> int:  # noqa: ANN001
+            from sqlalchemy.orm import lazyload
+
+            from app.services.face_crop_service import ensure_unique_face_crops
+
+            with session_scope() as session:
+                faces = (
+                    session.query(Face)
+                    # Crop repair never touches embeddings — skip the default
+                    # selectin blob load for this full-table query.
+                    .options(lazyload(Face.blob))
+                    .filter(Face.is_excluded == False)  # noqa: E712
+                    .all()
+                )
+                ctx.checkpoint()
+                ctx.report(50, "")
+                return ensure_unique_face_crops(
+                    session, faces, crops_dir, thumb_size
+                )
+
+        from app.tasks import get_task_manager
+
+        def on_done(repaired: object) -> None:
+            if repaired:
+                self._refresh_persons()
+
+        get_task_manager().submit(
+            t("task_crop_repair"), work, on_done=on_done
+        )
 
     # ------------------------------------------------------------------
     # Image library startup check
@@ -3865,8 +4149,9 @@ class MainWindow(QMainWindow):
                     svc.set_library_root(new_root)
                     log.info("Image library root updated to: %s", new_root)
                 except (NotADirectoryError, RuntimeError) as exc:
-                    from app.ui.i18n import t
                     from PySide6.QtWidgets import QMessageBox
+
+                    from app.ui.i18n import t
                     QMessageBox.warning(self, t("error"), str(exc))
 
     # ------------------------------------------------------------------
@@ -3875,6 +4160,27 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         """Intercept close to shut down an open Drive session gracefully."""
+        # Warn when background tasks are still running; cancel them on confirm.
+        from app.tasks import get_task_manager
+        manager = get_task_manager()
+        if manager.has_active_tasks():
+            n = manager.active_count
+            reply = QMessageBox.question(
+                self,
+                t("tasks_title"),
+                t("tasks_close_warning", n=n),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+            manager.cancel_all()
+            # Give the worker threads a brief, bounded window to observe the
+            # cancel and exit cleanly, so we don't tear down QThreads that are
+            # still running (which logs "QThread destroyed while running" and
+            # could interrupt a mid-flight DB write).  The UI stays responsive
+            # via processEvents; we never block longer than the grace period.
+            manager.wait_for_idle(timeout_s=5.0)
         # Finalize any in-progress recording so segments + timeline are saved.
         if self._recorder is not None:
             from app.services.screen_recorder_service import RecorderState

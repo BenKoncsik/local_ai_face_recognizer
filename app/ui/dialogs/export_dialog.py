@@ -11,17 +11,13 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFileDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QRadioButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +25,6 @@ from PySide6.QtWidgets import (
 from app.db.database import session_scope
 from app.services.export_service import ExportService
 from app.services.image_metadata_export_service import (
-    ALL_FIELDS,
     FIELD_DATE,
     FIELD_FILENAME,
     FIELD_GPS,
@@ -366,11 +361,24 @@ class ExportDialog(QDialog):
         )
         if not path:
             return
-        with session_scope() as session:
-            out = ExportService(session).export_csv(
-                target_path=path, person_id=self._scope_person_id()
-            )
-        QMessageBox.information(self, t("csv_exported"), t("export_csv_saved", path=out))
+        person_id = self._scope_person_id()
+
+        def work(ctx):  # noqa: ANN001 — worker thread
+            with session_scope() as session:
+                return ExportService(session).export_csv(
+                    target_path=path, person_id=person_id
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_csv_export"),
+            work,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self, t("csv_exported"), t("export_csv_saved", path=out)
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, t("export_error"), msg),
+        )
 
     def _on_export_json(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -378,11 +386,24 @@ class ExportDialog(QDialog):
         )
         if not path:
             return
-        with session_scope() as session:
-            out = ExportService(session).export_json(
-                target_path=path, person_id=self._scope_person_id()
-            )
-        QMessageBox.information(self, t("json_exported"), t("json_saved", path=out))
+        person_id = self._scope_person_id()
+
+        def work(ctx):  # noqa: ANN001 — worker thread
+            with session_scope() as session:
+                return ExportService(session).export_json(
+                    target_path=path, person_id=person_id
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_json_export"),
+            work,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self, t("json_exported"), t("json_saved", path=out)
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, t("export_error"), msg),
+        )
 
     def _on_export_astro(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -390,55 +411,50 @@ class ExportDialog(QDialog):
         )
         if not folder:
             return
+        person_id = self._scope_person_id()
 
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QProgressDialog
+        # The website export (image resizing + npm build) is slow, so it runs as
+        # a low-priority background task: it never blocks the UI and is preempted
+        # automatically by the AI pipeline.  Image resizing is parallelised
+        # inside the service; the image phase is pause/cancel-able, the opaque
+        # npm build is not (it reports an indeterminate -1 percent).
+        def work(ctx):  # noqa: ANN001 — runs on the task thread
+            from app.services.export_service import ExportService
 
-        from app.workers.astro_export_worker import AstroExportWorker
+            def progress(pct, msg):
+                if pct is not None and pct >= 0:
+                    ctx.report(min(int(pct), 100), str(msg))
+                    ctx.checkpoint()  # pause/cancel only in the image phase
+                else:
+                    # Opaque npm build — keep the bar near full, show the message.
+                    ctx.report(99, str(msg))
 
-        # The export runs in the background (image resizing + npm build are slow).
-        # A modal progress dialog shows the percentage; the build phase reports
-        # as indeterminate (busy) since npm gives no granular progress.
-        dlg = QProgressDialog(t("astro_building"), None, 0, 100, self)
-        dlg.setWindowTitle(t("export_astro_group"))
-        dlg.setWindowModality(Qt.WindowModal)
-        dlg.setMinimumDuration(0)
-        dlg.setAutoClose(False)
-        dlg.setAutoReset(False)
-        dlg.setCancelButton(None)  # build/copy can't be safely interrupted midway
+            with session_scope() as session:
+                return str(
+                    ExportService(session).export_astro(
+                        target_dir=folder,
+                        person_id=person_id,
+                        progress_callback=progress,
+                    )
+                )
 
-        worker = AstroExportWorker(folder, self._scope_person_id())
-        self._astro_worker = worker  # keep a reference so it isn't garbage-collected
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_astro_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: self._astro_open_prompt(out),
+            on_error=self._on_astro_failed,
+        )
 
-        def on_progress(pct: int, msg: str) -> None:
-            if pct < 0:
-                dlg.setRange(0, 0)  # indeterminate / busy
-            else:
-                dlg.setRange(0, 100)
-                dlg.setValue(pct)
-            dlg.setLabelText(msg)
-
-        def cleanup() -> None:
-            dlg.reset()
-            dlg.close()
-            self._astro_worker = None
-
-        def on_done(out: str) -> None:
-            cleanup()
-            self._astro_open_prompt(out)
-
-        def on_fail(kind: str, msg: str) -> None:
-            cleanup()
-            if kind == "node":
-                QMessageBox.warning(self, t("astro_failed"), t("astro_need_node", err=msg))
-            else:
-                QMessageBox.critical(self, t("astro_failed"), msg)
-
-        worker.progress.connect(on_progress)
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        dlg.show()
+    def _on_astro_failed(self, message: str) -> None:
+        # _run_astro_build raises RuntimeError mentioning npm/node when missing.
+        low = message.lower()
+        if "npm" in low or "node" in low:
+            QMessageBox.warning(self, t("astro_failed"), t("astro_need_node", err=message))
+        else:
+            QMessageBox.critical(self, t("astro_failed"), message)
 
     def _astro_open_prompt(self, out: str) -> None:
         import subprocess
@@ -467,12 +483,23 @@ class ExportDialog(QDialog):
         )
         if not folder:
             return
-        with session_scope() as session:
-            n = ExportService(session).export_person_images(
-                person_id=self._person_id, target_dir=folder
-            )
-        QMessageBox.information(
-            self, t("images_exported"), t("files_copied", n=n, folder=folder)
+        person_id = self._person_id
+
+        def work(ctx):  # noqa: ANN001 — worker thread
+            with session_scope() as session:
+                return ExportService(session).export_person_images(
+                    person_id=person_id, target_dir=folder
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_image_export"),
+            work,
+            priority=TaskPriority.LOW,
+            on_done=lambda n: QMessageBox.information(
+                self, t("images_exported"), t("files_copied", n=n, folder=folder)
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, t("export_error"), msg),
         )
 
     def _on_export_metadata(self) -> None:
@@ -574,60 +601,40 @@ class ExportDialog(QDialog):
         if not self._confirm_embed():
             return
 
-        from app.jobs.cancellation import CancellationToken
-        from app.workers.face_metadata_export_worker import FaceMetadataExportWorker
+        options = self._fmeta_options()
 
-        # The export touches one file per image and must run off the UI thread,
-        # otherwise the window — and its Cancel button — would freeze. A
-        # CancellationToken lets the user stop the batch cleanly between images.
-        cancel_token = CancellationToken()
+        # Writing persons into every image file is slow and must not block the
+        # UI, so it runs as a low-priority background task in the Task Manager
+        # (pause/resume/stop there).  Cancellation flows through the task's token
+        # so the service returns its partial "X of Y embedded" summary cleanly.
+        def work(ctx):  # noqa: ANN001 — runs on the task thread
+            import time
 
-        progress = QProgressDialog(t("fmeta_export_starting"), t("fmeta_cancel"), 0, 100, self)
-        progress.setWindowTitle(t("fmeta_group"))
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
+            from app.services.face_metadata_export_service import (
+                FaceMetadataExportService,
+            )
 
-        worker = FaceMetadataExportWorker(self._fmeta_options(), cancel_token)
-        self._fmeta_worker = worker  # keep a reference so it isn't GC'd
+            def cb(done, total, name):
+                ctx.report(int(done / total * 100) if total else 0, name or "")
+                # Block while paused without raising; let a cancel reach the
+                # service so it returns its clean cancelled summary.
+                while ctx.token.paused:
+                    time.sleep(0.1)
 
-        def request_cancel() -> None:
-            # Fired by the Cancel/Close button. Acknowledge in the UI and ask
-            # the worker to stop; the actual stop happens at the next image
-            # boundary, then on_done() reports the cancelled summary.
-            worker.cancel()
-            progress.setLabelText(t("fmeta_cancelling"))
+            with session_scope() as session:
+                return FaceMetadataExportService(session).export_all(
+                    options, progress_cb=cb, cancel_token=ctx.token
+                )
 
-        # Both the explicit Cancel button and the window-close [X] map to the
-        # same cooperative cancel — the dialog never tears down a running write.
-        progress.canceled.connect(request_cancel)
-
-        def on_progress(done: int, total: int, name: str) -> None:
-            if cancel_token.cancelled:
-                return  # keep the "cancelling…" label, don't overwrite it
-            progress.setMaximum(max(total, 1))
-            progress.setValue(done)
-            if name:
-                progress.setLabelText(t("fmeta_processing", name=name, done=done + 1, total=total))
-
-        def on_done(summary) -> None:
-            progress.reset()
-            progress.close()
-            self._fmeta_worker = None
-            self._show_embed_summary(summary)
-
-        def on_fail(message: str) -> None:
-            progress.reset()
-            progress.close()
-            self._fmeta_worker = None
-            QMessageBox.critical(self, t("fmeta_done_title"), message)
-
-        worker.progress.connect(on_progress)
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        progress.show()
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_metadata_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=lambda summary: self._show_embed_summary(summary),
+            on_error=lambda msg: QMessageBox.critical(self, t("fmeta_done_title"), msg),
+        )
 
     def _show_embed_summary(self, summary) -> None:
         if getattr(summary, "cancelled", False):

@@ -185,7 +185,7 @@ class ReRecognitionService:
         faces: List[Face] = (
             self._session.query(Face)
             .filter(Face.image_id.in_(ids))
-            .filter(Face._embedding.isnot(None))
+            .filter(Face.embedding_exists())
             .filter(Face.is_excluded == False)  # noqa: E712
             .all()
         )

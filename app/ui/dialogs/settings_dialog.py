@@ -39,6 +39,17 @@ def _qsettings() -> QSettings:
     return app_qsettings()
 
 
+# Strong refs to probe/stats threads so they outlive a quickly closed dialog
+# (a parented QThread would be destroyed while still running → hard crash).
+_ACTIVE_THREADS: set = set()
+
+
+def _track_thread(thread: QThread) -> QThread:
+    _ACTIVE_THREADS.add(thread)
+    thread.finished.connect(lambda th=thread: _ACTIVE_THREADS.discard(th))
+    return thread
+
+
 class _TpuProbeThread(QThread):
     """Runs probe_tpu() in background so the dialog doesn't freeze."""
 
@@ -47,6 +58,59 @@ class _TpuProbeThread(QThread):
     def run(self) -> None:
         from app.ui.dialogs.tpu_status_dialog import probe_tpu
         self.result_ready.emit(probe_tpu())
+
+
+class _GeneralStatsThread(QThread):
+    """Collects the General tab's slow stats off the UI thread.
+
+    The Drive cache size walks the whole cache directory and the library
+    stats run DB counts — both froze the dialog while it opened.
+    """
+
+    result_ready = Signal(float, int, int)  # cache_mb, n_relative, n_absolute
+
+    def run(self) -> None:
+        cache_mb = 0.0
+        try:
+            from app.gdrive.cache import get_cache_manager
+            cache_mb = get_cache_manager().current_size_bytes() / (1024 * 1024)
+        except Exception:  # noqa: BLE001 — stats only, never break Settings
+            pass
+        n_rel = n_abs = 0
+        try:
+            from app.db.database import session_scope
+            from app.db.models import Image
+            with session_scope() as session:
+                n_rel = session.query(Image).filter(
+                    Image.relative_path.isnot(None)
+                ).count()
+                n_abs = session.query(Image).filter(
+                    Image.relative_path.is_(None)
+                ).count()
+        except Exception:  # noqa: BLE001
+            pass
+        self.result_ready.emit(cache_mb, n_rel, n_abs)
+
+
+class _AudioDevicesThread(QThread):
+    """Probes ffmpeg audio devices in the background (subprocess call)."""
+
+    result_ready = Signal(list)
+
+    def __init__(self, ffmpeg_setting: str, parent=None) -> None:
+        super().__init__(parent)
+        self._ffmpeg_setting = ffmpeg_setting
+
+    def run(self) -> None:
+        try:
+            from app.services.screen_recorder_service import (
+                list_audio_devices,
+                resolve_ffmpeg,
+            )
+            ffmpeg = resolve_ffmpeg(self._ffmpeg_setting or None)
+            self.result_ready.emit(list(list_audio_devices(ffmpeg)))
+        except Exception:  # noqa: BLE001 — empty list leaves "Automatic"
+            self.result_ready.emit([])
 
 
 class SettingsDialog(QDialog):
@@ -68,6 +132,8 @@ class SettingsDialog(QDialog):
         self._new_db_path: Optional[str] = None
         self._language_changed = False
         self._probe_thread: Optional[_TpuProbeThread] = None
+        self._stats_thread: Optional[_GeneralStatsThread] = None
+        self._audio_thread: Optional[_AudioDevicesThread] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -76,14 +142,25 @@ class SettingsDialog(QDialog):
         outer.setSpacing(6)
 
         tabs = QTabWidget()
+        self._tabs_widget = tabs
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
         tabs.addTab(self._build_tab_ai_model(), t("settings_tab_ai_model"))
-        tabs.addTab(self._build_tab_shortcuts(), t("settings_tab_shortcuts"))
-        tabs.addTab(self._build_tab_recording(), t("settings_tab_recording"))
-        tabs.addTab(self._build_tab_gdrive(), t("settings_tab_gdrive"))
+        # Heavy tabs (shortcut table, ffmpeg probing, Drive prefs) are built
+        # lazily on first visit so the dialog itself opens instantly.
+        self._lazy_tab_builders = {}
+        for label, builder in (
+            (t("settings_tab_shortcuts"), self._build_tab_shortcuts),
+            (t("settings_tab_recording"), self._build_tab_recording),
+            (t("settings_tab_gdrive"), self._build_tab_gdrive),
+        ):
+            placeholder = QWidget()
+            QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
+            idx = tabs.addTab(placeholder, label)
+            self._lazy_tab_builders[idx] = builder
         tabs.addTab(self._build_tab_debug(), t("settings_tab_debug"))
+        tabs.currentChanged.connect(self._materialize_tab)
         outer.addWidget(tabs, stretch=1)
 
         # ── Buttons — always visible outside the tabs ─────────────────────
@@ -93,6 +170,34 @@ class SettingsDialog(QDialog):
         outer.addWidget(btns)
 
         self._start_tpu_probe()
+        self._start_general_stats()
+
+    def _materialize_tab(self, index: int) -> None:
+        """Build a lazily constructed tab's real content on first visit."""
+        builder = self._lazy_tab_builders.pop(index, None)
+        if builder is None:
+            return
+        placeholder = self._tabs_widget.widget(index)
+        placeholder.layout().addWidget(builder())
+
+    def _start_general_stats(self) -> None:
+        """Fetch Drive-cache size + library path counts off the UI thread."""
+        self._gdrive_cache_size_label.setText("…")
+        self._lib_stats_label.setText("…")
+        self._stats_thread = _track_thread(_GeneralStatsThread())
+        self._stats_thread.result_ready.connect(self._on_general_stats_ready)
+        self._stats_thread.start()
+
+    def _on_general_stats_ready(self, cache_mb: float, n_rel: int, n_abs: int) -> None:
+        self._gdrive_cache_size_label.setText(
+            t("gdrive_cache_size_value", mb=cache_mb)
+        )
+        parts = []
+        if n_rel:
+            parts.append(t("img_lib_n_relative", n=n_rel))
+        if n_abs:
+            parts.append(t("img_lib_n_absolute", n=n_abs))
+        self._lib_stats_label.setText("  ".join(parts))
 
     def _build_tab_general(self) -> QWidget:
         """Build the first tab containing all existing settings."""
@@ -232,9 +337,8 @@ class SettingsDialog(QDialog):
 
         size_row = QHBoxLayout()
         size_row.addWidget(QLabel(t("gdrive_cache_size_label")))
-        from app.gdrive.cache import get_cache_manager
-        _mb = get_cache_manager().current_size_bytes() / (1024 * 1024)
-        self._gdrive_cache_size_label = QLabel(t("gdrive_cache_size_value", mb=_mb))
+        # Filled in asynchronously — walking the cache directory is slow.
+        self._gdrive_cache_size_label = QLabel("…")
         self._gdrive_cache_size_label.setStyleSheet("color: #aaa; font-size: 11px;")
         size_row.addWidget(self._gdrive_cache_size_label)
         size_row.addStretch()
@@ -390,41 +494,31 @@ class SettingsDialog(QDialog):
 
     def _build_recording_audio_group(self, qs) -> QWidget:
         """Audio device selection, per-source volume sliders and mute toggles."""
-        from app.services.screen_recorder_service import (
-            list_audio_devices,
-            resolve_ffmpeg,
-        )
-
         group = QGroupBox(t("rec_audio_group"))
         form = QFormLayout(group)
 
-        # Best-effort device enumeration; an empty list just leaves "Automatic".
-        ffmpeg = resolve_ffmpeg(
-            qs.value("recording/ffmpeg_path", "", type=str) or None
-        )
-        try:
-            devices = list_audio_devices(ffmpeg)
-        except Exception:  # noqa: BLE001 — never let probing break Settings
-            devices = []
-
+        # Device enumeration spawns an ffmpeg subprocess, so it runs in the
+        # background; the combos start with "Automatic" + the stored device
+        # and the discovered names are merged in when the probe finishes.
         def _device_combo(stored_key: str) -> QComboBox:
             combo = QComboBox()
             combo.addItem(t("rec_audio_auto"), userData="")
-            for name in devices:
-                combo.addItem(name, userData=name)
             stored = qs.value(stored_key, "", type=str) or ""
-            idx = combo.findData(stored)
-            # Keep a stored device even if it is not currently present.
-            if idx < 0 and stored:
+            if stored:
                 combo.addItem(stored, userData=stored)
-                idx = combo.findData(stored)
-            combo.setCurrentIndex(max(0, idx))
+                combo.setCurrentIndex(combo.findData(stored))
             return combo
 
         self._rec_audio_input_combo = _device_combo("recording/audio_input_device")
         form.addRow(t("rec_audio_input_device"), self._rec_audio_input_combo)
         self._rec_system_audio_combo = _device_combo("recording/system_audio_device")
         form.addRow(t("rec_system_audio_device"), self._rec_system_audio_combo)
+
+        self._audio_thread = _track_thread(
+            _AudioDevicesThread(qs.value("recording/ffmpeg_path", "", type=str) or "")
+        )
+        self._audio_thread.result_ready.connect(self._on_audio_devices_ready)
+        self._audio_thread.start()
 
         def _volume_slider(stored_key: str) -> QSlider:
             slider = QSlider(Qt.Horizontal)
@@ -521,6 +615,16 @@ class SettingsDialog(QDialog):
         )
         _sync_checklist_enabled()
         return group
+
+    def _on_audio_devices_ready(self, devices: list) -> None:
+        """Merge discovered device names into the combos, keeping selection."""
+        for combo in (self._rec_audio_input_combo, self._rec_system_audio_combo):
+            current = combo.currentData()
+            for name in devices:
+                if combo.findData(name) < 0:
+                    combo.addItem(name, userData=name)
+            idx = combo.findData(current)
+            combo.setCurrentIndex(max(0, idx))
 
     def _on_browse_recording_dir(self) -> None:
         start = self._rec_dir_edit.text() or str(Path.home())
@@ -835,7 +939,7 @@ class SettingsDialog(QDialog):
         """Launch TPU probe in background — dialog opens immediately."""
         self._tpu_summary_label.setText(f"⏳ {t('tpu_checking')}")
         self._tpu_summary_label.setStyleSheet("color: #888;")
-        self._probe_thread = _TpuProbeThread(self)
+        self._probe_thread = _track_thread(_TpuProbeThread())
         self._probe_thread.result_ready.connect(self._on_tpu_probe_done)
         self._probe_thread.start()
 
@@ -897,25 +1001,13 @@ class SettingsDialog(QDialog):
         self._update_library_stats()
 
     def _update_library_stats(self) -> None:
-        """Show counts of relative vs. absolute paths in a subtle label."""
-        try:
-            from app.db.database import session_scope
-            from app.db.models import Image
-            with session_scope() as session:
-                n_rel = session.query(Image).filter(
-                    Image.relative_path.isnot(None)
-                ).count()
-                n_abs = session.query(Image).filter(
-                    Image.relative_path.is_(None)
-                ).count()
-            parts = []
-            if n_rel:
-                parts.append(t("img_lib_n_relative", n=n_rel))
-            if n_abs:
-                parts.append(t("img_lib_n_absolute", n=n_abs))
-            self._lib_stats_label.setText("  ".join(parts))
-        except Exception:  # noqa: BLE001
-            self._lib_stats_label.clear()
+        """Refresh the relative/absolute path counts (asynchronously).
+
+        During initial construction the gdrive labels don't exist yet; the
+        first stats pass is started by ``_build_ui`` instead.
+        """
+        if hasattr(self, "_gdrive_cache_size_label"):
+            self._start_general_stats()
 
     def _on_change_library_root(self) -> None:
         svc = get_image_library_optional()
@@ -1081,21 +1173,39 @@ class SettingsDialog(QDialog):
             return
 
         self._fq_reanalyze_btn.setEnabled(False)
-        try:
+
+        def work(ctx):  # noqa: ANN001 — worker thread
             from app.db.database import session_scope
             from app.services.face_quality_service import FaceQualityBatchService
+
+            def on_progress(current: int, total: int) -> None:
+                ctx.checkpoint()
+                ctx.report(int(current / total * 100) if total else 0, "")
+
             with session_scope() as session:
-                svc = FaceQualityBatchService(session)
-                processed = svc.evaluate_all()
-            QMessageBox.information(
-                self,
-                t("fq_group"),
-                t("fq_reanalyze_done", n=processed),
-            )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, t("error"), str(exc))
-        finally:
+                return FaceQualityBatchService(session).evaluate_all(
+                    progress_cb=on_progress
+                )
+
+        def on_done(processed: object) -> None:
             self._fq_reanalyze_btn.setEnabled(True)
+            QMessageBox.information(
+                self, t("fq_group"), t("fq_reanalyze_done", n=processed)
+            )
+
+        def on_error(message: str) -> None:
+            self._fq_reanalyze_btn.setEnabled(True)
+            QMessageBox.critical(self, t("error"), message)
+
+        from app.tasks import get_task_manager
+        get_task_manager().submit(
+            t("task_quality_reanalyze"),
+            work,
+            supports_pause=True,
+            on_done=on_done,
+            on_error=on_error,
+            on_cancelled=lambda: self._fq_reanalyze_btn.setEnabled(True),
+        )
 
     def _on_accept(self) -> None:
         qs = _qsettings()
@@ -1112,54 +1222,57 @@ class SettingsDialog(QDialog):
         suggest_pct = min(self._rerec_suggest_spin.value(), auto_pct - 1)
         qs.setValue("rerecognition/auto_threshold", auto_pct / 100.0)
         qs.setValue("rerecognition/suggest_threshold", max(1, suggest_pct) / 100.0)
-        qs.setValue("recording/output_dir", self._rec_dir_edit.text().strip())
-        qs.setValue("recording/quality", self._rec_quality_combo.currentData())
-        qs.setValue("recording/fps", self._rec_fps_spin.value())
-        qs.setValue("recording/segment_seconds", self._rec_segment_spin.value())
-        qs.setValue("recording/ffmpeg_path", self._rec_ffmpeg_edit.text().strip())
-        qs.setValue("recording/capture_cursor", self._rec_cursor_check.isChecked())
-        qs.setValue(
-            "recording/capture_microphone", self._rec_mic_check.isChecked()
-        )
-        qs.setValue(
-            "recording/capture_system_audio", self._rec_sysaudio_check.isChecked()
-        )
-        qs.setValue("recording/concat_on_stop", self._rec_concat_check.isChecked())
-        qs.setValue(
-            "recording/audio_input_device",
-            self._rec_audio_input_combo.currentData() or "",
-        )
-        qs.setValue(
-            "recording/system_audio_device",
-            self._rec_system_audio_combo.currentData() or "",
-        )
-        qs.setValue(
-            "recording/mic_volume", self._rec_mic_volume_slider.value() / 100.0
-        )
-        qs.setValue(
-            "recording/system_volume",
-            self._rec_system_volume_slider.value() / 100.0,
-        )
-        qs.setValue(
-            "recording/mute_microphone", self._rec_mute_mic_check.isChecked()
-        )
-        qs.setValue(
-            "recording/mute_system_audio", self._rec_mute_system_check.isChecked()
-        )
-        mode_btn = self._rec_mode_group.checkedButton()
-        if mode_btn is not None:
-            qs.setValue("recording/display_mode", mode_btn.property("rec_mode"))
-        qs.setValue(
-            "recording/selected_display_ids",
-            [
-                cb.property("display_id")
-                for cb in self._rec_display_checks
-                if cb.isChecked()
-            ],
-        )
-        qs.setValue(
-            "recording/auto_reduce_fps", self._rec_auto_fps_check.isChecked()
-        )
+        # The Recording tab is built lazily — only persist its values when the
+        # user actually visited it (its widgets exist).
+        if hasattr(self, "_rec_dir_edit"):
+            qs.setValue("recording/output_dir", self._rec_dir_edit.text().strip())
+            qs.setValue("recording/quality", self._rec_quality_combo.currentData())
+            qs.setValue("recording/fps", self._rec_fps_spin.value())
+            qs.setValue("recording/segment_seconds", self._rec_segment_spin.value())
+            qs.setValue("recording/ffmpeg_path", self._rec_ffmpeg_edit.text().strip())
+            qs.setValue("recording/capture_cursor", self._rec_cursor_check.isChecked())
+            qs.setValue(
+                "recording/capture_microphone", self._rec_mic_check.isChecked()
+            )
+            qs.setValue(
+                "recording/capture_system_audio", self._rec_sysaudio_check.isChecked()
+            )
+            qs.setValue("recording/concat_on_stop", self._rec_concat_check.isChecked())
+            qs.setValue(
+                "recording/audio_input_device",
+                self._rec_audio_input_combo.currentData() or "",
+            )
+            qs.setValue(
+                "recording/system_audio_device",
+                self._rec_system_audio_combo.currentData() or "",
+            )
+            qs.setValue(
+                "recording/mic_volume", self._rec_mic_volume_slider.value() / 100.0
+            )
+            qs.setValue(
+                "recording/system_volume",
+                self._rec_system_volume_slider.value() / 100.0,
+            )
+            qs.setValue(
+                "recording/mute_microphone", self._rec_mute_mic_check.isChecked()
+            )
+            qs.setValue(
+                "recording/mute_system_audio", self._rec_mute_system_check.isChecked()
+            )
+            mode_btn = self._rec_mode_group.checkedButton()
+            if mode_btn is not None:
+                qs.setValue("recording/display_mode", mode_btn.property("rec_mode"))
+            qs.setValue(
+                "recording/selected_display_ids",
+                [
+                    cb.property("display_id")
+                    for cb in self._rec_display_checks
+                    if cb.isChecked()
+                ],
+            )
+            qs.setValue(
+                "recording/auto_reduce_fps", self._rec_auto_fps_check.isChecked()
+            )
         qs.setValue("debug/ai_visualization", self._debug_viz_check.isChecked())
         qs.setValue("debug/ai_log_enabled", self._debug_log_check.isChecked())
         # Flush explicitly — the transient QSettings objects above would

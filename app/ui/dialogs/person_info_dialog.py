@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
-    QCompleter,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -31,6 +31,76 @@ from app.ui.i18n import t
 from app.ui.widgets.group_chip_select import GroupChipSelect
 
 log = logging.getLogger(__name__)
+
+# Strong refs to loader threads so they survive their dialog being closed
+# mid-load; each removes itself when finished.
+_ACTIVE_LOADERS: set = set()
+
+
+class _DialogDataThread(QThread):
+    """Loads the dialog's autocomplete / group / object data off the UI thread.
+
+    The dialog used to run ~8 synchronous queries in ``__init__``, which
+    delayed the window becoming visible.  Now it opens instantly and the
+    secondary data arrives via this thread.
+    """
+
+    result_ready = Signal(dict)
+
+    def __init__(self, person_id: int) -> None:
+        super().__init__()
+        self._person_id = person_id
+
+    def run(self) -> None:
+        from sqlalchemy import distinct, select
+
+        from app.db.models import Person as _Person
+        from app.db.models import PersonGroup as _PG
+        from app.services.object_service import ObjectService
+        from app.services.person_group_service import PersonGroupService
+
+        data: dict = {
+            "places": [], "last_names": [], "first_names": [],
+            "all_groups": [], "person_groups": [], "objects": [],
+        }
+        try:
+            with session_scope() as session:
+                def _values(*fields: str) -> List[str]:
+                    out: set[str] = set()
+                    for field in fields:
+                        col = getattr(_Person, field)
+                        rows = session.execute(
+                            select(distinct(col))
+                            .where(col.isnot(None))
+                            .where(col != "")
+                        ).scalars().all()
+                        out.update(rows)
+                    return sorted(out)
+
+                data["places"] = _values("birth_place", "death_place")
+                data["last_names"] = _values("last_name")
+                data["first_names"] = _values("first_name")
+
+                svc = PersonGroupService(session)
+                data["all_groups"] = [
+                    (g.id, g.name)
+                    for g in session.query(_PG).order_by(_PG.name).all()
+                ]
+                data["person_groups"] = [
+                    (g.id, g.name)
+                    for g in svc.get_person_groups(self._person_id)
+                ]
+                data["objects"] = [
+                    (link.name, link.role)
+                    for link in ObjectService(session).get_objects_for_person(
+                        self._person_id
+                    )
+                ]
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "Failed to load dialog data for person id=%d", self._person_id
+            )
+        self.result_ready.emit(data)
 
 
 class PersonInfoDialog(QDialog):
@@ -99,9 +169,7 @@ class PersonInfoDialog(QDialog):
         self._add_scheme_editor_action(self._family_code)
         self._refresh_family_code_help()
         self._family_code.textChanged.connect(
-            lambda: self._refresh_code_warning(
-                self._family_code, self._family_code_warn, self._family_validator
-            )
+            lambda: self._code_check_timer.start()
         )
         form.addRow(t("family_code"), self._family_code)
 
@@ -112,24 +180,9 @@ class PersonInfoDialog(QDialog):
             self._external_family_code, t("external_family_code_help")
         )
         self._external_family_code.textChanged.connect(
-            lambda: self._refresh_code_warning(
-                self._external_family_code,
-                self._external_code_warn,
-                self._external_validator,
-            )
+            lambda: self._code_check_timer.start()
         )
         form.addRow(t("external_family_code"), self._external_family_code)
-
-        # Flag any pre-existing invalid/duplicate codes right away, so the
-        # marker is visible before the user touches the field.
-        self._refresh_code_warning(
-            self._family_code, self._family_code_warn, self._family_validator
-        )
-        self._refresh_code_warning(
-            self._external_family_code,
-            self._external_code_warn,
-            self._external_validator,
-        )
 
         self._last_name = QLineEdit(person.last_name or "")
         self._last_name.setPlaceholderText(t("example_last_name"))
@@ -218,9 +271,18 @@ class PersonInfoDialog(QDialog):
         btn_row.setContentsMargins(12, 4, 12, 4)
         outer.addWidget(btn_row)
 
-        self._setup_completers()
-        self._load_groups()
-        self._load_objects()
+        # Debounced code validation: each keystroke used to run a synchronous
+        # DB query on the UI thread; now the check fires 350 ms after typing
+        # pauses.
+        self._code_check_timer = QTimer(self)
+        self._code_check_timer.setSingleShot(True)
+        self._code_check_timer.setInterval(350)
+        self._code_check_timer.timeout.connect(self._refresh_all_code_warnings)
+        self._code_check_timer.start()
+
+        # Autocomplete / groups / objects load in the background — the dialog
+        # shows immediately.
+        self._start_data_load()
 
     @staticmethod
     def _help_tooltip_html(help_text: str) -> str:
@@ -382,78 +444,47 @@ class PersonInfoDialog(QDialog):
     # Autocomplete
     # ------------------------------------------------------------------
 
-    def _fetch_person_values(self, *fields: str) -> List[str]:
-        from sqlalchemy import select, distinct
-        from app.db.database import session_scope
-        values: set[str] = set()
-        try:
-            with session_scope() as session:
-                for field in fields:
-                    col = getattr(Person, field)
-                    rows = session.execute(
-                        select(distinct(col)).where(col.isnot(None)).where(col != "")
-                    ).scalars().all()
-                    values.update(rows)
-        except Exception:
-            log.exception("Failed to load autocomplete values for person fields %s", fields)
-        return sorted(values)
-
     def _make_completer(self, values: List[str]) -> QCompleter:
         completer = QCompleter(values, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         return completer
 
-    def _setup_completers(self) -> None:
-        places = self._fetch_person_values("birth_place", "death_place")
-        place_completer = self._make_completer(places)
-        self._birth_place.setCompleter(place_completer)
-        self._death_place.setCompleter(self._make_completer(places))
-
-        self._last_name.setCompleter(
-            self._make_completer(self._fetch_person_values("last_name"))
+    def _refresh_all_code_warnings(self) -> None:
+        self._refresh_code_warning(
+            self._family_code, self._family_code_warn, self._family_validator
         )
-        self._first_name.setCompleter(
-            self._make_completer(self._fetch_person_values("first_name"))
+        self._refresh_code_warning(
+            self._external_family_code,
+            self._external_code_warn,
+            self._external_validator,
         )
 
-    def _load_groups(self) -> None:
-        """Populate the GroupChipSelect with all existing groups and this person's groups."""
-        from app.db.models import PersonGroup as _PG
-        try:
-            with session_scope() as session:
-                svc = PersonGroupService(session)
-                all_groups = [
-                    (g.id, g.name)
-                    for g in session.query(_PG).order_by(_PG.name).all()
-                ]
-                person_groups = [
-                    (g.id, g.name) for g in svc.get_person_groups(self._person_id)
-                ]
-        except Exception:
-            log.exception("Failed to load groups for person id=%d", self._person_id)
-            return
-        self._groups.set_available_groups(all_groups)
-        self._groups.set_selected_groups(person_groups)
+    def _start_data_load(self) -> None:
+        thread = _DialogDataThread(self._person_id)
+        thread.result_ready.connect(self._on_data_ready)
+        thread.finished.connect(lambda th=thread: _ACTIVE_LOADERS.discard(th))
+        _ACTIVE_LOADERS.add(thread)
+        thread.start()
 
-    def _load_objects(self) -> None:
-        """Show the objects this person is linked to (read-only)."""
-        from app.services.object_service import ObjectService
+    def _on_data_ready(self, data: dict) -> None:
+        """Apply background-loaded autocomplete, group and object data."""
+        self._birth_place.setCompleter(self._make_completer(data["places"]))
+        self._death_place.setCompleter(self._make_completer(data["places"]))
+        self._last_name.setCompleter(self._make_completer(data["last_names"]))
+        self._first_name.setCompleter(self._make_completer(data["first_names"]))
 
-        try:
-            with session_scope() as session:
-                links = ObjectService(session).get_objects_for_person(self._person_id)
-        except Exception:
-            log.exception("Failed to load objects for person id=%d", self._person_id)
-            return
-        if not links:
+        self._groups.set_available_groups(data["all_groups"])
+        self._groups.set_selected_groups(data["person_groups"])
+
+        if not data["objects"]:
             self._objects_view.setText(t("person_no_objects"))
-            return
-        lines = []
-        for link in links:
-            role = t(f"object_role_{link.role}")
-            lines.append(f"• {link.name} — {role}")
-        self._objects_view.setText("\n".join(lines))
+        else:
+            lines = [
+                f"• {name} — {t(f'object_role_{role}')}"
+                for name, role in data["objects"]
+            ]
+            self._objects_view.setText("\n".join(lines))
 
     # ------------------------------------------------------------------
     # Accessors

@@ -1,23 +1,26 @@
 """Background pipeline worker.
 
-Runs the full scan → detect → embed → recognize → suggest pipeline in a
-QThread so the GUI remains responsive.  Progress is communicated via Qt
-signals.
+Runs the full scan → detect → embed → recognize → suggest pipeline.  The same
+object can run two ways:
 
-Usage::
+* **As a TaskManager task** (the normal path): construct it with a
+  :class:`~app.tasks.manager.TaskContext` via :meth:`run_in_task`, so progress
+  and cancel/pause flow through the unified Task Manager.
+* **As a standalone ``QThread``** (legacy): connect the Qt signals and call
+  ``start()``.
 
-    worker = PipelineWorker(root_folder="/home/user/photos", config=cfg)
-    worker.progress.connect(on_progress)
-    worker.log_message.connect(on_log)
-    worker.finished.connect(on_finished)
-    worker.start()
+In both modes ``log_message`` (and the deep worker's ``face_debug``) are emitted
+as queued Qt signals; the worker QObject lives on the UI thread, so emitting
+from the task thread is delivered safely to the UI.
 """
 
 from __future__ import annotations
 
 import logging
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -25,6 +28,7 @@ from app.config import AppConfig
 from app.db.database import init_db, session_scope
 from app.detectors.factory import create_detector
 from app.embeddings.tflite_embedder import TFLiteEmbedder
+from app.jobs.cancellation import OperationCancelled
 from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
@@ -39,15 +43,29 @@ from app.services.intra_image_duplicate_service import (
 from app.services.recognition_service import RecognitionService, RecognitionStats
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
 
-class PipelineWorker(QThread):
-    """QThread that runs the complete processing pipeline.
+@dataclass
+class PipelineResult:
+    """Outcome of a pipeline run, returned to the Task Manager's ``on_done``.
 
-    Signals:
+    ``success`` is ``False`` for soft failures that should warn the user but are
+    not crashes (e.g. a stage degraded gracefully).  Hard failures raise; user
+    cancellation raises :class:`OperationCancelled` and never produces a result.
+    """
+
+    success: bool
+    summary: str
+    n_suggestions: int = 0
+    n_auto_assignments: int = 0
+
+
+class PipelineWorker(QThread):
+    """Runs the complete processing pipeline (Task Manager task or QThread).
+
+    Signals (legacy QThread mode):
         progress:          ``(current: int, total: int, stage: str, detail: str)``
         log_message:       ``(message: str)``
         suggestions_ready: ``(count: int)`` — number of name suggestions found
@@ -84,29 +102,72 @@ class PipelineWorker(QThread):
         # Override DB path (needed so Drive mode uses the downloaded DB, not
         # the default config path which may point at the wrong file).
         self._db_path_override = db_path_override
+        # Set when running under the Task Manager (cancel/pause + progress).
+        self._ctx = None
 
     @property
     def _drive_mode(self) -> bool:
         return self._drive_client is not None
 
     def abort(self) -> None:
-        """Request a graceful stop (checked between pipeline stages)."""
+        """Request a graceful stop (legacy QThread mode)."""
         self._abort = True
         log.info("Pipeline abort requested")
 
+    # ------------------------------------------------------------------
+    # Entry points
+    # ------------------------------------------------------------------
+
+    def run_in_task(self, ctx) -> PipelineResult:  # noqa: ANN001
+        """Run on the Task Manager's worker thread; return a PipelineResult.
+
+        Raises :class:`OperationCancelled` on cancel and blocks while paused
+        (both via ``ctx.checkpoint()``); raises on hard failure.
+        """
+        self._ctx = ctx
+        return self._run_pipeline()
+
     def run(self) -> None:
-        """Execute the pipeline.  Called by QThread.start()."""
+        """Execute the pipeline as a standalone QThread (legacy)."""
         try:
-            self._run_pipeline()
+            result = self._run_pipeline()
+        except OperationCancelled:
+            self.finished.emit(False, "Aborted")
         except Exception as exc:  # noqa: BLE001
             msg = f"Pipeline error: {exc}\n{traceback.format_exc()}"
             log.error(msg)
             self.error.emit(str(exc))
             self.finished.emit(False, str(exc))
+        else:
+            self.suggestions_ready.emit(result.n_suggestions)
+            self.finished.emit(result.success, result.summary)
+
+    # ------------------------------------------------------------------
+    # Progress / log / cancel routing (mode-aware)
+    # ------------------------------------------------------------------
+
+    def _emit_progress(self, current: int, total: int, stage: str, detail: str) -> None:
+        if self._ctx is not None:
+            pct = int(current / total * 100) if total else 0
+            self._ctx.report(min(max(pct, 0), 100), f"{stage}: {detail}")
+            self._ctx.checkpoint()  # responsive pause/cancel mid-stage
+        else:
+            self.progress.emit(current, total, stage, detail)
+
+    def _emit_log(self, message: str) -> None:
+        # Queued cross-thread signal in both modes (worker lives on UI thread).
+        self.log_message.emit(message)
+
+    def _checkpoint(self) -> None:
+        """Raise OperationCancelled on cancel; block while paused."""
+        if self._ctx is not None:
+            self._ctx.checkpoint()
+        elif self._abort:
+            raise OperationCancelled()
 
     # ------------------------------------------------------------------
 
-    def _run_pipeline(self) -> None:
+    def _run_pipeline(self) -> PipelineResult:
         # Read user preference for face quality filtering.
         from app.app_settings import app_qsettings
         _qs = app_qsettings()
@@ -121,43 +182,34 @@ class PipelineWorker(QThread):
 
         # --- Stage 1: Scan ---
         if self._drive_mode:
-            self.log_message.emit("Stage 1/7: Scanning Google Drive project folder …")
+            self._emit_log("Stage 1/7: Scanning Google Drive project folder …")
         else:
-            self.log_message.emit("Stage 1/7: Scanning image folder …")
+            self._emit_log("Stage 1/7: Scanning image folder …")
         new_ids = self._run_scan()
-        if self._abort:
-            self.finished.emit(False, "Aborted after scan")
-            return
+        self._checkpoint()
 
         # --- Stage 2: Detection ---
         all_pending = self._get_pending_detection_ids()
         mode_label = "high-accuracy" if self._high_accuracy else "fast"
-        self.log_message.emit(
+        self._emit_log(
             f"Stage 2/7: Detecting faces in {len(all_pending)} image(s) [{mode_label} mode] …"
         )
         total_faces = self._run_detection(all_pending)
-        if self._abort:
-            self.finished.emit(False, "Aborted after detection")
-            return
+        self._checkpoint()
 
         # --- Stage 3: Embedding ---
-        self.log_message.emit("Stage 3/7: Generating face embeddings …")
+        self._emit_log("Stage 3/7: Generating face embeddings …")
         try:
             embedded = self._run_embedding(exclude_low_quality)
         except ImportError as exc:
             log.error("TFLite backend missing: %s", exc)
-            user_msg = (
+            raise RuntimeError(
                 "Hiányzik a TFLite futtatókörnyezet. "
                 "Telepítsd/javítsd a Windows AI runtime függőségeket:\n"
                 "  pip install ai-edge-litert\n"
                 f"Részletek: {exc}"
-            )
-            self.error.emit(user_msg)
-            self.finished.emit(False, "Missing TFLite runtime — embedding skipped")
-            return
-        if self._abort:
-            self.finished.emit(False, "Aborted after embedding")
-            return
+            ) from exc
+        self._checkpoint()
 
         # --- Stage 3b: Same-image duplicate-detection cleanup ---
         # Drop freshly detected boxes that are really the same physical face as
@@ -165,15 +217,13 @@ class PipelineWorker(QThread):
         # spurious Unknown identities.
         dedup_stats = self._run_intra_image_dedup(exclude_low_quality)
         if dedup_stats.faces_removed:
-            self.log_message.emit(
+            self._emit_log(
                 f"  Removed {dedup_stats.faces_removed} duplicate detection(s) "
                 f"of already-known faces."
             )
 
         # --- Stage 4: Recognition ---
-        self.log_message.emit(
-            "Stage 4/7: Recognizing faces from learned people …"
-        )
+        self._emit_log("Stage 4/7: Recognizing faces from learned people …")
         rec_stats = self._run_recognition(exclude_low_quality)
 
         # --- Stage 4b: Permanently-ignored face filter ---
@@ -181,29 +231,28 @@ class PipelineWorker(QThread):
         # clustering so suppressed faces never spawn new "Unknown N" persons.
         ignored_stats = self._run_ignored_filter()
         if ignored_stats.n_suppressed:
-            self.log_message.emit(
+            self._emit_log(
                 f"  Suppressed {ignored_stats.n_suppressed} face(s) matching "
                 f"the permanent ignore list."
             )
 
         # --- Stage 5: Unknown-face clustering ---
-        self.log_message.emit(
+        self._emit_log(
             "Stage 5/7: Clustering unassigned faces into Unknown persons …"
         )
         cluster_stats = self._run_clustering(exclude_low_quality)
 
         # --- Stage 6: Same-image identity consistency ---
-        self.log_message.emit(
+        self._emit_log(
             "Stage 6/7: Unifying same-person faces within each image …"
         )
         consistency_stats = self._run_intra_image_consistency(exclude_low_quality)
 
         # --- Stage 7: Name suggestions ---
-        self.log_message.emit(
+        self._emit_log(
             "Stage 7/7: Matching unknown faces against named people …"
         )
         n_suggestions = self._run_suggestions(exclude_low_quality)
-        self.suggestions_ready.emit(n_suggestions)
 
         summary = (
             f"Done — {len(new_ids)} new image(s), "
@@ -222,8 +271,8 @@ class PipelineWorker(QThread):
             f"{consistency_stats.n_persons_removed} fragment(s) removed | "
             f"{n_suggestions} suggestion(s)"
         )
-        self.log_message.emit(summary)
-        self.finished.emit(True, summary)
+        self._emit_log(summary)
+        return PipelineResult(True, summary, n_suggestions=n_suggestions)
 
     # ------------------------------------------------------------------
     # Stage implementations
@@ -233,9 +282,9 @@ class PipelineWorker(QThread):
         def cb(current, total, path):
             detail = Path(path).name
             label = "Drive Scan" if self._drive_mode else "Scanning"
-            self.progress.emit(current, total or 0, label, detail)
+            self._emit_progress(current, total or 0, label, detail)
             if current % 50 == 0:
-                self.log_message.emit(f"  Scanned {current}/{total or '?'} files …")
+                self._emit_log(f"  Scanned {current}/{total or '?'} files …")
 
         if self._drive_mode:
             from app.gdrive.drive_scan_service import DriveScanService
@@ -281,11 +330,11 @@ class PipelineWorker(QThread):
             return 0
 
         detector = create_detector(self._config.detection)
-        self.log_message.emit(f"  Using detector: {detector.backend_name}")
+        self._emit_log(f"  Using detector: {detector.backend_name}")
 
         def cb(current, total, path):
             detail = Path(path).name
-            self.progress.emit(current, total or 0, "Detecting", detail)
+            self._emit_progress(current, total or 0, "Detecting", detail)
 
         with session_scope() as session:
             svc = DetectionService(
@@ -303,13 +352,13 @@ class PipelineWorker(QThread):
             embedding_dim=self._config.embedding.embedding_dim,
             input_size=self._config.embedding.input_size,
         )
-        self.log_message.emit(f"  Embedder backend: {getattr(embedder, '_backend', '?')}")
+        self._emit_log(f"  Embedder backend: {getattr(embedder, '_backend', '?')}")
 
         counter = [0]
 
         def cb(current, total, face_id):
             counter[0] = current
-            self.progress.emit(current, total or 0, "Embedding", f"face #{face_id}")
+            self._emit_progress(current, total or 0, "Embedding", f"face #{face_id}")
 
         with session_scope() as session:
             svc = EmbeddingService(
@@ -332,7 +381,7 @@ class PipelineWorker(QThread):
                     exclude_low_quality=exclude_low_quality,
                 )
                 stats = svc.remove_duplicates()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Deduplicating",
                     f"{stats.faces_removed} duplicate(s) removed",
                 )
@@ -349,7 +398,7 @@ class PipelineWorker(QThread):
                 exclude_low_quality=exclude_low_quality,
             )
             assignments, stats = svc.recognize_pending()
-            self.progress.emit(1, 1, "Recognition", f"{stats.n_assigned} face(s) assigned")
+            self._emit_progress(1, 1, "Recognition", f"{stats.n_assigned} face(s) assigned")
             return stats
 
     def _run_ignored_filter(self) -> "IgnoredFilterStats":
@@ -365,7 +414,7 @@ class PipelineWorker(QThread):
                     config=getattr(self._config, "ignored_faces", None),
                 )
                 stats = svc.suppress_matching_unassigned()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Ignore filter",
                     f"{stats.n_suppressed} face(s) suppressed",
                 )
@@ -384,7 +433,7 @@ class PipelineWorker(QThread):
                     exclude_low_quality=exclude_low_quality,
                 )
                 stats = svc.cluster_unassigned()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Clustering",
                     f"{stats.n_new_persons} new Unknown persons",
                 )
@@ -405,7 +454,7 @@ class PipelineWorker(QThread):
                     exclude_low_quality=exclude_low_quality,
                 )
                 stats = svc.run()
-                self.progress.emit(
+                self._emit_progress(
                     1, 1, "Consistency",
                     f"{stats.n_faces_reassigned} face(s) reunified",
                 )
@@ -424,7 +473,7 @@ class PipelineWorker(QThread):
                     exclude_low_quality=exclude_low_quality,
                 )
                 n = svc.count_suggestions()
-                self.progress.emit(1, 1, "Suggestions", f"{n} match(es)")
+                self._emit_progress(1, 1, "Suggestions", f"{n} match(es)")
                 return n
         except Exception as exc:  # noqa: BLE001
             log.warning("Suggestion stage failed: %s", exc)

@@ -125,7 +125,13 @@ class FaceQualityBatchService:
         Returns:
             Number of faces evaluated.
         """
-        faces: list[Face] = self._session.query(Face).all()
+        from sqlalchemy.orm import lazyload
+
+        # Quality scoring reads crops, never embeddings — skip the default
+        # selectin blob load for this full-table query.
+        faces: list[Face] = (
+            self._session.query(Face).options(lazyload(Face.blob)).all()
+        )
         total = len(faces)
         log.info("Quality batch evaluation: %d face(s)", total)
 

@@ -14,10 +14,12 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -158,31 +160,33 @@ class ExportService:
               ...
             ]
         """
-        from app.services.person_group_service import PersonGroupService
-        group_svc = PersonGroupService(self._session)
-        persons = self._get_persons(person_id)
+        persons = self._person_names(person_id)
+        groups_map = self._person_groups_map()
+        faces_map = self._faces_grouped(person_id)
         records = []
 
-        for person in persons:
-            faces = self._get_faces(person.id)
+        for pid, name in persons:
             face_records = []
-            for f in faces:
+            for (
+                _pid, face_id, image_path,
+                bx, by, bw, bh,
+                confidence, backend, crop_path,
+            ) in faces_map.get(pid, []):
                 face_records.append(
                     {
-                        "face_id": f.id,
-                        "image_path": f.image.file_path if f.image else None,
-                        "bbox": [f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h],
-                        "confidence": round(f.confidence, 4),
-                        "detector_backend": f.detector_backend,
-                        "crop_path": f.crop_path,
+                        "face_id": face_id,
+                        "image_path": image_path,
+                        "bbox": [bx, by, bw, bh],
+                        "confidence": round(confidence, 4),
+                        "detector_backend": backend,
+                        "crop_path": crop_path,
                     }
                 )
-            groups = [g.name for g in group_svc.get_person_groups(person.id)]
             records.append(
                 {
-                    "person_id": person.id,
-                    "person_name": person.name,
-                    "groups": groups,
+                    "person_id": pid,
+                    "person_name": name,
+                    "groups": groups_map.get(pid, []),
                     "faces": face_records,
                 }
             )
@@ -291,19 +295,46 @@ class ExportService:
         # can reference the photos actually written by this export.
         image_id_to_photo_id: Dict[int, str] = {}
 
-        # Resizing every image is the bulk of the work → map it to 5–72%.
         total_images = len(image_faces) or 1
-        for idx, (img_path, face_list) in enumerate(image_faces.items()):
-            _report(5 + int(67 * idx / total_images),
-                    f"Képek feldolgozása ({idx + 1}/{total_images})…")
-            img = load_image_bgr(img_path)
+
+        # Resizing every image is the bulk of the work.  Phase 1 (parallel,
+        # DB-free): load + encode the thumb/medium/original variants of every
+        # image on a thread pool — cv2 releases the GIL during resize/encode, so
+        # it scales across cores.  Phase 2 (below, sequential) assembles the
+        # records using the DB session, which is NOT thread-safe.
+        def _prepare(path: str):
+            img = load_image_bgr(path)
             if img is None:
-                continue
-            img_h, img_w = img.shape[:2]
-            photo_id = _astro_image_id(img_path)
-            variants = _export_image_variants(img, photo_id, images_root)
+                return path, None
+            ih, iw = img.shape[:2]
+            pid = _astro_image_id(path)
+            variants = _export_image_variants(img, pid, images_root)
             if variants is None:
+                return path, None
+            return path, (iw, ih, pid, variants)
+
+        prepared: Dict[str, tuple] = {}
+        max_workers = max(1, min(8, os.cpu_count() or 4))
+        done = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_prepare, p) for p in image_faces.keys()]
+            for fut in as_completed(futures):
+                path, data = fut.result()
+                done += 1
+                # _report may raise (cancel) / block (pause) via the callback.
+                _report(5 + int(55 * done / total_images),
+                        f"Képek feldolgozása ({done}/{total_images})…")
+                if data is not None:
+                    prepared[path] = data
+
+        # Phase 2: assemble per-image records from the precomputed variants.
+        for idx, (img_path, face_list) in enumerate(image_faces.items()):
+            data = prepared.get(img_path)
+            if data is None:
                 continue
+            img_w, img_h, photo_id, variants = data
+            _report(60 + int(12 * idx / total_images),
+                    f"Galéria összeállítása ({idx + 1}/{total_images})…")
 
             face_records: List[dict] = []
             person_ids: List[int] = []
@@ -700,6 +731,8 @@ class ExportService:
         self,
         target_dir: str,
         collage_id: Optional[int] = None,
+        progress_cb: Optional[callable] = None,
+        cancel_token=None,
     ) -> Path:
         """Generate a static HTML page for one or all collages.
 
@@ -731,106 +764,170 @@ class ExportService:
         else:
             collages = svc.list_collages()
 
-        collage_records = []
+        # Stream the HTML: write the template head once, then one JSON record
+        # per collage, then the tail.  Only a single collage (image canvas +
+        # node data) is held in memory at a time, so the export no longer
+        # accumulates every rendered collage before writing — the cause of
+        # memory blow-ups with many/large collages.
+        head, _, tail = _COLLAGE_HTML_TEMPLATE.partition("__COLLAGES_JSON__")
+        html_path = out / "collage_index.html"
         render_h = 800
+        total = max(len(collages), 1)
+        exported = 0
 
-        for collage in collages:
-            cw = collage.format_width or 2858
-            ch = collage.format_height or 1000
-            scale = render_h / ch
-            render_w = int(cw * scale)
+        try:
+            with open(html_path, "w", encoding="utf-8") as fh:
+                fh.write(head)
+                fh.write("[\n")
 
-            # Render the collage image
-            canvas = svc.render_collage_image(
-                collage, render_h=render_h, draw_borders=False, draw_faces=False
+                for idx, collage in enumerate(collages):
+                    if cancel_token is not None:
+                        cancel_token.wait_if_paused()
+                    if progress_cb is not None:
+                        progress_cb(
+                            int(idx / total * 100),
+                            collage.album_title or f"#{collage.id}",
+                        )
+                    record = self._build_collage_record(
+                        svc, collage, img_dir, render_h
+                    )
+                    if exported:
+                        fh.write(",\n")
+                    fh.write(_json_for_script(record, indent=1))
+                    exported += 1
+
+                fh.write("\n]")
+                fh.write(tail)
+        except BaseException:
+            # Cancelled or failed mid-write — don't leave a broken half page.
+            html_path.unlink(missing_ok=True)
+            raise
+
+        if progress_cb is not None:
+            progress_cb(100, "")
+        log.info("Collage HTML export: %d collage(s) → %s", exported, html_path)
+        return html_path
+
+    def _build_collage_record(
+        self, svc, collage, img_dir: Path, render_h: int
+    ) -> dict:
+        """Render one collage and assemble its JSON record.
+
+        Faces and person names for every node image are fetched in two
+        batched queries; the old per-node / per-face ``session.get`` pattern
+        issued thousands of statements on large collages.
+        """
+        from app.services.collage_parser import (
+            CollageNodeData,
+            project_face_to_collage,
+        )
+
+        cw = collage.format_width or 2858
+        ch = collage.format_height or 1000
+        scale = render_h / ch
+        render_w = int(cw * scale)
+
+        # Render the collage image
+        canvas = svc.render_collage_image(
+            collage, render_h=render_h, draw_borders=False, draw_faces=False
+        )
+        safe = _safe_filename(collage.album_title or f"collage_{collage.id}")
+        img_name = f"{safe}_{collage.id}.jpg"
+        if canvas is not None:
+            save_image_bgr(img_dir / img_name, canvas)
+        else:
+            img_name = ""
+
+        # Batch-fetch image dimensions and faces (with person name/notes)
+        # for every node image of this collage.
+        image_ids = sorted({n.image_id for n in collage.nodes if n.image_id})
+        image_dims: dict[int, tuple] = {}
+        faces_by_image: dict[int, list] = {}
+        if image_ids:
+            dim_rows = (
+                self._session.query(Image.id, Image.width, Image.height)
+                .filter(Image.id.in_(image_ids))
+                .all()
             )
-            safe = _safe_filename(collage.album_title or f"collage_{collage.id}")
-            img_name = f"{safe}_{collage.id}.jpg"
-            if canvas is not None:
-                save_image_bgr(img_dir / img_name, canvas)
-            else:
-                img_name = ""
-
-            # Build node data with face projections
-            from app.services.collage_parser import (
-                CollageNodeData,
-                project_face_to_collage,
+            image_dims = {iid: (w, h) for iid, w, h in dim_rows}
+            face_rows = (
+                self._session.query(
+                    Face.image_id,
+                    Face.bbox_x,
+                    Face.bbox_y,
+                    Face.bbox_w,
+                    Face.bbox_h,
+                    Person.name,
+                    Person.notes,
+                )
+                .outerjoin(Person, Person.id == Face.person_id)
+                .filter(Face.image_id.in_(image_ids))
+                .all()
             )
-            nodes_json = []
-            for node in collage.nodes:
-                nd = CollageNodeData(
-                    rel_x=node.rel_x, rel_y=node.rel_y,
-                    rel_w=node.rel_w, rel_h=node.rel_h,
-                    theta=node.theta, scale=node.scale,
-                )
-                px = int(node.rel_x * render_w)
-                py = int(node.rel_y * render_h)
-                pw = max(int(node.rel_w * render_w), 1)
-                ph = max(int(node.rel_h * render_h), 1)
-
-                from pathlib import Path as _P
-                src_name = (
-                    _P(node.src_raw.replace("\\", "/")).name
-                    if node.src_raw else ""
+            for iid, bx, by, bw, bh, pname, pnotes in face_rows:
+                faces_by_image.setdefault(iid, []).append(
+                    ((bx, by, bw, bh), pname or "", pnotes or "")
                 )
 
-                face_rects = []
-                if node.image_id:
-                    image = self._session.get(Image, node.image_id)
-                    if image and image.width and image.height:
-                        for face in (
-                            self._session.query(Face)
-                            .filter(Face.image_id == node.image_id)
-                            .all()
-                        ):
-                            bbox = project_face_to_collage(
-                                (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h),
-                                image.width, image.height,
-                                nd, render_w, render_h,
-                            )
-                            if bbox:
-                                person = self._session.get(Person, face.person_id) if face.person_id else None
-                                face_rects.append({
-                                    "x": bbox[0], "y": bbox[1],
-                                    "w": bbox[2], "h": bbox[3],
-                                    "name": person.name if person else "",
-                                    "notes": person.notes if person else "",
-                                })
+        nodes_json = []
+        for node in collage.nodes:
+            nd = CollageNodeData(
+                rel_x=node.rel_x, rel_y=node.rel_y,
+                rel_w=node.rel_w, rel_h=node.rel_h,
+                theta=node.theta, scale=node.scale,
+            )
+            px = int(node.rel_x * render_w)
+            py = int(node.rel_y * render_h)
+            pw = max(int(node.rel_w * render_w), 1)
+            ph = max(int(node.rel_h * render_h), 1)
 
-                year = node.year or ""
-                location = node.location or ""
-                event_name = node.event_name or ""
-                notes = node.notes or ""
+            from pathlib import Path as _P
+            src_name = (
+                _P(node.src_raw.replace("\\", "/")).name
+                if node.src_raw else ""
+            )
 
-                nodes_json.append({
-                    "x": px, "y": py, "w": pw, "h": ph,
-                    "src": src_name,
-                    "uid": node.node_uid or "",
-                    "missing": node.src_missing,
-                    "year": year,
-                    "location": location,
-                    "event": event_name,
-                    "notes": notes,
-                    "faces": face_rects,
-                })
+            face_rects = []
+            if node.image_id:
+                dims = image_dims.get(node.image_id)
+                if dims and dims[0] and dims[1]:
+                    for face_bbox, pname, pnotes in faces_by_image.get(
+                        node.image_id, []
+                    ):
+                        bbox = project_face_to_collage(
+                            face_bbox,
+                            dims[0], dims[1],
+                            nd, render_w, render_h,
+                        )
+                        if bbox:
+                            face_rects.append({
+                                "x": bbox[0], "y": bbox[1],
+                                "w": bbox[2], "h": bbox[3],
+                                "name": pname,
+                                "notes": pnotes,
+                            })
 
-            collage_records.append({
-                "id": collage.id,
-                "title": collage.album_title or f"Kollázs #{collage.id}",
-                "date": collage.album_date or "",
-                "img": f"collage_images/{img_name}" if img_name else "",
-                "width": render_w,
-                "height": render_h,
-                "nodes": nodes_json,
+            nodes_json.append({
+                "x": px, "y": py, "w": pw, "h": ph,
+                "src": src_name,
+                "uid": node.node_uid or "",
+                "missing": node.src_missing,
+                "year": node.year or "",
+                "location": node.location or "",
+                "event": node.event_name or "",
+                "notes": node.notes or "",
+                "faces": face_rects,
             })
 
-        js_data = _json_for_script(collage_records, indent=1)
-        html_out = _COLLAGE_HTML_TEMPLATE.replace("__COLLAGES_JSON__", js_data)
-        html_path = out / "collage_index.html"
-        html_path.write_text(html_out, encoding="utf-8")
-
-        log.info("Collage HTML export: %d collage(s) → %s", len(collages), html_path)
-        return html_path
+        return {
+            "id": collage.id,
+            "title": collage.album_title or f"Kollázs #{collage.id}",
+            "date": collage.album_date or "",
+            "img": f"collage_images/{img_name}" if img_name else "",
+            "width": render_w,
+            "height": render_h,
+            "nodes": nodes_json,
+        }
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -843,11 +940,67 @@ class ExportService:
         return self._session.query(Person).order_by(Person.name).all()
 
     def _get_faces(self, person_id: int) -> List[Face]:
+        from sqlalchemy.orm import joinedload, lazyload
+
+        # Eager-load the image (exports read image.file_path for every face)
+        # and skip the blob side-table — embeddings are never exported.
         return (
             self._session.query(Face)
+            .options(
+                joinedload(Face.image),
+                lazyload(Face.blob),
+            )
             .filter(Face.person_id == person_id)
             .all()
         )
+
+    def _person_groups_map(self) -> dict[int, List[str]]:
+        """person_id → sorted group names, in one query (avoids per-person N+1)."""
+        from sqlalchemy import text as _sql
+
+        rows = self._session.execute(
+            _sql(
+                "SELECT m.person_id, g.name "
+                "FROM person_group_memberships m "
+                "JOIN person_groups g ON g.id = m.group_id "
+                "ORDER BY m.person_id, g.name"
+            )
+        ).fetchall()
+        result: dict[int, List[str]] = {}
+        for pid, name in rows:
+            result.setdefault(pid, []).append(name)
+        return result
+
+    def _export_face_rows(self, person_id: Optional[int]) -> List[tuple]:
+        """Raw face tuples for CSV/JSON export, grouped-ready, in one query.
+
+        Plain SQL instead of ORM materialization: at 100k faces the entity
+        construction alone took multiple seconds, while the export only needs
+        a handful of scalar columns.
+        """
+        from sqlalchemy import text as _sql
+
+        sql = (
+            "SELECT f.person_id, f.id, i.file_path,"
+            "       f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,"
+            "       f.confidence, f.detector_backend, f.crop_path "
+            "FROM faces f "
+            "LEFT JOIN images i ON i.id = f.image_id "
+            "WHERE f.person_id IS NOT NULL"
+        )
+        params = {}
+        if person_id is not None:
+            sql += " AND f.person_id = :pid"
+            params["pid"] = person_id
+        sql += " ORDER BY f.person_id, f.id"
+        return self._session.execute(_sql(sql), params).fetchall()
+
+    def _faces_grouped(self, person_id: Optional[int]) -> dict[int, List[tuple]]:
+        """person_id → export face tuples (see :meth:`_export_face_rows`)."""
+        grouped: dict[int, List[tuple]] = {}
+        for row in self._export_face_rows(person_id):
+            grouped.setdefault(row[0], []).append(row)
+        return grouped
 
     @staticmethod
     def _resolve_source(face: Face, copy_originals: bool) -> Optional[Path]:
@@ -858,32 +1011,47 @@ class ExportService:
         return None
 
     def _build_rows(self, person_id: Optional[int]) -> List[dict]:
-        from app.services.person_group_service import PersonGroupService
-        svc = PersonGroupService(self._session)
-        persons = self._get_persons(person_id)
+        persons = self._person_names(person_id)
+        groups_map = self._person_groups_map()
+        faces_map = self._faces_grouped(person_id)
         rows = []
-        for person in persons:
-            groups_csv = ", ".join(
-                g.name for g in svc.get_person_groups(person.id)
-            )
-            for face in self._get_faces(person.id):
+        for pid, name in persons:
+            groups_csv = ", ".join(groups_map.get(pid, []))
+            for (
+                _pid, face_id, image_path,
+                bx, by, bw, bh,
+                confidence, backend, crop_path,
+            ) in faces_map.get(pid, []):
                 rows.append(
                     {
-                        "person_id": person.id,
-                        "person_name": person.name,
+                        "person_id": pid,
+                        "person_name": name,
                         "groups": groups_csv,
-                        "face_id": face.id,
-                        "image_path": face.image.file_path if face.image else "",
-                        "bbox_x": face.bbox_x,
-                        "bbox_y": face.bbox_y,
-                        "bbox_w": face.bbox_w,
-                        "bbox_h": face.bbox_h,
-                        "confidence": round(face.confidence, 4),
-                        "detector_backend": face.detector_backend,
-                        "crop_path": face.crop_path or "",
+                        "face_id": face_id,
+                        "image_path": image_path or "",
+                        "bbox_x": bx,
+                        "bbox_y": by,
+                        "bbox_w": bw,
+                        "bbox_h": bh,
+                        "confidence": round(confidence, 4),
+                        "detector_backend": backend,
+                        "crop_path": crop_path or "",
                     }
                 )
         return rows
+
+    def _person_names(self, person_id: Optional[int]) -> List[tuple]:
+        """(id, name) pairs ordered by name — no ORM entities needed."""
+        from sqlalchemy import text as _sql
+
+        if person_id is not None:
+            return self._session.execute(
+                _sql("SELECT id, name FROM persons WHERE id = :pid"),
+                {"pid": person_id},
+            ).fetchall()
+        return self._session.execute(
+            _sql("SELECT id, name FROM persons ORDER BY name")
+        ).fetchall()
 
 
 def _image_export_filename(image_path: str) -> str:
