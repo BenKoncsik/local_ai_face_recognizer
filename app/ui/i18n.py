@@ -3245,6 +3245,25 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "task_thumbnail_build": {"en": "Thumbnail generation",    "hu": "Bélyegképek készítése"},
     "task_rerecognition":   {"en": "Re-recognition",          "hu": "Újra-felismerés"},
     "task_metadata_table":  {"en": "Metadata table export",   "hu": "Metaadat-tábla export"},
+    # Task Manager tabs + Performance monitor
+    "tasks_tab_tasks":      {"en": "Tasks",                   "hu": "Feladatok"},
+    "tasks_tab_perf":       {"en": "Performance",             "hu": "Teljesítmény"},
+    "perf_app_only":        {"en": "App only",                "hu": "Csak az alkalmazás"},
+    "perf_app_only_tip":    {"en": "Show only this app's usage; off = whole machine",
+                             "hu": "Csak az alkalmazás erőforrásai; kikapcsolva = az egész gép"},
+    "perf_cpu":             {"en": "CPU",                     "hu": "CPU"},
+    "perf_gpu":             {"en": "GPU",                     "hu": "GPU"},
+    "perf_ram":             {"en": "Memory",                  "hu": "Memória"},
+    "perf_core":            {"en": "Core {n}",                "hu": "Mag {n}"},
+    "perf_app_cpu":         {"en": "App CPU",                 "hu": "Alkalmazás CPU"},
+    "perf_cpu_section":     {"en": "CPU (per core)",          "hu": "CPU (magonként)"},
+    "perf_cpu_section_app": {"en": "CPU (this app)",          "hu": "CPU (az alkalmazás)"},
+    "perf_ram_section":     {"en": "Memory over time",        "hu": "Memória időben"},
+    "perf_na":              {"en": "n/a",                     "hu": "n/a"},
+    "perf_ram_value":       {"en": "{used} / {total} MB ({pct:.0f}%)",
+                             "hu": "{used} / {total} MB ({pct:.0f}%)"},
+    "perf_ram_value_app":   {"en": "{used} MB ({pct:.1f}%)",
+                             "hu": "{used} MB ({pct:.1f}%)"},
 }
 
 

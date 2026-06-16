@@ -172,6 +172,18 @@ def test_counts_and_active_count(qapp):
     assert high.state is TaskState.RUNNING
 
 
+def test_transient_task_not_kept_in_history(qapp):
+    """A transient task disappears once finished; a normal one stays in history."""
+    mgr = TaskManager(max_concurrent=1)
+    normal = mgr.submit("repair-visible", _noop, priority=TaskPriority.NORMAL)
+    _finish(mgr, normal)
+    assert normal in mgr.all_tasks()  # normal tasks linger in history
+
+    transient = mgr.submit("startup-maintenance", _noop, transient=True)
+    _finish(mgr, transient)
+    assert transient not in mgr.all_tasks()  # vanishes once done
+
+
 def test_cancel_queued_task(qapp):
     """Cancelling a queued task removes it without starting it."""
     mgr = TaskManager(max_concurrent=1)
@@ -187,3 +199,29 @@ def test_cancel_queued_task(qapp):
     assert queued.state is TaskState.CANCELLED
     assert queued not in mgr._queue
     assert mgr.running_count == 0
+
+
+def test_auto_cleanup_finished_tasks(qapp, monkeypatch):
+    """Finished tasks are removed from history 5 minutes after completion."""
+    mgr = TaskManager(max_concurrent=1)
+    task = mgr.submit("work", _noop)
+    _finish(mgr, task)
+    assert task in mgr._history
+
+    # Simulate 5 minutes passing — set finished_at to 5+ minutes ago
+    monkeypatch.setattr(
+        task, "finished_at", time.time() - (5 * 60 + 1),
+        raising=False
+    )
+    mgr._cleanup_expired_tasks()
+    assert task not in mgr._history  # removed after 5 minutes
+
+    # Task finished < 5 minutes ago should not be removed
+    task2 = mgr.submit("work2", _noop)
+    _finish(mgr, task2)
+    monkeypatch.setattr(
+        task2, "finished_at", time.time() - (4 * 60),  # 4 minutes ago
+        raising=False
+    )
+    mgr._cleanup_expired_tasks()
+    assert task2 in mgr._history  # not yet removed

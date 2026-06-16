@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -453,12 +454,15 @@ def test_import_remaps_image_paths_with_relative_path(project, tmp_path):
         remapped = ProjectPackageService.remap_image_paths(
             session, result.manifest, result.images_dir
         )
-        # The single image keeps its portable "sub/photo.jpg" relative path,
-        # which already matches the bundled layout → nothing to rewrite.
-        assert remapped == 0
+        # The relative_path already matches the bundled layout, but file_path
+        # still points at the original machine → it gets repointed to the new
+        # absolute location so direct file_path readers resolve locally.
+        assert remapped == 1
         img = session.query(Image).first()
         assert img.relative_path == "sub/photo.jpg"
-        assert (result.images_dir / "sub" / "photo.jpg").exists()
+        expected = (result.images_dir / "sub" / "photo.jpg").resolve()
+        assert expected.exists()
+        assert Path(img.file_path) == expected
 
 
 def test_import_remaps_legacy_absolute_only_image(tmp_path):
@@ -527,6 +531,10 @@ def test_import_remaps_legacy_absolute_only_image(tmp_path):
         # ...and resolves to a file that actually exists on this machine.
         resolved = resolve_image_path(img)
         assert resolved is not None and resolved.exists()
+        # file_path is repointed at the same on-disk location (so callers that
+        # read it directly no longer chase the original machine's path).
+        assert Path(img.file_path).resolve() == resolved.resolve()
+        assert str(result.images_dir.resolve()) in str(Path(img.file_path).resolve())
 
 
 # ---------------------------------------------------------------------------

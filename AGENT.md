@@ -40,6 +40,7 @@ python -m app.main                   # Run app directly (after setup)
 | Debug face clustering | [`app/clustering/clusterer.py`](app/clustering/clusterer.py) | Adjust DBSCAN epsilon in config |
 | Add export format | [`app/services/export_service.py`](app/services/export_service.py) | Extend `export_by_person()` |
 | Trace pipeline steps | [`app/workers/pipeline_worker.py`](app/workers/pipeline_worker.py) | Follow scan → detect → embed → cluster |
+| Add background task | [`app/tasks/manager.py`](app/tasks/manager.py) | Use `get_task_manager().submit(name, work_fn, priority=TaskPriority.HIGH)` |
 
 ---
 
@@ -65,6 +66,7 @@ Users never research; app always shows exact fix commands or one-click button. E
 | [`app/services/scan_service.py`](app/services/scan_service.py) | `ScanService.scan()` | Find new image files |
 | [`app/services/detection_service.py`](app/services/detection_service.py) | `DetectionService.detect_faces()` | Run detector on image |
 | [`app/ui/i18n.py`](app/ui/i18n.py) | `t("key")` | Translate string to EN/HU |
+| [`app/tasks/manager.py`](app/tasks/manager.py) | `get_task_manager().submit()`, `TaskPriority`, `BackgroundTask` | Priority-scheduled background tasks with UI visibility + auto-cleanup |
 
 ---
 
@@ -264,6 +266,7 @@ python -c "from app.db.database import init_db; init_db(); print('DB ready')"
 | **MobileFaceNet fallback** | Manual download (no canonical URL); fallback HOG keeps app running | [`embeddings/tflite_embedder.py`](app/embeddings/tflite_embedder.py) |
 | **i18n via `t("key")`** | Bilingual requirement; single source of truth | [`ui/i18n.py`](app/ui/i18n.py) |
 | **Multiple DB support** | Let users switch databases; path saved in `~/.face_local_prefs.json` | [`ui/dialogs/settings_dialog.py`](app/ui/dialogs/settings_dialog.py) |
+| **TaskManager for all background work** | Unified scheduling, priority queue, pause/resume, UI visibility; auto-cleanup after 5 min | [`tasks/manager.py`](app/tasks/manager.py) |
 
 ---
 

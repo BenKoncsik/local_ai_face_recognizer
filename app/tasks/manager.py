@@ -50,13 +50,16 @@ import time
 from enum import IntEnum
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, QTimer, Qt, QThread, Signal
 
 from app.jobs.cancellation import CancellationToken, OperationCancelled
 
 log = logging.getLogger(__name__)
 
 _task_ids = itertools.count(1)
+
+#: Time (seconds) to keep finished tasks in history before auto-cleanup
+_AUTO_CLEANUP_SECONDS = 5 * 60
 
 
 class TaskPriority(IntEnum):
@@ -162,6 +165,7 @@ class BackgroundTask(QObject):
         *,
         supports_pause: bool = False,
         priority: TaskPriority = TaskPriority.NORMAL,
+        transient: bool = False,
     ) -> None:
         super().__init__()
         self.id: int = next(_task_ids)
@@ -169,6 +173,9 @@ class BackgroundTask(QObject):
         self._fn = fn
         self.supports_pause = supports_pause
         self.priority = priority
+        # Transient tasks (e.g. startup maintenance) are not kept in the
+        # finished-task history — they vanish from the list once done.
+        self.transient = transient
         self.token = CancellationToken()
         self.state: TaskState = TaskState.QUEUED
         self.progress: int = 0
@@ -296,6 +303,10 @@ class TaskManager(QObject):
         self._running: List[BackgroundTask] = []
         self._paused: List[BackgroundTask] = []
         self._history: List[BackgroundTask] = []
+        # Auto-cleanup finished tasks after 5 minutes
+        self._cleanup_timer = QTimer()
+        self._cleanup_timer.timeout.connect(self._cleanup_expired_tasks)
+        self._cleanup_timer.start(10_000)  # check every 10 seconds
 
     # -- public API --------------------------------------------------------
 
@@ -306,6 +317,7 @@ class TaskManager(QObject):
         *,
         supports_pause: bool = False,
         priority: TaskPriority = TaskPriority.NORMAL,
+        transient: bool = False,
         on_done: Optional[Callable[[object], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
         on_cancelled: Optional[Callable[[], None]] = None,
@@ -313,10 +325,13 @@ class TaskManager(QObject):
         """Queue *fn* for background execution and return its task handle.
 
         ``on_done(result)`` / ``on_error(message)`` / ``on_cancelled()`` are
-        invoked on the UI thread via the task's ``finished`` signal.
+        invoked on the UI thread via the task's ``finished`` signal.  Set
+        ``transient=True`` for background maintenance that should not linger in
+        the finished-task history once complete.
         """
         task = BackgroundTask(
-            name, fn, supports_pause=supports_pause, priority=priority
+            name, fn, supports_pause=supports_pause, priority=priority,
+            transient=transient,
         )
         task._manager = self
 
@@ -353,6 +368,7 @@ class TaskManager(QObject):
             task._fn,
             supports_pause=task.supports_pause,
             priority=task.priority,
+            transient=task.transient,
         )
 
     def all_tasks(self) -> List[BackgroundTask]:
@@ -559,8 +575,10 @@ class TaskManager(QObject):
         for bucket in (self._running, self._queue, self._paused):
             if task in bucket:
                 bucket.remove(task)
-        self._history.append(task)
-        del self._history[: -self.HISTORY_LIMIT]
+        # Transient maintenance tasks are not kept around once finished.
+        if not task.transient:
+            self._history.append(task)
+            del self._history[: -self.HISTORY_LIMIT]
         log.info(
             "Task finished: #%d %s → %s (%.1fs wall, %.1fs CPU)",
             task.id,
@@ -571,6 +589,20 @@ class TaskManager(QObject):
         )
         self.task_finished.emit(task)
         self._pump()
+
+    def _cleanup_expired_tasks(self) -> None:
+        """Remove finished tasks from history if they've been done for 5 minutes."""
+        now = time.time()
+        expired = []
+        for task in self._history:
+            if (
+                task.finished_at is not None
+                and now - task.finished_at >= _AUTO_CLEANUP_SECONDS
+            ):
+                expired.append(task)
+        for task in expired:
+            self._history.remove(task)
+            log.info("Auto-cleanup: #%d %s removed from history", task.id, task.name)
 
 
 _manager: Optional[TaskManager] = None

@@ -4096,7 +4096,7 @@ class MainWindow(QMainWindow):
                 self._refresh_persons()
 
         get_task_manager().submit(
-            t("task_crop_repair"), work, on_done=on_done
+            t("task_crop_repair"), work, transient=True, on_done=on_done
         )
 
     # ------------------------------------------------------------------

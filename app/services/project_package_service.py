@@ -695,11 +695,21 @@ class ProjectPackageService:
         have no ``relative_path`` at all, so :meth:`ImageLibraryService.resolve_path`
         would fall back to that stale absolute path and fail to find the file.
 
-        This rewrites each image's ``relative_path`` to the path it was bundled
-        under — relative to the extracted ``images/`` directory — so resolution
-        succeeds against the new library root regardless of the original
-        machine's layout.  Images that were not bundled (missing / foreign path
-        at export time) are left untouched.
+        Two columns are rewritten so the project is fully usable on the new
+        machine, keeping the original folder structure under the extracted
+        ``images/`` directory:
+
+        * ``relative_path`` → the path the image was bundled under (relative to
+          ``images/``), so :meth:`ImageLibraryService.resolve_path` resolves it
+          against the new library root regardless of the original layout.
+        * ``file_path``     → the new *absolute* location on this machine.  Many
+          callers read ``image.file_path`` directly (previews, the image
+          browser, exports…); without this they would keep pointing at the
+          original machine's path and report the image as missing.  This mirrors
+          how :meth:`remap_crop_paths` rewrites ``Face.crop_path``.
+
+        Images that were not bundled (missing / foreign path at export time) are
+        left untouched.
 
         Returns the number of rewritten rows.
         """
@@ -708,28 +718,42 @@ class ProjectPackageService:
         images_dir = Path(images_dir)
         entries = (manifest.get("images") or {}).get("entries") or []
         remapped = 0
-        for entry in entries:
-            archive_path = entry.get("archive_path")
-            image_id = entry.get("id")
-            if not archive_path or image_id is None:
-                # Not bundled (missing/foreign at export) — keep existing paths.
-                continue
-            # Extraction sanitises every path component (Windows-illegal chars,
-            # trailing dots, long paths…); mirror that here so the rewritten
-            # relative_path points at the file that actually landed on disk.
-            rel = _archive_path_to_image_rel(_sanitize_archive_path(archive_path))
-            if rel is None:
-                continue
-            # Only repoint when the bundled file actually landed on disk, so a
-            # member that failed to extract never hides behind a broken path.
-            if not _os_exists(images_dir / _from_archive_rel(rel)):
-                continue
-            image = session.get(Image, image_id)
-            if image is None:
-                continue
-            if image.relative_path != rel:
-                image.relative_path = rel
-                remapped += 1
+        # Disable autoflush so the per-row writes are committed in one batch at
+        # the end: ``file_path`` is UNIQUE, and a mid-loop flush could transiently
+        # collide a freshly-rewritten path with an as-yet-unremapped original.
+        with session.no_autoflush:
+            for entry in entries:
+                archive_path = entry.get("archive_path")
+                image_id = entry.get("id")
+                if not archive_path or image_id is None:
+                    # Not bundled (missing/foreign at export) — keep existing paths.
+                    continue
+                # Extraction sanitises every path component (Windows-illegal
+                # chars, trailing dots, long paths…); mirror that here so the
+                # rewritten paths point at the file that actually landed on disk.
+                rel = _archive_path_to_image_rel(
+                    _sanitize_archive_path(archive_path)
+                )
+                if rel is None:
+                    continue
+                on_disk = images_dir / _from_archive_rel(rel)
+                # Only repoint when the bundled file actually landed on disk, so a
+                # member that failed to extract never hides behind a broken path.
+                if not _os_exists(on_disk):
+                    continue
+                image = session.get(Image, image_id)
+                if image is None:
+                    continue
+                new_file_path = str(on_disk.resolve())
+                changed = False
+                if image.relative_path != rel:
+                    image.relative_path = rel
+                    changed = True
+                if image.file_path != new_file_path:
+                    image.file_path = new_file_path
+                    changed = True
+                if changed:
+                    remapped += 1
         if remapped:
             session.flush()
             log.info("Remapped %d image path(s) to %s", remapped, images_dir)
