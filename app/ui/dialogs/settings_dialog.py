@@ -146,6 +146,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_general(), t("settings_tab_general"))
         tabs.addTab(self._build_tab_pairing(), t("settings_tab_pairing"))
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
+        tabs.addTab(self._build_tab_tasks(), t("settings_tab_tasks"))
         tabs.addTab(self._build_tab_ai_model(), t("settings_tab_ai_model"))
         # Heavy tabs (shortcut table, ffmpeg probing, Drive prefs) are built
         # lazily on first visit so the dialog itself opens instantly.
@@ -755,6 +756,37 @@ class SettingsDialog(QDialog):
             log_path.unlink()
         QMessageBox.information(self, t("debug_log_group"), t("debug_log_cleared"))
 
+    def _build_tab_tasks(self) -> QWidget:
+        """Build the Task Manager tab (finished-task auto-cleanup)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setSpacing(14)
+        layout.setContentsMargins(2, 2, 2, 2)
+
+        group = QGroupBox(t("tasks_settings_group"))
+        group_layout = QVBoxLayout(group)
+
+        self._tasks_autocleanup_check = QCheckBox(t("tasks_settings_autocleanup"))
+        self._tasks_autocleanup_check.setChecked(
+            _qsettings().value("tasks/auto_cleanup_enabled", True, type=bool)
+        )
+        group_layout.addWidget(self._tasks_autocleanup_check)
+
+        note = QLabel(t("tasks_settings_note"))
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #888; font-size: 11px;")
+        group_layout.addWidget(note)
+
+        layout.addWidget(group)
+        layout.addStretch(1)
+        scroll.setWidget(inner)
+        return scroll
+
     def _build_tab_face_quality(self) -> QWidget:
         """Build the Face Quality tab."""
         scroll = QScrollArea()
@@ -1215,6 +1247,10 @@ class SettingsDialog(QDialog):
         qs.setValue("geocoding/enabled", self._geocoding_check.isChecked())
         qs.setValue(
             "face_quality/exclude_low_quality", self._fq_exclude_check.isChecked()
+        )
+        qs.setValue(
+            "tasks/auto_cleanup_enabled",
+            self._tasks_autocleanup_check.isChecked(),
         )
         qs.setValue("rerecognition/enabled", self._rerec_enabled_check.isChecked())
         # Keep suggest threshold strictly below the auto-merge threshold.

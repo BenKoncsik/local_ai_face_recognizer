@@ -1127,6 +1127,21 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                            "hu": "(még nincsenek tagok)"},
     "group_member_add":  {"en": "Add member", "hu": "Tag hozzáadása"},
     "group_member_remove": {"en": "Remove", "hu": "Eltávolítás"},
+    "group_chip_remove_tip": {"en": "Remove", "hu": "Eltávolítás"},
+    "group_chip_search_placeholder": {
+        "en": "Search or new category …",
+        "hu": "Keresés vagy új kategória …",
+    },
+    "group_chip_select_placeholder": {
+        "en": "Specify which companies or communities this person belongs to.",
+        "hu": "Add meg, milyen társaságokhoz vagy közösségekhez tartozik ez a személy.",
+    },
+    "group_chip_available_label": {"en": "Existing groups:", "hu": "Meglévő csoportok:"},
+    "group_chip_add_tip": {"en": "Add: {name}", "hu": "Hozzáadás: {name}"},
+    "group_chip_available_empty": {
+        "en": "(no group created yet)",
+        "hu": "(még nincs létrehozva csoport)",
+    },
     "group_member_add_title": {"en": "Add member", "hu": "Tag hozzáadása"},
     "group_member_add_prompt": {
         "en": "Pick a person to add to this group:",
@@ -1221,6 +1236,8 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "overlay_label_tip": {"en": "Label opacity", "hu": "Nevek áttetszősége"},
     "prev_image":        {"en": "← Prev", "hu": "← Előző"},
     "next_image":        {"en": "Next →", "hu": "Következő →"},
+    "img_nav_prev_tip":  {"en": "Previous image  (←)", "hu": "Előző kép  (←)"},
+    "img_nav_next_tip":  {"en": "Next image  (→)", "hu": "Következő kép  (→)"},
 
     # ── Overlapping unknown face cleanup ─────────────────────────────────
     "overlap_dialog_title": {"en": "Overlapping / Duplicate Face Boxes",
@@ -1912,6 +1929,18 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "settings_tab_general":     {"en": "General",               "hu": "Általános"},
     "settings_tab_pairing":     {"en": "Image Pairing",         "hu": "Képpárosítás"},
     "settings_tab_quality":     {"en": "Face Quality",          "hu": "Arc minőség"},
+    "settings_tab_tasks":       {"en": "Task Manager",          "hu": "Feladatkezelő"},
+    "tasks_settings_group":     {"en": "Finished tasks",        "hu": "Befejezett feladatok"},
+    "tasks_settings_autocleanup": {
+        "en": "Automatically remove finished tasks after 5 minutes",
+        "hu": "Befejezett feladatok automatikus törlése 5 perc után",
+    },
+    "tasks_settings_note": {
+        "en": "When off, finished tasks stay in the list until you clear them "
+              "manually with the “Clear finished” button.",
+        "hu": "Kikapcsolva a befejezett feladatok a listában maradnak, amíg "
+              "kézzel nem törlöd a „Befejezettek törlése” gombbal.",
+    },
     "settings_tab_shortcuts":   {"en": "Shortcuts",             "hu": "Billentyűparancsok"},
 
     # ── Face quality filter settings ──────────────────────────────────────
@@ -3234,6 +3263,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "tasks_header_summary": {"en": "{running} running · {queued} queued · {paused} paused",
                              "hu": "{running} fut · {queued} várakozik · {paused} szünetel"},
     "tasks_btn_count":      {"en": "⚙ Tasks ({n})",           "hu": "⚙ Feladatok ({n})"},
+    "tasks_clear_finished": {"en": "Clear finished",           "hu": "Befejezettek törlése"},
+    "tasks_clear_finished_tip": {
+        "en": "Remove all finished tasks from the list",
+        "hu": "Minden befejezett feladat eltávolítása a listából",
+    },
     # Background task names migrated from blocking workers
     "task_scan":            {"en": "Scan & recognition",      "hu": "Beolvasás és felismerés"},
     "task_deep_rescan":     {"en": "AI re-recognition",       "hu": "AI újra-felismerés"},
@@ -3249,8 +3283,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "tasks_tab_tasks":      {"en": "Tasks",                   "hu": "Feladatok"},
     "tasks_tab_perf":       {"en": "Performance",             "hu": "Teljesítmény"},
     "perf_app_only":        {"en": "App only",                "hu": "Csak az alkalmazás"},
-    "perf_app_only_tip":    {"en": "Show only this app's usage; off = whole machine",
-                             "hu": "Csak az alkalmazás erőforrásai; kikapcsolva = az egész gép"},
+    "perf_scope_machine":   {"en": "Whole machine",           "hu": "Teljes gép"},
+    "perf_app_only_tip":    {"en": "Show only this app's usage; click for the whole machine",
+                             "hu": "Csak az alkalmazás erőforrásai; kattints az egész géphez"},
     "perf_cpu":             {"en": "CPU",                     "hu": "CPU"},
     "perf_gpu":             {"en": "GPU",                     "hu": "GPU"},
     "perf_ram":             {"en": "Memory",                  "hu": "Memória"},
@@ -3258,8 +3293,22 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "perf_app_cpu":         {"en": "App CPU",                 "hu": "Alkalmazás CPU"},
     "perf_cpu_section":     {"en": "CPU (per core)",          "hu": "CPU (magonként)"},
     "perf_cpu_section_app": {"en": "CPU (this app)",          "hu": "CPU (az alkalmazás)"},
+    "perf_cpu_total":       {"en": "CPU total",               "hu": "CPU összesen"},
+    "perf_view_combined":   {"en": "Combined",                "hu": "Összevont"},
+    "perf_view_percore":    {"en": "Per core",                "hu": "Magonként"},
+    "perf_view_combined_tip": {
+        "en": "Combined graph vs. one graph per logical core",
+        "hu": "Összevont grafikon vs. logikai magonként egy grafikon",
+    },
+    "perf_io_section":      {"en": "Disk I/O",                "hu": "Lemez I/O"},
+    "perf_io_read":         {"en": "Read",                    "hu": "Olvasás"},
+    "perf_io_write":        {"en": "Write",                   "hu": "Írás"},
+    "perf_io":              {"en": "I/O",                     "hu": "I/O"},
+    "perf_io_rate":         {"en": "{mb:.1f} MB/s",           "hu": "{mb:.1f} MB/s"},
     "perf_ram_section":     {"en": "Memory over time",        "hu": "Memória időben"},
     "perf_na":              {"en": "n/a",                     "hu": "n/a"},
+    "perf_psutil_missing":  {"en": "psutil is not installed — performance monitoring is unavailable.",
+                              "hu": "A psutil nincs telepítve — a teljesítményfigyelés nem elérhető."},
     "perf_ram_value":       {"en": "{used} / {total} MB ({pct:.0f}%)",
                              "hu": "{used} / {total} MB ({pct:.0f}%)"},
     "perf_ram_value_app":   {"en": "{used} MB ({pct:.1f}%)",

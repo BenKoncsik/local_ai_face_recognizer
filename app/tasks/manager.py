@@ -62,6 +62,22 @@ _task_ids = itertools.count(1)
 _AUTO_CLEANUP_SECONDS = 5 * 60
 
 
+def _auto_cleanup_enabled() -> bool:
+    """Whether finished tasks should be auto-removed after a few minutes.
+
+    Controlled from Settings → Task Manager; defaults to on.  Read live so the
+    toggle takes effect without restarting the app.
+    """
+    try:
+        from app.app_settings import app_qsettings
+
+        return app_qsettings().value(
+            "tasks/auto_cleanup_enabled", True, type=bool
+        )
+    except Exception:  # noqa: BLE001 — settings optional, never break cleanup
+        return True
+
+
 class TaskPriority(IntEnum):
     """Scheduling priority — higher value runs first.
 
@@ -371,6 +387,19 @@ class TaskManager(QObject):
             transient=task.transient,
         )
 
+    def clear_finished(self) -> int:
+        """Drop every finished task from the history (manual "clear" action).
+
+        Returns the number of tasks removed.  Emits ``counts_changed`` so the
+        Task Manager window rebuilds its list immediately.
+        """
+        n = len(self._history)
+        if n:
+            self._history.clear()
+            log.info("Cleared %d finished task(s) from history", n)
+            self._emit_counts()
+        return n
+
     def all_tasks(self) -> List[BackgroundTask]:
         """Running + paused + queued + recent history (newest history first)."""
         return (
@@ -592,6 +621,8 @@ class TaskManager(QObject):
 
     def _cleanup_expired_tasks(self) -> None:
         """Remove finished tasks from history if they've been done for 5 minutes."""
+        if not _auto_cleanup_enabled():
+            return
         now = time.time()
         expired = []
         for task in self._history:
@@ -603,6 +634,8 @@ class TaskManager(QObject):
         for task in expired:
             self._history.remove(task)
             log.info("Auto-cleanup: #%d %s removed from history", task.id, task.name)
+        if expired:
+            self._emit_counts()  # nudge the Task Manager window to rebuild
 
 
 _manager: Optional[TaskManager] = None

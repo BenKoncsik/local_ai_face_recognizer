@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui.i18n import t
+
 from app.ui.widgets.flow_layout import FlowContainer as _FlowContainer
 
 log = logging.getLogger(__name__)
@@ -63,7 +65,7 @@ class _SelectedChip(QFrame):
         btn.setObjectName("selChipRemove")
         btn.setFixedSize(16, 16)
         btn.setFlat(True)
-        btn.setToolTip("Eltávolítás")
+        btn.setToolTip(t("group_chip_remove_tip"))
         btn.clicked.connect(lambda: self.removed.emit(self._group_id))
 
         lay.addWidget(lbl)
@@ -102,7 +104,7 @@ class _AvailableChip(QPushButton):
         self._group_id = group_id
         self._name = name
         self.setObjectName("availChip")
-        self.setToolTip(f"Hozzáadás: {name}")
+        self.setToolTip(t("group_chip_add_tip", name=name))
         self.setFlat(True)
         self.clicked.connect(lambda: self.add_requested.emit(self._group_id, self._name))
         self.setStyleSheet("""
@@ -198,7 +200,7 @@ class GroupChipSelect(QWidget):
 
         # --- 1. Search input ---
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Keresés vagy új kategória …")
+        self._search.setPlaceholderText(t("group_chip_search_placeholder"))
         self._search.textChanged.connect(self._on_text_changed)
         self._search.installEventFilter(self)
         outer.addWidget(self._search)
@@ -215,9 +217,7 @@ class GroupChipSelect(QWidget):
         self._selected_container = _FlowContainer(h_spacing=4, v_spacing=4)
         self._selected_layout = self._selected_container.layout()
 
-        self._selected_placeholder = QLabel(
-            "Add meg, milyen társaságokhoz vagy közösségekhez tartozik ez a személy."
-        )
+        self._selected_placeholder = QLabel(t("group_chip_select_placeholder"))
         self._selected_placeholder.setWordWrap(True)
         self._selected_placeholder.setStyleSheet(
             "color: #888; font-style: italic; font-size: 11px;"
@@ -233,13 +233,12 @@ class GroupChipSelect(QWidget):
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
-        self._available_label = QLabel("Meglévő csoportok:")
+        self._available_label = QLabel(t("group_chip_available_label"))
         self._available_label.setStyleSheet("color: #666; font-size: 11px;")
         header_row.addWidget(self._available_label)
         header_row.addStretch()
 
-        from app.ui.i18n import t as _t
-        self._manage_btn = QPushButton(_t("manage_groups"))
+        self._manage_btn = QPushButton(t("manage_groups"))
         self._manage_btn.setFlat(True)
         self._manage_btn.setCursor(Qt.PointingHandCursor)
         self._manage_btn.setStyleSheet(
@@ -254,7 +253,7 @@ class GroupChipSelect(QWidget):
         self._available_layout = self._available_container.layout()
         outer.addWidget(self._available_container)
 
-        self._available_empty_label = QLabel("(még nincs létrehozva csoport)")
+        self._available_empty_label = QLabel(t("group_chip_available_empty"))
         self._available_empty_label.setStyleSheet("color: #aaa; font-size: 11px; font-style: italic;")
         outer.addWidget(self._available_empty_label)
 

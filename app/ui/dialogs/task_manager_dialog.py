@@ -12,6 +12,7 @@ Two tabs:
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from datetime import datetime
 from typing import Deque, List, Optional
@@ -81,6 +82,20 @@ _PRIORITY_COLORS = {
 _GRAPH_HISTORY = 60  # samples kept per graph (≈ last minute at 1 s tick)
 
 
+def _fit_button(btn: QPushButton) -> None:
+    """Widen a button so its label is never clipped (incl. macOS end-caps).
+
+    Qt's native ``sizeHint`` underestimates the width some platform styles need
+    for their rounded end-caps, which clipped the last character of longer
+    labels (e.g. *Újraindítás*).  Sizing from the font metrics plus generous
+    horizontal padding keeps every label fully visible across platforms and
+    languages.
+    """
+    btn.setMinimumHeight(28)
+    width = btn.fontMetrics().horizontalAdvance(btn.text()) + 32
+    btn.setMinimumWidth(width)
+
+
 class _Sparkline(QWidget):
     """Lightweight filled time-series graph (Task-Manager style, 0..maximum)."""
 
@@ -90,12 +105,17 @@ class _Sparkline(QWidget):
         color: str = "#4caf50",
         maximum: float = 100.0,
         history: int = _GRAPH_HISTORY,
+        autoscale: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._title = title
         self._color = QColor(color)
         self._maximum = maximum
+        # Autoscaling graphs (e.g. disk I/O, whose rate has no fixed ceiling)
+        # grow their maximum to fit the largest sample seen so far.
+        self._autoscale = autoscale
+        self._base_maximum = maximum
         self._value_text = ""
         self._values: Deque[float] = deque([0.0] * history, maxlen=history)
         self.setMinimumSize(120, 64)
@@ -109,11 +129,18 @@ class _Sparkline(QWidget):
         self.update()
 
     def add_sample(self, value: float) -> None:
-        self._values.append(max(0.0, float(value)))
+        v = max(0.0, float(value))
+        self._values.append(v)
+        if self._autoscale:
+            peak = max(self._values)
+            # Round the ceiling up to a tidy headroom so the line never pins.
+            self._maximum = max(self._base_maximum, peak * 1.15)
         self.update()
 
     def clear_samples(self) -> None:
         self._values = deque([0.0] * self._values.maxlen, maxlen=self._values.maxlen)
+        if self._autoscale:
+            self._maximum = self._base_maximum
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: ANN001
@@ -184,15 +211,32 @@ def _read_gpu_percent() -> Optional[float]:
 
 
 class PerformancePanel(QWidget):
-    """Live machine/app resource monitor with per-core CPU + memory graphs."""
+    """Live machine/app resource monitor.
+
+    Two independent toggles drive what is shown:
+
+    * **Scope** — *App only* vs. *Whole machine* (drives the memory, I/O and the
+      CPU readout / combined CPU graph).
+    * **View** — *Per core* (one graph per logical core — e.g. two on a
+      1-core / 2-thread CPU) vs. *Combined* (a single total graph).
+
+    Below the CPU section there are always a memory-over-time graph and a disk
+    read/write throughput graph.  Every metric is read through ``psutil`` and is
+    guarded so unsupported combinations (e.g. per-process I/O on macOS) simply
+    show *n/a* instead of breaking the panel.
+    """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._app_only = False
+        self._combined = False
         self._proc = None
         self._ncores = 1
         self._core_graphs: List[_Sparkline] = []
         self._app_cpu_graph: Optional[_Sparkline] = None
+        self._cpu_total_graph: Optional[_Sparkline] = None
+        self._io_last: Optional[tuple] = None       # (read_bytes, write_bytes)
+        self._io_last_wall: Optional[float] = None
 
         try:
             import psutil
@@ -207,24 +251,32 @@ class PerformancePanel(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # --- Header: toggle + readouts ---
+        # --- Header: toggles + readouts ---
         header = QHBoxLayout()
-        self._toggle = QPushButton(t("perf_app_only"))
+        self._toggle = QPushButton()
         self._toggle.setCheckable(True)
         self._toggle.setToolTip(t("perf_app_only_tip"))
-        self._toggle.toggled.connect(self._on_toggle)
+        self._toggle.toggled.connect(self._on_scope_toggle)
         header.addWidget(self._toggle)
+        self._view_toggle = QPushButton()
+        self._view_toggle.setCheckable(True)
+        self._view_toggle.setToolTip(t("perf_view_combined_tip"))
+        self._view_toggle.toggled.connect(self._on_view_toggle)
+        header.addWidget(self._view_toggle)
+        self._update_toggle_labels()
         header.addStretch(1)
         self._cpu_label = QLabel()
         self._gpu_label = QLabel()
         self._ram_label = QLabel()
-        for lbl in (self._cpu_label, self._gpu_label, self._ram_label):
+        self._io_label = QLabel()
+        for lbl in (self._cpu_label, self._gpu_label, self._ram_label,
+                    self._io_label):
             lbl.setStyleSheet("font-weight: bold; padding: 0 8px;")
             header.addWidget(lbl)
         layout.addLayout(header)
 
         if self._psutil is None:
-            layout.addWidget(QLabel("psutil"))
+            layout.addWidget(QLabel(t("perf_psutil_missing")))
             layout.addStretch(1)
             return
 
@@ -245,6 +297,23 @@ class PerformancePanel(QWidget):
         self._mem_graph = _Sparkline(t("perf_ram"), color="#89b4fa")
         layout.addWidget(self._mem_graph, stretch=2)
 
+        # --- Disk I/O section ---
+        io_label = QLabel(t("perf_io_section"))
+        io_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(io_label)
+        io_row = QHBoxLayout()
+        io_row.setContentsMargins(0, 0, 0, 0)
+        io_row.setSpacing(4)
+        self._io_read_graph = _Sparkline(
+            t("perf_io_read"), color="#94e2d5", maximum=1.0, autoscale=True
+        )
+        self._io_write_graph = _Sparkline(
+            t("perf_io_write"), color="#f9e2af", maximum=1.0, autoscale=True
+        )
+        io_row.addWidget(self._io_read_graph)
+        io_row.addWidget(self._io_write_graph)
+        layout.addLayout(io_row, stretch=2)
+
         self._build_cpu_graphs()
 
     # ------------------------------------------------------------------
@@ -257,14 +326,26 @@ class PerformancePanel(QWidget):
                 w.deleteLater()
         self._core_graphs = []
         self._app_cpu_graph = None
+        self._cpu_total_graph = None
 
     def _build_cpu_graphs(self) -> None:
         self._clear_cpu_graphs()
-        if self._app_only:
-            self._cpu_section_label.setText(t("perf_cpu_section_app"))
-            self._app_cpu_graph = _Sparkline(t("perf_app_cpu"), color="#a6e3a1")
-            self._cpu_grid.addWidget(self._app_cpu_graph, 0, 0)
+        if self._combined:
+            # One combined graph; its meaning follows the scope toggle.
+            if self._app_only:
+                self._cpu_section_label.setText(t("perf_cpu_section_app"))
+                self._app_cpu_graph = _Sparkline(t("perf_app_cpu"), color="#a6e3a1")
+                self._cpu_grid.addWidget(self._app_cpu_graph, 0, 0)
+            else:
+                self._cpu_section_label.setText(t("perf_cpu_total"))
+                self._cpu_total_graph = _Sparkline(
+                    t("perf_cpu_total"), color="#4caf50"
+                )
+                self._cpu_grid.addWidget(self._cpu_total_graph, 0, 0)
         else:
+            # Per logical core — one graph per hardware thread (e.g. two on a
+            # 1-core / 2-thread CPU).  Always machine-wide: that is the only
+            # per-core breakdown psutil exposes.
             self._cpu_section_label.setText(t("perf_cpu_section"))
             cols = 4 if self._ncores > 4 else max(1, self._ncores)
             for i in range(self._ncores):
@@ -272,18 +353,79 @@ class PerformancePanel(QWidget):
                 self._core_graphs.append(g)
                 self._cpu_grid.addWidget(g, i // cols, i % cols)
 
-    def _on_toggle(self, checked: bool) -> None:
+    def _update_toggle_labels(self) -> None:
+        """Each toggle's label reflects what it is currently showing."""
+        self._toggle.setText(
+            t("perf_app_only") if self._app_only else t("perf_scope_machine")
+        )
+        self._view_toggle.setText(
+            t("perf_view_combined") if self._combined else t("perf_view_percore")
+        )
+        _fit_button(self._toggle)
+        _fit_button(self._view_toggle)
+
+    def _on_scope_toggle(self, checked: bool) -> None:
         self._app_only = checked
+        self._update_toggle_labels()
+        self._rebuild_after_toggle()
+
+    def _on_view_toggle(self, checked: bool) -> None:
+        self._combined = checked
+        self._update_toggle_labels()
+        self._rebuild_after_toggle()
+
+    def _rebuild_after_toggle(self) -> None:
         if self._psutil is None:
             return
         self._build_cpu_graphs()
         self._mem_graph.clear_samples()
+        self._io_read_graph.clear_samples()
+        self._io_write_graph.clear_samples()
         # Re-prime so the first post-toggle sample is sane.
         try:
             self._proc.cpu_percent(None)
             self._psutil.cpu_percent(percpu=True)
         except Exception:  # noqa: BLE001
             pass
+
+    # ------------------------------------------------------------------
+
+    def _sample_io(self) -> None:
+        """Push disk read/write throughput (MB/s) into the I/O graphs."""
+        ps = self._psutil
+        now = time.time()
+        counters = None
+        try:
+            if self._app_only:
+                io = self._proc.io_counters()  # unavailable on macOS
+                counters = (io.read_bytes, io.write_bytes)
+            else:
+                io = ps.disk_io_counters()
+                if io is not None:
+                    counters = (io.read_bytes, io.write_bytes)
+        except Exception:  # noqa: BLE001 — io_counters absent on macOS, etc.
+            counters = None
+
+        if counters is None:
+            na = t("perf_na")
+            self._io_read_graph.set_value_text(na)
+            self._io_write_graph.set_value_text(na)
+            self._io_label.setText(f"{t('perf_io')} {na}")
+            self._io_last = None
+            self._io_last_wall = None
+            return
+
+        dt = (now - self._io_last_wall) if self._io_last_wall else 0.0
+        if self._io_last is not None and dt > 0:
+            read_mb = max(0.0, (counters[0] - self._io_last[0]) / dt / (1024 * 1024))
+            write_mb = max(0.0, (counters[1] - self._io_last[1]) / dt / (1024 * 1024))
+            self._io_read_graph.add_sample(read_mb)
+            self._io_read_graph.set_value_text(t("perf_io_rate", mb=read_mb))
+            self._io_write_graph.add_sample(write_mb)
+            self._io_write_graph.set_value_text(t("perf_io_rate", mb=write_mb))
+            self._io_label.setText(f"{t('perf_io')} ↓{read_mb:.1f} ↑{write_mb:.1f} MB/s")
+        self._io_last = counters
+        self._io_last_wall = now
 
     def sample(self) -> None:
         """Pull one sample from psutil and push it into the graphs/labels."""
@@ -294,34 +436,44 @@ class PerformancePanel(QWidget):
         gpu_text = f"{gpu:.0f}%" if gpu is not None else t("perf_na")
         self._gpu_label.setText(f"{t('perf_gpu')} {gpu_text}")
 
+        # Machine per-logical-core sample feeds the per-core graphs (in either
+        # scope) and the machine total readout/combined graph.
+        try:
+            per = ps.cpu_percent(percpu=True)
+        except Exception:  # noqa: BLE001
+            per = []
+        cpu_total = sum(per) / len(per) if per else 0.0
+        if not self._combined:
+            for g, v in zip(self._core_graphs, per):
+                g.add_sample(v)
+                g.set_value_text(f"{v:.0f}%")
+
         if self._app_only:
             try:
-                cpu = self._proc.cpu_percent(None) / max(self._ncores, 1)
+                app_cpu = self._proc.cpu_percent(None) / max(self._ncores, 1)
                 mi = self._proc.memory_info().rss
             except Exception:  # noqa: BLE001
                 return
             total = ps.virtual_memory().total
             mem_pct = (mi / total * 100.0) if total else 0.0
-            if self._app_cpu_graph is not None:
-                self._app_cpu_graph.add_sample(cpu)
-                self._app_cpu_graph.set_value_text(f"{cpu:.0f}%")
+            if self._combined and self._app_cpu_graph is not None:
+                self._app_cpu_graph.add_sample(app_cpu)
+                self._app_cpu_graph.set_value_text(f"{app_cpu:.0f}%")
             self._mem_graph.add_sample(mem_pct)
             self._mem_graph.set_value_text(f"{mi // (1024 * 1024)} MB")
-            self._cpu_label.setText(f"{t('perf_cpu')} {cpu:.0f}%")
+            self._cpu_label.setText(f"{t('perf_cpu')} {app_cpu:.0f}%")
             self._ram_label.setText(
                 f"{t('perf_ram')} "
                 + t("perf_ram_value_app", used=mi // (1024 * 1024), pct=mem_pct)
             )
         else:
             try:
-                per = ps.cpu_percent(percpu=True)
                 vm = ps.virtual_memory()
             except Exception:  # noqa: BLE001
                 return
-            for g, v in zip(self._core_graphs, per):
-                g.add_sample(v)
-                g.set_value_text(f"{v:.0f}%")
-            cpu_total = sum(per) / len(per) if per else 0.0
+            if self._combined and self._cpu_total_graph is not None:
+                self._cpu_total_graph.add_sample(cpu_total)
+                self._cpu_total_graph.set_value_text(f"{cpu_total:.0f}%")
             self._mem_graph.add_sample(vm.percent)
             self._mem_graph.set_value_text(f"{vm.percent:.0f}%")
             self._cpu_label.setText(f"{t('perf_cpu')} {cpu_total:.0f}%")
@@ -334,6 +486,8 @@ class PerformancePanel(QWidget):
                     pct=vm.percent,
                 )
             )
+
+        self._sample_io()
 
 
 class TaskManagerDialog(QDialog):
@@ -355,9 +509,17 @@ class TaskManagerDialog(QDialog):
         tasks_layout = QVBoxLayout(tasks_tab)
         tasks_layout.setContentsMargins(0, 4, 0, 0)
 
+        header_row = QHBoxLayout()
         self._summary_label = QLabel()
         self._summary_label.setStyleSheet("color: #888; font-size: 11px;")
-        tasks_layout.addWidget(self._summary_label)
+        header_row.addWidget(self._summary_label)
+        header_row.addStretch(1)
+        self._clear_btn = QPushButton(t("tasks_clear_finished"))
+        self._clear_btn.setToolTip(t("tasks_clear_finished_tip"))
+        self._clear_btn.clicked.connect(self._on_clear_finished)
+        _fit_button(self._clear_btn)
+        header_row.addWidget(self._clear_btn)
+        tasks_layout.addLayout(header_row)
 
         self._table = QTableWidget(0, 9)
         self._table.setHorizontalHeaderLabels(
@@ -385,15 +547,13 @@ class TaskManagerDialog(QDialog):
         header.setSectionResizeMode(COL_MESSAGE, QHeaderView.Stretch)
         header.setSectionResizeMode(COL_PROGRESS, QHeaderView.Fixed)
         self._table.setColumnWidth(COL_PROGRESS, 130)
-        for col in (
-            COL_PRIORITY,
-            COL_STATE,
-            COL_STARTED,
-            COL_ELAPSED,
-            COL_CPU,
-            COL_ACTIONS,
-        ):
+        for col in (COL_PRIORITY, COL_STATE, COL_STARTED, COL_ELAPSED, COL_CPU):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # ResizeToContents mismeasures cells that hold a widget (Qt sizes the
+        # delegate, not the button row), which clipped the action buttons.  A
+        # fixed, generous width keeps every label fully visible on EN and HU.
+        header.setSectionResizeMode(COL_ACTIONS, QHeaderView.Fixed)
+        self._table.setColumnWidth(COL_ACTIONS, 250)
         tasks_layout.addWidget(self._table)
 
         self._empty_label = QLabel(t("tasks_empty"))
@@ -510,10 +670,11 @@ class TaskManagerDialog(QDialog):
         restart_btn.clicked.connect(lambda _=False, tk=task: self._on_restart(tk))
         h.addWidget(restart_btn)
 
-        # Taller buttons so the labels are never clipped vertically; widths
-        # follow the text so nothing is cut horizontally either.
+        # Taller, text-fitted buttons so labels are never clipped (the action
+        # column holds widgets, which Qt's ResizeToContents mismeasures).
+        h.addStretch(1)
         for btn in (pause_btn, cancel_btn, restart_btn):
-            btn.setMinimumHeight(28)
+            _fit_button(btn)
 
         self._table.setCellWidget(row, COL_ACTIONS, actions)
         self._update_row(row, task)
@@ -576,6 +737,7 @@ class TaskManagerDialog(QDialog):
                 if task.state is TaskState.PAUSED
                 else t("tasks_pause_btn")
             )
+            _fit_button(pause_btn)  # Resume/Pause differ in width — refit on change
             cancel_btn.setVisible(not task.state.is_final)
             restart_btn.setVisible(task.state.is_final)
 
@@ -596,6 +758,13 @@ class TaskManagerDialog(QDialog):
                 paused=manager.paused_count,
             )
         )
+        # Only enable "Clear finished" when there is finished history to clear.
+        finished = len(manager.all_tasks()) - manager.active_count
+        self._clear_btn.setEnabled(finished > 0)
+
+    def _on_clear_finished(self) -> None:
+        get_task_manager().clear_finished()
+        self._rebuild()
 
     def _on_change_priority(self, task: BackgroundTask, *, raise_it: bool) -> None:
         new_priority = task.priority.next_up if raise_it else task.priority.next_down

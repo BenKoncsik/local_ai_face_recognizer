@@ -1810,13 +1810,13 @@ class ImageBrowserPanel(QWidget):
         # ─────────────────────────────────────────────────────────────────
 
         self._prev_btn = QPushButton("◀")
-        self._prev_btn.setToolTip("Előző kép  (←)")
+        self._prev_btn.setToolTip(t("img_nav_prev_tip"))
         self._prev_btn.setStyleSheet(_nav_style)
         self._prev_btn.clicked.connect(self._navigate_prev)
         top_bar.addWidget(self._prev_btn)
 
         self._next_btn = QPushButton("▶")
-        self._next_btn.setToolTip("Következő kép  (→)")
+        self._next_btn.setToolTip(t("img_nav_next_tip"))
         self._next_btn.setStyleSheet(_nav_style)
         self._next_btn.clicked.connect(self._navigate_next)
         top_bar.addWidget(self._next_btn)
