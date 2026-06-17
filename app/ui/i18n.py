@@ -1826,6 +1826,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "persons_col_thumbnail":  {"en": "Thumbnail", "hu": "Bélyegkép"},
     "persons_col_name":       {"en": "Name", "hu": "Név"},
     "persons_col_family_code":{"en": "Family code", "hu": "Családi kód"},
+    "persons_col_groups":     {"en": "Groups", "hu": "Társaságok"},
     "persons_col_last_name":  {"en": "Last name", "hu": "Vezetéknév"},
     "persons_col_first_name": {"en": "First name", "hu": "Keresztnév"},
     "persons_col_second_name":{"en": "Second name", "hu": "Második név"},

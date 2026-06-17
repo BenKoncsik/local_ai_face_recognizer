@@ -9,14 +9,14 @@ Persons tab lives here, not in the widget.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy import distinct, func, or_
 from sqlalchemy.orm import Session
 
-from app.db.models import Face, Image, Person
+from app.db.models import Face, Image, Person, PersonGroup, PersonGroupMembership
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class PersonSummary:
     is_protected: bool
     face_count: int
     image_count: int
+    groups: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,18 @@ class PersonService:
             q = q.filter(Person.family_code.ilike(f"%{code}%"))
 
         rows = q.order_by(Person.name).all()
+
+        # Batch-load group memberships to avoid N+1 queries.
+        group_rows = (
+            self._session.query(PersonGroupMembership.person_id, PersonGroup.name)
+            .join(PersonGroup, PersonGroup.id == PersonGroupMembership.group_id)
+            .order_by(PersonGroup.name)
+            .all()
+        )
+        person_groups: dict[int, list[str]] = {}
+        for pid, gname in group_rows:
+            person_groups.setdefault(pid, []).append(gname)
+
         return [
             PersonSummary(
                 person_id=person.id,
@@ -174,6 +187,7 @@ class PersonService:
                 is_protected=bool(person.is_protected),
                 face_count=int(f_count or 0),
                 image_count=int(i_count or 0),
+                groups=person_groups.get(person.id, []),
             )
             for person, f_count, i_count in rows
         ]

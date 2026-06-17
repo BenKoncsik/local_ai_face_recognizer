@@ -63,20 +63,21 @@ COL_ID = 0
 COL_THUMB = 1
 COL_NAME = 2
 COL_FAMILY_CODE = 3
-COL_LAST_NAME = 4
-COL_FIRST_NAME = 5
-COL_SECOND_NAME = 6
-COL_NICKNAME = 7
-COL_MARRIED_NAME = 8
-COL_GENDER = 9
-COL_BIRTH_PLACE = 10
-COL_BIRTH_DATE = 11
-COL_DEATH_PLACE = 12
-COL_DEATH_DATE = 13
-COL_NOTES = 14
-COL_AUTO_NAMED = 15
-COL_PROTECTED = 16
-_COL_COUNT = 17
+COL_GROUPS = 4
+COL_LAST_NAME = 5
+COL_FIRST_NAME = 6
+COL_SECOND_NAME = 7
+COL_NICKNAME = 8
+COL_MARRIED_NAME = 9
+COL_GENDER = 10
+COL_BIRTH_PLACE = 11
+COL_BIRTH_DATE = 12
+COL_DEATH_PLACE = 13
+COL_DEATH_DATE = 14
+COL_NOTES = 15
+COL_AUTO_NAMED = 16
+COL_PROTECTED = 17
+_COL_COUNT = 18
 
 
 class _NumericItem(QTableWidgetItem):
@@ -363,6 +364,7 @@ class PersonsPanel(QWidget):
             t("persons_col_thumbnail"),
             t("persons_col_name"),
             t("persons_col_family_code"),
+            t("persons_col_groups"),
             t("persons_col_last_name"),
             t("persons_col_first_name"),
             t("persons_col_second_name"),
@@ -470,6 +472,7 @@ class PersonsPanel(QWidget):
         text_cols = {
             COL_NAME: s.name,
             COL_FAMILY_CODE: s.family_code or "",
+            COL_GROUPS: ", ".join(s.groups),
             COL_LAST_NAME: s.last_name or "",
             COL_FIRST_NAME: s.first_name or "",
             COL_SECOND_NAME: s.second_name or "",
