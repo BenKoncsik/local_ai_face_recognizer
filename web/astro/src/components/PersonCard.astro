@@ -7,15 +7,18 @@ const href = link(`/persons/${person.id}/`);
 const life = [person.birthYear, person.deathYear].some(Boolean)
   ? `${person.birthYear || ''}–${person.deathYear || ''}`
   : '';
+const displayThumb = person.thumb || (person.faceThumbs && person.faceThumbs[0]) || null;
+const displayW = person.thumb ? (person.thumbW || undefined) : undefined;
+const displayH = person.thumb ? (person.thumbH || undefined) : undefined;
 ---
 <a class="card" href={href}>
   <div class="thumb-wrap">
-    {person.thumb ? (
+    {displayThumb ? (
       <img
-        src={person.thumb}
+        src={displayThumb}
         alt={person.name}
-        width={person.thumbW || undefined}
-        height={person.thumbH || undefined}
+        width={displayW}
+        height={displayH}
         loading="lazy"
         decoding="async"
       />
