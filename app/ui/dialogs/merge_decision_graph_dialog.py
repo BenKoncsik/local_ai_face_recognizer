@@ -477,7 +477,7 @@ class MergeReviewDetailDialog(QDialog):
             )
 
         if pixmap is not None and not pixmap.isNull():
-            scroll = _WheelZoomScrollArea(pixmap)
+            scroll = _WheelZoomScrollArea(pixmap, focus_bbox=self._row.bbox)
             scroll.setWidgetResizable(False)
             lay.addWidget(scroll, stretch=1)
             path_lbl = QLabel(self._row.image_path or "")

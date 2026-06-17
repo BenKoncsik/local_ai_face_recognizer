@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -224,7 +224,12 @@ def _bgr_to_qpixmap(img_bgr: np.ndarray) -> QPixmap:
 class _ZoomDialog(QDialog):
     """Fullscreen-ish dialog showing the image at full resolution with scroll."""
 
-    def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        pixmap: QPixmap,
+        focus_bbox: Optional[Tuple[int, int, int, int]] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("zoom"))
         screen = parent.screen().availableGeometry() if parent else pixmap.rect()
@@ -234,7 +239,7 @@ class _ZoomDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        scroll = _WheelZoomScrollArea(pixmap)
+        scroll = _WheelZoomScrollArea(pixmap, focus_bbox=focus_bbox)
         scroll.setWidgetResizable(False)
         layout.addWidget(scroll)
 
@@ -244,17 +249,66 @@ class _ZoomDialog(QDialog):
 
 
 class _WheelZoomScrollArea(QScrollArea):
-    """Scroll area that zooms the image with the mouse wheel."""
+    """Scroll area that zooms the image with the mouse wheel and supports drag-to-pan."""
 
-    def __init__(self, pixmap: QPixmap, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        pixmap: QPixmap,
+        focus_bbox: Optional[Tuple[int, int, int, int]] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self._source_pixmap = pixmap
         self._zoom = 1.0
+        self._focus_bbox = focus_bbox
+        self._drag_start: Optional[QPoint] = None
+        self._drag_hval = 0
+        self._drag_vval = 0
+
         self._image_label = QLabel()
         self._image_label.setAlignment(Qt.AlignCenter)
         self._image_label.setPixmap(pixmap)
         self._image_label.resize(pixmap.size())
         self.setWidget(self._image_label)
+
+        self.viewport().setCursor(Qt.OpenHandCursor)
+        self.viewport().installEventFilter(self)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._focus_bbox is not None:
+            QTimer.singleShot(0, self._scroll_to_focus)
+
+    def _scroll_to_focus(self) -> None:
+        if self._focus_bbox is None:
+            return
+        x, y, w, h = self._focus_bbox
+        cx = (x + w / 2) * self._zoom
+        cy = (y + h / 2) * self._zoom
+        vp_w = self.viewport().width()
+        vp_h = self.viewport().height()
+        self.horizontalScrollBar().setValue(int(cx - vp_w / 2))
+        self.verticalScrollBar().setValue(int(cy - vp_h / 2))
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.viewport():
+            etype = event.type()
+            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._drag_start = event.position().toPoint()
+                self._drag_hval = self.horizontalScrollBar().value()
+                self._drag_vval = self.verticalScrollBar().value()
+                self.viewport().setCursor(Qt.ClosedHandCursor)
+                return True
+            elif etype == QEvent.Type.MouseMove and self._drag_start is not None:
+                delta = event.position().toPoint() - self._drag_start
+                self.horizontalScrollBar().setValue(self._drag_hval - delta.x())
+                self.verticalScrollBar().setValue(self._drag_vval - delta.y())
+                return True
+            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.LeftButton:
+                self._drag_start = None
+                self.viewport().setCursor(Qt.OpenHandCursor)
+                return True
+        return super().eventFilter(obj, event)
 
     def wheelEvent(self, event) -> None:
         if self._source_pixmap.isNull():
@@ -1490,7 +1544,13 @@ class PreviewPanel(QWidget):
             return
         annotated = _draw_faces_pil(self._orig_img_bgr, self._face_data, self._selected_face_id)
         zoom_pixmap = _bgr_to_qpixmap(annotated)
-        dlg = _ZoomDialog(zoom_pixmap, parent=self)
+        focus_bbox = None
+        if self._selected_face_id is not None:
+            for fd in self._face_data:
+                if fd[0] == self._selected_face_id:
+                    focus_bbox = (fd[1], fd[2], fd[3], fd[4])
+                    break
+        dlg = _ZoomDialog(zoom_pixmap, focus_bbox=focus_bbox, parent=self)
         dlg.exec()
 
     # ------------------------------------------------------------------
