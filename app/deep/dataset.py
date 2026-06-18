@@ -51,6 +51,8 @@ class TrainingDataset:
     labels: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     face_ids: List[int] = field(default_factory=list)
     person_names: Dict[int, str] = field(default_factory=dict)
+    # True for each training example that comes from a manual (human-confirmed) source.
+    manual_flags: List[bool] = field(default_factory=list)
     # face_id pairs the user marked as "different person" / "same person"
     diff_pairs: Set[Tuple[int, int]] = field(default_factory=set)
     same_pairs: Set[Tuple[int, int]] = field(default_factory=set)
@@ -137,6 +139,7 @@ def build_training_dataset(
     vectors: List[np.ndarray] = []
     labels: List[int] = []
     face_ids: List[int] = []
+    manual_flags: List[bool] = []
     person_names: Dict[int, str] = {}
 
     for person in persons:
@@ -154,6 +157,7 @@ def build_training_dataset(
             vectors.append(vec)
             labels.append(person.id)
             face_ids.append(face.id)
+            manual_flags.append(face.assignment_source in TRUSTED_MANUAL_SOURCES)
             person_names[person.id] = person.name
 
     dataset = TrainingDataset(
@@ -164,6 +168,7 @@ def build_training_dataset(
         ),
         labels=np.asarray(labels, dtype=np.int64),
         face_ids=face_ids,
+        manual_flags=manual_flags,
         person_names=person_names,
     )
     _attach_correction_pairs(session, dataset)

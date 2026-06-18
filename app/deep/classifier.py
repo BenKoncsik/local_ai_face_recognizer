@@ -87,6 +87,9 @@ class _TrainedState:
         default_factory=lambda: np.zeros((0, 0), dtype=np.float32)
     )
     train_labels: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    # True for each row of train_matrix that came from a manual/human-confirmed source.
+    # None when loaded from an older persisted model that predates this field.
+    train_manual_mask: Optional[np.ndarray] = field(default=None)
     prob_thresholds: Dict[int, float] = field(default_factory=dict)
     sim_floors: Dict[int, float] = field(default_factory=dict)
     fingerprint: str = ""
@@ -157,12 +160,18 @@ class DeepFaceClassifier:
             log.info("Deep training skipped: no labeled examples")
             return report
 
+        manual_mask = (
+            np.asarray(dataset.manual_flags, dtype=bool)
+            if dataset.manual_flags
+            else None
+        )
         state = _TrainedState(
             mode="prototype",
             classes=sorted(set(dataset.labels.tolist())),
             person_names=dict(dataset.person_names),
             train_matrix=dataset.embeddings.copy(),
             train_labels=dataset.labels.copy(),
+            train_manual_mask=manual_mask,
             fingerprint=report.fingerprint,
             trained_at=time.time(),
         )
@@ -346,7 +355,10 @@ class DeepFaceClassifier:
                 sim = float(np.max(sims[mask])) if mask.any() else 0.0
                 default_floor = self._cfg("min_prototype_similarity", 0.55)
                 floor = max(state.sim_floors.get(pid, default_floor), default_floor)
-                gates.append(GateResult("sim_floor", sim >= floor, sim, floor))
+                # Manual-anchor bypass: gate passes when nearest training example
+                # for the winner is a human-confirmed face above the anchor threshold.
+                sim_floor_passed = sim >= floor or self._has_manual_anchor(sims, pid)
+                gates.append(GateResult("sim_floor", sim_floor_passed, sim, floor))
                 other_mask = state.train_labels != pid
                 runner_sim = float(np.max(sims[other_mask])) if other_mask.any() else 0.0
                 sim_margin_thr = self._cfg("min_sim_margin", 0.05)
@@ -400,7 +412,10 @@ class DeepFaceClassifier:
         # model carries a lower calibrated value.
         default_floor = self._cfg("min_prototype_similarity", 0.55)
         floor = max(state.sim_floors.get(person_id, default_floor), default_floor)
-        if similarity < floor:
+        # When the nearest match is a manually confirmed face, the sim_floor gate
+        # is bypassed: a human labelled this face as ground truth, so we trust it.
+        has_manual_anchor = self._has_manual_anchor(sims, person_id)
+        if similarity < floor and not has_manual_anchor:
             return DeepPrediction(
                 person_id=None, person_name=None, score=similarity,
                 probability=0.0, similarity=similarity, margin=margin,
@@ -455,7 +470,10 @@ class DeepFaceClassifier:
         # model carries a lower calibrated value.
         default_floor = self._cfg("min_prototype_similarity", 0.55)
         floor = max(state.sim_floors.get(person_id, default_floor), default_floor)
-        if similarity < floor:
+        # When the nearest match is a manually confirmed face, the sim_floor gate
+        # is bypassed: a human labelled this face as ground truth, so we trust it.
+        has_manual_anchor = self._has_manual_anchor(sims, person_id)
+        if similarity < floor and not has_manual_anchor:
             return DeepPrediction(
                 person_id=None, person_name=name, score=score,
                 probability=probability, similarity=similarity, margin=margin,
@@ -697,6 +715,24 @@ class DeepFaceClassifier:
     # ------------------------------------------------------------------
     # Small helpers
     # ------------------------------------------------------------------
+
+    def _has_manual_anchor(self, sims: np.ndarray, person_id: int) -> bool:
+        """True when the best-matching training example for *person_id* is a
+        manually confirmed face and its similarity meets the anchor threshold.
+
+        Old persisted models lack ``train_manual_mask`` (the field was added
+        later) — they return False, preserving the original gate behaviour.
+        """
+        state = self._state
+        manual_mask = getattr(state, "train_manual_mask", None)
+        if manual_mask is None or not manual_mask.any():
+            return False
+        person_manual = manual_mask & (state.train_labels == person_id)
+        if not person_manual.any():
+            return False
+        best_manual_sim = float(np.max(sims[person_manual]))
+        anchor_thr = self._cfg("manual_anchor_min_similarity", 0.48)
+        return best_manual_sim >= anchor_thr
 
     def _cfg(self, name: str, default):
         return getattr(self._config, name, default) if self._config is not None else default
