@@ -59,7 +59,7 @@ class CollageNodeDialog(QDialog):
         info_html = "<br>".join(info_lines)
         info_label = QLabel(info_html)
         info_label.setWordWrap(True)
-        info_label.setTextFormat(1)  # Qt.RichText
+        info_label.setTextFormat(Qt.TextFormat.RichText)
         info_label.setStyleSheet(
             "background:#1c1c1c; color:#ddd; border:1px solid #333; "
             "border-radius:4px; padding:8px;"
