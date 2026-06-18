@@ -1666,7 +1666,7 @@ class ImageBrowserPanel(QWidget):
         self._file_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._file_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._file_tree.itemExpanded.connect(self._on_tree_item_expanded)
-        self._file_tree.itemClicked.connect(self._on_tree_item_clicked)
+        self._file_tree.currentItemChanged.connect(self._on_tree_current_item_changed)
         self._file_tree.go_prev.connect(self._navigate_prev)
         self._file_tree.go_next.connect(self._navigate_next)
         tp_layout.addWidget(self._file_tree, stretch=1)
@@ -3229,10 +3229,29 @@ class ImageBrowserPanel(QWidget):
     # Keyboard navigation
     # ──────────────────────────────────────────────────────────────────
 
+    def _on_tree_current_item_changed(self, current: QTreeWidgetItem, _previous: QTreeWidgetItem) -> None:
+        """Handle keyboard Up/Down navigation in the image tree.
+
+        Fires for every current-item change (click, keyboard, programmatic).
+        Programmatic calls from _select_tree_item block signals so they never
+        reach here; the refresh() restore path is guarded by the image-id check.
+        """
+        if current is None or current.data(0, _ROLE_TYPE) != "image":
+            return
+        image_id = current.data(0, _ROLE_PAYLOAD)
+        if not isinstance(image_id, int):
+            return
+        if image_id == self._current_image_id:
+            return  # already showing this image (e.g. tree refresh restoring selection)
+        self._select_tree_item(current)
+
     def _select_tree_item(self, item: QTreeWidgetItem) -> None:
         """Select item visually in the tree and load the image."""
         self._current_tree_item = item
+        # Block signals so setCurrentItem does not re-trigger _on_tree_current_item_changed.
+        self._file_tree.blockSignals(True)
         self._file_tree.setCurrentItem(item)
+        self._file_tree.blockSignals(False)
         self._file_tree.scrollToItem(item)
         image_id = item.data(0, _ROLE_PAYLOAD)
         self._load_image(image_id)

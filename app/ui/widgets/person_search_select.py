@@ -256,7 +256,9 @@ class PersonSearchSelect(QWidget):
         """Deselect all rows and forget the stored selection."""
         self._selected_id = None
         self._list.clearSelection()
+        self._list.blockSignals(True)
         self._list.setCurrentItem(None)
+        self._list.blockSignals(False)
 
     def reset_filter(self) -> None:
         """Clear the search text and show the full (unfiltered) person list."""
@@ -279,7 +281,9 @@ class PersonSearchSelect(QWidget):
         self._list.scrollToTop()
         if self._match_active() and self._list.count() > 0:
             item = self._list.item(0)
+            self._list.blockSignals(True)
             self._list.setCurrentItem(item)
+            self._list.blockSignals(False)
             data = item.data(_ROLE_ID)
             self._selected_id = int(data) if data is not None else None
             return True
@@ -365,12 +369,36 @@ class PersonSearchSelect(QWidget):
         for row in range(self._list.count()):
             item = self._list.item(row)
             if item and item.data(_ROLE_ID) == self._selected_id:
+                self._list.blockSignals(True)
                 self._list.setCurrentItem(item)
+                self._list.blockSignals(False)
                 return
 
     def _commit_current(self) -> None:
         person_id = self.current_person_id()
         if person_id is not None:
+            self._selected_id = person_id
+            self.person_selected.emit(person_id)
+
+    def set_navigate_selects(self, enabled: bool) -> None:
+        """When True, Up/Down keyboard navigation immediately emits person_selected.
+
+        Use on always-visible navigation surfaces (e.g. the sidebar). Keep
+        disabled for inline editors where the user picks before committing.
+        """
+        if enabled:
+            self._list.currentItemChanged.connect(self._on_navigate_select)
+        else:
+            try:
+                self._list.currentItemChanged.disconnect(self._on_navigate_select)
+            except RuntimeError:
+                pass
+
+    def _on_navigate_select(self, current: QListWidgetItem, _previous: QListWidgetItem) -> None:
+        if current is None:
+            return
+        person_id = current.data(_ROLE_ID)
+        if person_id is not None and person_id != self._selected_id:
             self._selected_id = person_id
             self.person_selected.emit(person_id)
 

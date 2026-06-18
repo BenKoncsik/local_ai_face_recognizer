@@ -330,6 +330,8 @@ class SidebarPanel(QWidget):
         # The sidebar is a navigation surface: every person, including unknown
         # clusters, must stay clickable so they can be reviewed and named.
         self._person_select.set_hide_unknown_in_base(False)
+        # Up/Down keyboard navigation should immediately select the person.
+        self._person_select.set_navigate_selects(True)
         self._person_select.person_selected.connect(self.person_selected.emit)
         self._person_select.person_double_clicked.connect(self.person_selected.emit)
         search_layout.addWidget(self._person_select)
