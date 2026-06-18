@@ -391,6 +391,11 @@ class DeepRecognitionConfig:
     # Below this best-similarity to *anyone* known, the face is treated as an
     # outlier (stranger or non-face) and never auto-assigned.
     outlier_similarity: float = 0.42
+    # When a candidate's nearest neighbour in the training set is a *manually*
+    # confirmed face and its cosine similarity is at or above this value, the
+    # sim_floor gate is bypassed (the manual assignment is ground truth).
+    # Must be above outlier_similarity; the outlier gate is never bypassed.
+    manual_anchor_min_similarity: float = 0.48
 
     # --- Candidate filtering ("never recognise non-faces") ---
     # Faces below this detector confidence are never auto-assigned.
@@ -956,6 +961,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
             outlier_similarity=deep.get(
                 "outlier_similarity", cfg.deep_recognition.outlier_similarity
+            ),
+            manual_anchor_min_similarity=deep.get(
+                "manual_anchor_min_similarity",
+                cfg.deep_recognition.manual_anchor_min_similarity,
             ),
             min_face_confidence=deep.get(
                 "min_face_confidence", cfg.deep_recognition.min_face_confidence
