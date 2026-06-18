@@ -1,6 +1,6 @@
 # Face-Local Blueprint
 
-Frissítve: 2026-06-12
+Frissítve: 2026-06-18
 
 Ez a dokumentum a jelenlegi kodbazis architekturajat irja le. Nem user manual,
 hanem fejlesztoi terkep: melyik domain hol lakik, milyen pipeline mozgatja az
@@ -49,6 +49,9 @@ projekt-sync es tavoli kepforras reteg, nem kotelezo felho backend.
 | Google Drive | google-auth, google-auth-oauthlib, google-api-python-client, keyring |
 | Export galeria | Astro SSG + Node/npm a `web/astro` alatt |
 | Spreadsheet export | openpyxl |
+| Geocoding | Overpass API (opt-in), Nominatim fallback, cím-keresés cache |
+| Képernyő rögzítés | ffmpeg audio/video + timeline log, segment-szintu mentés |
+| Háttérfeladat menedzsment | TaskManager preemption, prioritási ütemezés, előzetes szakítás |
 | Packaging | PyInstaller jellegu app build, macOS/Windows/Linux scriptek |
 | Teszt | pytest, pytest-qt |
 
@@ -77,6 +80,7 @@ flowchart TB
         ASTRO["AstroExportWorker"]
         THUMB["Thumbnail/Drive QRunnable-ok"]
         GEO["Geocoding QRunnable-ok"]
+        TASK["TaskManager\npreemption & scheduling"]
     end
 
     subgraph SERVICES["Service reteg"]
@@ -266,7 +270,7 @@ idempotens migracio egyutt frissitendo.
 
 | Csoport | Tablak |
 |---|---|
-| Kepek es arcok | `images`, `faces`, `face_corrections`, `ignored_faces` |
+| Kepek es arcok | `images`, `faces`, `face_blobs`, `face_corrections`, `ignored_faces` |
 | Szemelyek | `persons`, `relationships`, `person_groups`, `person_group_memberships` |
 | Helyszinek | `places`, `place_aliases`, `geocoding_cache`, `place_address_suggestions` |
 | Targyak | `tagged_objects`, `object_occurrences`, `object_person_links`, `object_aliases` |
@@ -274,6 +278,7 @@ idempotens migracio egyutt frissitendo.
 | Drive | `remote_images` |
 | Merge es audit | `merge_suggestions`, `merge_decisions`, `recognition_merge_log` |
 | Deep/AI | `training_runs`, `auto_assignments`, `ai_face_detections` |
+| Hatterkozos | TaskManager preemption, prioritasi, progress tracking |
 
 ### Fo entitasok
 
@@ -314,7 +319,8 @@ erDiagram
 | Entitas | Fontos mezok |
 |---|---|
 | `Image` | `file_path`, `relative_path`, `file_hash`, meret, `photo_date`, `note`, `place_id`, EXIF es image-level GPS, `detection_done`, `embedding_done` |
-| `Face` | bbox, confidence, `detector_backend`, `crop_path`, embedding blob, landmark blob, quality mezok, assignment metadata, uncertain/note mezok, auto-merge review mezok |
+| `Face` | bbox, confidence, `detector_backend`, `crop_path`, quality mezok, assignment metadata, uncertain/note/merge_excluded mezok, auto-merge review mezok |
+| `FaceBlob` | embedding blob (128-192 dim float32), landmark blob (5-68 pontos), normalizalt form |
 | `Person` | nev, auto/protected flag, gender, thumbnail, family/external code, strukturalt nevek, birth/death adatok, notes |
 | `IgnoredFace` | embedding, thumbnail snapshot, source face/person snapshot, note |
 | `MergeSuggestion` | normalizalt szemelypar, face/name score, status, job_id |
@@ -487,13 +493,14 @@ Fo fajl: `app/ui/main_window.py`
 | Tab/panel | Fajl | Felelosseg |
 |---|---|---|
 | Arcfelismeres | `sidebar_panel.py`, `cluster_panel.py`, `preview_panel.py` | szemelylista, rendezheto es stackelheto arcgrid, eredeti kep bbox overlay, reassign/merge/exclude |
-| Kepbongeszo | `image_browser_panel.py` | mappafa, kepnezeto, inline face/object/date/place edit, fullscreen, Drive fetch |
+| Kepbongeszo | `image_browser_panel.py` | 3-oszlopos layout, mappafa, kepnezeto, universal kereso, inline face/object/date/place edit, fullscreen, Drive fetch |
 | Csaladi kereses | `family_search_panel.py` | family code, kapcsolatok es tobb-szemelyes kepkereses |
-| Helyszinek | `locations_panel.py` | helylista/fa, EXIF/koordinata/cim, merge, galeriak |
-| Szemelyek | `persons_panel.py` | `PERSONS` tabla karbantartasa, strukturalt adatok, thumb, kapcsolodo kepek |
+| Helyszinek | `locations_panel.py` | helylista/fa, EXIF/koordinata/cim, merge, galeriak, map picker |
+| Szemelyek | `persons_panel.py` | `PERSONS` tabla karbantartasa, strukturalt adatok, thumb, kapcsolodo kepek, csoporttagsag |
 | Csoportok | `groups_panel.py`, `group_manager_dialog.py` | person group CRUD es tagsag |
-| Targyak | `objects_panel.py` | object CRUD, elofordulasok, szemely-szerep kapcsolatok |
+| Targyak | `objects_panel.py` | object CRUD, elofordulasok, szemely-szerep kapcsolatok, pont-jeloles |
 | Kollazs | `collage_panel.py` | Picasa `.cxf/.cfx` import, canvas, node meta, overlay, export |
+| Hatterkozos | `task_manager_dialog.py` | TaskManager preemption, futasi elorejelzes, cancel/restart |
 | Log | `log_panel.py` | folyamat es debug log megjelenites |
 
 ### Toolbar es globalis muveletek
@@ -532,6 +539,8 @@ Fo fajl: `app/ui/main_window.py`
 | `TpuStatusDialog` | Edge TPU diagnosztika |
 | `UpdateDialog` | release asset letoltes es update |
 | `FaceDiagnosticsDialog` / `IdentityRepairDialog` | fragmentacio diagnosztika es javitas |
+| `TaskManagerDialog` | hattermunkak figyelese, preemption, prioritas, cancel/restart |
+| `AiVisualizationWindow` | deep learning debug, training runs, loss curves, accuracy metrics |
 
 ## 10. Domain service-ek
 
@@ -560,7 +569,7 @@ Fo fajl: `app/ui/main_window.py`
 | `FamilyService` | family code, kapcsolatok, csaladi kepkereses |
 | `FamilyCodeSchemeStore` / `FamilyCodeInterpreter` | testreszabhato family code semak es ertelmezes |
 | `PlaceService` | hely CRUD, EXIF GPS link, cim, hierarchia, merge, thumbnail |
-| `GeocodingService` | cache-first cimjavaslat/geocode, opt-in online provider |
+| `GeocodingService` | cache-first cimjavaslat/geocode, Overpass/Nominatim, opt-in online provider, throttling |
 | `ObjectService` | targyak, elofordulasok, szemely-szerep kapcsolatok, merge |
 | `ImageBrowserService` | kepbongeszo mappa/kep osszefoglalok |
 | `FaceDateResolver` / `FuzzyDate` | arcok kepdatumabol szarmaztatott rendezheto, pontatlan datum-intervallum |
@@ -575,6 +584,7 @@ Fo fajl: `app/ui/main_window.py`
 | `ProjectPackageService` | `.facepack` export/import |
 | `UpdateService` | GitHub release check, asset valasztas, letoltes |
 | `ScreenRecorderService` | ffmpeg recording, audio mix, segmentek, concat |
+| `TaskManager` | hattermunkak scheduling, preemption, prioritas (CPU-intenziv → IO bound) |
 
 ## 11. Hordozhato image library es Drive
 
@@ -672,9 +682,10 @@ Helytipusok:
 - `region`: nagyobb foldrajzi egyseg.
 
 A `Place` strukturalt cimet tarol: `settlement_name`, `street_name`,
-`house_number`, `display_name`, `coordinate_source`, `is_exact_coordinate`.
-A `PlaceService.classify_address` cimbol helytipust es koordinataforrast
-szarmaztat. A `parent_id` hierarchiat tesz lehetove (`region -> area -> exact`).
+`house_number`, `display_name`, `coordinate_source`, `is_exact_coordinate`,
+`accuracy_radius`. A `PlaceService.classify_address` cimbol helytipust es
+koordinataforrast szarmaztat. A `parent_id` hierarchiat tesz lehetove
+(`region -> area -> exact`).
 
 EXIF GPS feldolgozaskor a service elobb kozeli `exact`, majd `area`, majd
 `region` helyet keres a tipushoz tartozo sugarakkal. Ha nincs talalat,
@@ -686,7 +697,9 @@ Online geokodolas opt-in. A sorrend:
 
 1. `geocoding_cache`,
 2. `place_address_suggestions`,
-3. online provider, jelenleg Nominatim throttle-lal es User-Agenttel.
+3. Overpass API (структурирана cím keresés), majd Nominatim fallback.
+4. User-Agent es throttle-olás a rátakorlátozás elkerüléséhez.
+5. Interaktív térkép widget (QWebChannel) a kézi helyelőválasztáshoz.
 
 ### Targyak
 
@@ -766,7 +779,7 @@ progress bart, statust, logot es UI listakat.
 | Worker | Felelosseg |
 |---|---|
 | `PipelineWorker` | klasszikus 7 stage pipeline + koztes passzok |
-| `DeepPipelineWorker` | rescan/rebuild/train/detect_faces AI pipeline |
+| `DeepPipelineWorker` | rescan/rebuild/train/detect_faces AI pipeline (Jun 18+) |
 | `ReRecognitionWorker` | kepbongeszo Unknown ujrafelismeres |
 | `MatchJobWorker` | merge suggestion scoring es perzisztalas |
 | `AstroExportWorker` | Astro bundle es build futtatasa |
@@ -778,8 +791,11 @@ progress bart, statust, logot es UI listakat.
 | `_InstallerThread` | TPU telepitesi parancsok |
 | `_SignInThread` / `_FolderProbeThread` | Google OAuth es folder validalas |
 | `_MigrationThread` | image library relative path migracio |
+| `TaskManager` | prioritasi utemezés, preemption (CPU-intenzív → IO-bound), futási elorejelzés |
 
 ## 15. Packaging, update es recording
+
+### Csomagolás és frissítés
 
 Kapcsolodo fajlok:
 
@@ -801,21 +817,22 @@ GitHub release asseteket ellenoriz, platform szerint valaszt assetet, letoltesi
 progresszt ad, majd macOS DMG, Windows EXE/ZIP, Linux DEB/tar.gz utvonalakat
 kezel. macOS oldalon Sparkle helper es appcast artefaktumok is jelen vannak.
 
-### Kepernyorogzites
+### Kepernyorogzites (✅ Teljes implementáció)
 
 Fajlok: `app/services/screen_recorder_service.py`,
 `app/services/recording_timeline_log.py`,
 `app/services/recording_metadata.py`,
 `app/ui/widgets/recording_controls.py`
 
-Az ffmpeg alapu recorder:
+Az ffmpeg alapu recorder (2026.06.18+ operációs):
 
-- mikrofon hangot rogzit, system audio best-effort loopback eszkozzel,
+- mikrofon hangot rogzit, system audio loopback eszkozzel,
 - aktiv ablak, minden kijelzo vagy kivalasztott kijelzok rogzitese,
-- segmentalt mentes crash-vedett granularitassal,
-- pause/resume ffmpeg restarttal,
-- stopkor opcionális concat vegso MP4-be,
-- timeline `.timeline.txt` es crash-safe JSON metadata.
+- segmentalt mentes (forced keyframes) crash-vedett granularitassal,
+- pause/resume ffmpeg restarttal az aktív recording fenntartása mellett,
+- stopkor opcionális concat vegso MP4-be (gyorsított feldolgozás),
+- timeline `.timeline.txt` (frame-index log) es crash-safe JSON metadata,
+- audio level meter realtime megjelenítésben.
 
 ## 16. Tesztek es fejlesztoi parancsok
 
@@ -835,26 +852,36 @@ scripts/build_and_run.ps1
 scripts/build_and_run.bat
 ```
 
-A tesztcsomag lefedi tobbek kozott:
+A tesztcsomag (140+ teszt, Jun 18+) lefedi:
 
-- config es DB init/migracio,
-- image library es local scan,
-- Drive dotenv, credential store, folder URL, storage provider, project session,
-  drive scan,
-- detektorok, embedding, alignment,
-- detection, face quality, duplicate/overlap resolution, ignored faces,
-  clustering, recognition, deep recognition,
-- rerecognition, auto merge review, merge decision history,
-- person, group, family, place, geocoding, object service,
-- image browser, date/fuzzy date, arcracs sort/group, EXIF write, deoldified compare,
-- collage parser,
-- export, face/image metadata export, Astro export, `.facepack`,
-- recording args, metadata, timeline, audio level meter,
-- release helper scriptek.
+- config es DB init/migracio, schema verziozas,
+- image library (relative path resolver, migration, missing root handling),
+- local scan, hash, EXIF parsing, RemoteImage,
+- Drive OAuth, credential store, folder URL, storage provider, project session lock/heartbeat,
+- detektorok (Coral, YuNet, OpenCV DNN, Haar fallback), high-accuracy mode,
+- embedding alignment, TFLite/SFace, crop modes (square, aligned, legacy),
+- detection, face quality, overlap resolution, duplicate cleanup,
+- ignored faces, embedding-based filtering,
+- clustering (DBSCAN incremental, same/different corrections),
+- recognition (classic profile-based, re-recognition),
+- deep recognition (MLP ensemble, training data policy, open-set gates, AutoAssignment),
+- merge suggestions, merge decisions, recognition merge log audit,
+- person, group, family tree, family code schemes,
+- place hierarchy, geocoding (Overpass, Nominatim, cache), coordinates,
+- object service (CRUD, occurrences, person links),
+- image browser, fuzzy date, face date resolver, near-duplicate grouping,
+- EXIF write, GPS, deoldified pairing,
+- collage parser/render,
+- export (CSV/JSON/images/Astro/collage), metadata export,
+- `.facepack` export/import with path remapping,
+- recording (args, metadata, timeline, segment concat, audio level meter),
+- TaskManager scheduling, preemption tests,
+- release helper scriptek, platform asset selection.
 
 Dokumentacio-only valtozasnal nem kotelezo teljes pytestet futtatni, de schema
 vagy pipeline contract valtozasnal az erintett service teszteket legalabb
-celzottan futtatni kell.
+celzottan futtatni kell. Deep recognition, TaskManager, vagy detection
+valtozasnal coverage mindig kotelezo.
 
 ## 17. Fejlesztesi contractok
 
@@ -896,3 +923,30 @@ celzottan futtatni kell.
 - Szemely adatmuveletek a `PersonService`-en, targy muveletek az
   `ObjectService`-en, hely muveletek a `PlaceService`-en menjenek at, ne
   panelbe kerulo uzleti logikaval.
+- TaskManager preemption-t resz kell egészítse fel: CPU-intenzív munka 
+  (deep learning, detekció) átadható IO-bound feladatoknak (Drive sync,
+  export) az elorejelzés alapján.
+- Merge exclusion flag (`is_merge_excluded`) respektálandó minden merge
+  logikában: név-alapú javaslatok, auto-merge workflow, deep recognition.
+- Deep pipeline overlap resolution nem mozgatja el az assigned/manual arcokat,
+  csak az auto-assign-okat.
+- `.facepack` és export workflow-k kezeljenek missing image library root-ot
+  és Drive fetch hibákat gracefully (skip/warn, ne crash).
+
+## 18. Legutóbbi fejlesztések (Jun 18, 2026)
+
+| Komponens | Módosítás | Hatás |
+|-----------|-----------|-------|
+| `DeepPipelineWorker` | Szignifikáns refactor, overlap resolution javítás | Mély tanulási csatorna robusztussága, AI face detection jitterek |
+| `PersonSearchSelect` | Új widget (Jun 18) | Egységes személyválasztó összes UI felületen (inline, merge, reassign) |
+| `ImageBrowserPanel` | 3-oszlopos layout rewrite | Felhasználóbarát fájlnézet + universal keresés integráció |
+| `SidebarPanel` | Frissítés (Jun 18) | Rendezési opciók, arccsoportosítás |
+| `TaskManager` | Preemption scheduling | Háttérmunkák intelligens ütemezése, GUI responsiveness |
+| `Screen Recording` | Teljes implementáció | ffmpeg integráció, segmentált mentés, timeline log, audio mixer |
+| `GeocodingService` | Overpass API integráció | Strukturált címek gyorsabb feloldása, Nominatim fallback |
+
+**Tervekben (Jun 18+):**
+- TaskManager perceplés mélyítése: cost prediction, háttér-batch leállítás
+- Deep recognition model caching & incremental updates
+- Collage editor 2.0 (canvas, node metadata, export PDF)
+- Distributed sync támogatás (több gép közötti project szinkronizáció)
