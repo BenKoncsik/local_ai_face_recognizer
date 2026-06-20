@@ -2551,6 +2551,47 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Rebuilding Unknown identities: {persons} person(s) deleted, {faces} face(s) reset",
          "hu": "Unknown személyek újraépítése: {persons} személy törölve, {faces} arc alaphelyzetbe állítva"},
 
+    # Reset Unknown Persons Dialog
+    "resetUnknownOptions.title":
+        {"en": "Configure Unknown Persons Reset",
+         "hu": "Unknown személyek visszaállításának konfigurálása"},
+    "resetUnknownOptions.description":
+        {"en": "Choose which steps to perform when rebuilding Unknown identities:",
+         "hu": "Válassza ki, mely lépéseket szeretné végrehajtani az Unknown személyek újraépítéséhez:"},
+    "resetUnknownOptions.deletePersons":
+        {"en": "Delete auto-created 'Unknown N' persons",
+         "hu": "Automatikusan létrehozott 'Unknown N' személyek törlése"},
+    "resetUnknownOptions.deletePersonsTooltip":
+        {"en": "Remove the automatically created Unknown person records from the database",
+         "hu": "Az automatikusan létrehozott Unknown személy rekordok eltávolítása az adatbázisból"},
+    "resetUnknownOptions.deleteFaceAssignments":
+        {"en": "Unassign faces from Unknown persons",
+         "hu": "Arcok hozzárendelésének eltávolítása Unknown személyektől"},
+    "resetUnknownOptions.deleteFaceAssignmentsTooltip":
+        {"en": "Remove person assignments, allowing faces to be re-identified",
+         "hu": "A személyhozzárendelések eltávolítása, lehetővé téve az arcok újra azonosítását"},
+    "resetUnknownOptions.deleteFaceData":
+        {"en": "Delete face detection data (embeddings, bounding boxes)",
+         "hu": "Arcfelismerési adatok törlése (beágyazások, határoló keretek)"},
+    "resetUnknownOptions.deleteFaceDataTooltip":
+        {"en": "⚠ Advanced: Removes embeddings and bounding boxes. Only use if faces need full re-detection.",
+         "hu": "⚠ Haladó: Eltávolítja az embeddingeket és kereteket. Csak akkor használja, ha az arcok teljes újra-detektálása szükséges."},
+    "resetUnknownOptions.rerunRecognition":
+        {"en": "Re-run recognition pipeline after reset",
+         "hu": "Felismerési folyamat újrafuttatása a visszaállítás után"},
+    "resetUnknownOptions.rerunRecognitionTooltip":
+        {"en": "Automatically start the recognition pipeline to re-identify unassigned faces",
+         "hu": "A felismerési folyamat automatikus indítása a nem hozzárendelt arcok újra azonosítására"},
+    "resetUnknownOptions.reset":
+        {"en": "Reset to Defaults",
+         "hu": "Alapértelmezett értékek visszaállítása"},
+    "resetUnknownOptions.ok":
+        {"en": "OK",
+         "hu": "OK"},
+    "resetUnknownOptions.cancel":
+        {"en": "Cancel",
+         "hu": "Mégse"},
+
     # overlapping question-mark cleanup
     "scanModes.overlapCleanup.title":
         {"en": "Find Overlapping ? Boxes",
