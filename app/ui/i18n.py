@@ -1792,6 +1792,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "places_gallery_click_to_close": {"en": "Click to close", "hu": "Kattints a bezáráshoz"},
     "places_gallery_set_thumb":  {"en": "Set as place thumbnail", "hu": "Beállítás hely bélyegképének"},
     "places_gallery_clear_thumb": {"en": "Reset to automatic thumbnail", "hu": "Automatikus bélyegkép visszaállítása"},
+    "places_row_edit_tip": {"en": "Double click to edit location", "hu": "Dupla kattintás a hely szerkesztéséhez"},
     "set_as_person_thumbnail":   {"en": "Set as person thumbnail", "hu": "Beállítás személy bélyegképének"},
     "clear_person_thumbnail":    {"en": "Reset to automatic thumbnail", "hu": "Automatikus bélyegkép visszaállítása"},
 
