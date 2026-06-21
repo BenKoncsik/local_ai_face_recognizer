@@ -1193,6 +1193,15 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
+        # Show options dialog to let user configure reset steps
+        from app.ui.dialogs.reset_unknown_options_dialog import ResetUnknownOptionsDialog
+
+        options_dialog = ResetUnknownOptionsDialog(self)
+        if options_dialog.exec() != QDialog.Accepted:
+            return
+
+        options = options_dialog.get_options()
+
         # Stop matching first: its queued jobs may still hold snapshots of the
         # Unknown persons that are about to be deleted.
         self._shutdown_match_worker()
@@ -1200,7 +1209,7 @@ class MainWindow(QMainWindow):
             with session_scope() as session:
                 from app.services.unknown_person_reset_service import UnknownPersonResetService
 
-                result = UnknownPersonResetService(session).reset()
+                result = UnknownPersonResetService(session).reset(options)
         finally:
             self._start_match_worker()
 
@@ -1222,7 +1231,11 @@ class MainWindow(QMainWindow):
                 faces=result.unassigned_faces,
             )
         )
-        self._start_pipeline(high_accuracy=False)
+
+        # Only restart pipeline if recognition rerun was selected
+        if options.rerun_recognition:
+            self._start_pipeline(high_accuracy=False)
+
 
     @Slot()
     def _on_cleanup_empty_unknown_persons(self) -> None:
