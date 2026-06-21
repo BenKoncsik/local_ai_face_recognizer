@@ -10,7 +10,7 @@
     <item>
       <title>Face-Local 1.0.40</title>
       <sparkle:releaseNotesLink>https://github.com/HunKonTech/local_ai_face_recognizer/releases/tag/v1.0.40</sparkle:releaseNotesLink>
-      <pubDate>Sat, 20 Jun 2026 21:52:26 +0000</pubDate>
+      <pubDate>Sun, 21 Jun 2026 21:02:46 +0000</pubDate>
       <enclosure
         url="https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.40/Face-Local-macOS-sparkle-1.0.40.zip"
         sparkle:version="1.0.40"
