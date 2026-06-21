@@ -26,7 +26,7 @@ const { person, photos } = Astro.props;
 const bio: { label: string; value: string }[] = [
   { label: 'Becenév', value: person.nickname },
   { label: 'Leánykori/házassági név', value: person.marriedName },
-  { label: 'Nem', value: person.gender },
+  { label: 'Nem', value: person.gender === 'female' ? 'Nő' : person.gender === 'male' ? 'Férfi' : '' },
   { label: 'Születés', value: [person.birthDate, person.birthPlace].filter(Boolean).join(', ') },
   { label: 'Elhalálozás', value: [person.deathDate, person.deathPlace].filter(Boolean).join(', ') },
   { label: 'Családi kód', value: person.familyCode },

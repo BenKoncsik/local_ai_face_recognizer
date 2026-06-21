@@ -199,6 +199,30 @@ class ExportDialog(QDialog):
         astro_layout.addWidget(self._astro_btn)
         layout.addWidget(astro_box)
 
+        # --- Local web server (Python + Node, no Docker) ---
+        local_box = QGroupBox(t("export_local_server_group"))
+        local_layout = QVBoxLayout(local_box)
+        local_desc = QLabel(t("export_local_server_desc"))
+        local_desc.setWordWrap(True)
+        local_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        local_layout.addWidget(local_desc)
+        self._local_server_btn = QPushButton(f"🖥️  {t('export_generate_local_server')}")
+        self._local_server_btn.clicked.connect(self._on_export_local_server)
+        local_layout.addWidget(self._local_server_btn)
+        layout.addWidget(local_box)
+
+        # --- Docker / Kubernetes web server ---
+        docker_box = QGroupBox(t("export_docker_group"))
+        docker_layout = QVBoxLayout(docker_box)
+        docker_desc = QLabel(t("export_docker_desc"))
+        docker_desc.setWordWrap(True)
+        docker_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        docker_layout.addWidget(docker_desc)
+        self._docker_btn = QPushButton(f"🐳  {t('export_generate_docker')}")
+        self._docker_btn.clicked.connect(self._on_export_docker)
+        docker_layout.addWidget(self._docker_btn)
+        layout.addWidget(docker_box)
+
         # --- Collage Import ---
         col_import_box = QGroupBox(t("export_collage_import_group"))
         col_import_layout = QVBoxLayout(col_import_box)
@@ -446,6 +470,118 @@ class ExportDialog(QDialog):
             priority=TaskPriority.LOW,
             on_done=lambda out: self._astro_open_prompt(out),
             on_error=self._on_astro_failed,
+        )
+
+    def _on_export_local_server(self) -> None:
+        from app.ui.dialogs.local_server_export_dialog import LocalServerExportDialog
+        dlg = LocalServerExportDialog(self)
+        if dlg.exec() != LocalServerExportDialog.DialogCode.Accepted:
+            return
+
+        folder = QFileDialog.getExistingDirectory(
+            self, t("astro_folder"), str(Path.home())
+        )
+        if not folder:
+            return
+
+        admin_email  = dlg.admin_email
+        app_password = dlg.gmail_app_password
+        allowed_csv  = dlg.allowed_emails_csv
+        port         = dlg.port
+
+        def work(ctx):
+            from app.services.local_server_export_service import LocalServerExportService
+
+            def progress(pct, msg):
+                if pct is not None and pct >= 0:
+                    ctx.report(min(int(pct), 100), str(msg))
+                    ctx.checkpoint()
+                else:
+                    ctx.report(99, str(msg))
+
+            with session_scope() as session:
+                return str(
+                    LocalServerExportService(session).export_local(
+                        target_dir=folder,
+                        admin_email=admin_email,
+                        gmail_app_password=app_password,
+                        allowed_emails_csv=allowed_csv,
+                        port=port,
+                        progress_callback=progress,
+                    )
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_local_server_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self,
+                t("local_server_export_done_title"),
+                t("local_server_export_done_msg", path=out),
+            ),
+            on_error=lambda msg: QMessageBox.critical(
+                self, t("local_server_export_done_title"), msg
+            ),
+        )
+
+    def _on_export_docker(self) -> None:
+        from app.ui.dialogs.docker_export_dialog import DockerExportDialog
+        dlg = DockerExportDialog(self)
+        if dlg.exec() != DockerExportDialog.DialogCode.Accepted:
+            return
+
+        folder = QFileDialog.getExistingDirectory(
+            self, t("astro_folder"), str(Path.home())
+        )
+        if not folder:
+            return
+
+        admin_email      = dlg.admin_email
+        app_password     = dlg.gmail_app_password
+        allowed_csv      = dlg.allowed_emails_csv
+        domain           = dlg.domain
+        cluster_issuer   = dlg.cluster_issuer
+        port             = dlg.port
+
+        def work(ctx):
+            from app.services.docker_export_service import DockerExportService
+
+            def progress(pct, msg):
+                if pct is not None and pct >= 0:
+                    ctx.report(min(int(pct), 100), str(msg))
+                    ctx.checkpoint()
+                else:
+                    ctx.report(99, str(msg))
+
+            with session_scope() as session:
+                return str(
+                    DockerExportService(session).export(
+                        target_dir=folder,
+                        admin_email=admin_email,
+                        gmail_app_password=app_password,
+                        allowed_emails_csv=allowed_csv,
+                        domain=domain,
+                        cluster_issuer=cluster_issuer,
+                        port=port,
+                        progress_callback=progress,
+                    )
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_docker_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self,
+                t("docker_export_done_title"),
+                t("docker_export_done_msg", path=out),
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, t("docker_export_done_title"), msg),
         )
 
     def _on_astro_failed(self, message: str) -> None:

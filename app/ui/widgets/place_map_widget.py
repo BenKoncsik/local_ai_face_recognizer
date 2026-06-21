@@ -40,6 +40,13 @@ _MAP_HTML = """\
       box-shadow:0 2px 8px rgba(0,0,0,.5)}
     .leaflet-popup-tip{background:#313244}
     .leaflet-popup-close-button{color:#A6ADC8!important}
+    #layer-btn{
+      position:absolute;bottom:38px;right:10px;z-index:1000;
+      background:#313244;color:#CDD6F4;border:1px solid #45475A;
+      border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.78rem;
+      white-space:nowrap;line-height:1.4;box-shadow:0 1px 4px rgba(0,0,0,.4)
+    }
+    #layer-btn:hover{background:#45475A;border-color:#89B4FA}
   </style>
 </head>
 <body>
@@ -50,13 +57,21 @@ _MAP_HTML = """\
     <!-- DATA -->
     (function(){
       var map=L.map('map').setView([LAT,LON],14);
-      var tiles=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+
+      var tileModern=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
         attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         errorTileUrl:'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
-      }).addTo(map);
+      });
+      var tileHist=L.tileLayer('https://tiles.mapire.eu/mercator/europe-19century-thirdsurvey/{z}/{x}/{y}',{
+        attribution:'&copy; <a href="https://mapire.eu">Mapire.eu</a> – Harmadik katonai felmérés (~1880)',
+        maxZoom:15,
+        errorTileUrl:'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+      });
+      var isHist=false;
+      tileModern.addTo(map);
 
       var errCnt=0;
-      tiles.on('tileerror',function(){
+      tileModern.on('tileerror',function(){
         if(++errCnt>=3){
           var el=document.getElementById('offline-msg');
           el.textContent=OFFLINE_MSG;
@@ -75,6 +90,23 @@ _MAP_HTML = """\
           weight:1,opacity:.8,fillOpacity:.6
         }).addTo(map)
          .bindPopup(pt[0].toFixed(6)+', '+pt[1].toFixed(6));
+      });
+
+      var btn=document.createElement('button');
+      btn.id='layer-btn';
+      btn.textContent='Történelmi (1880)';
+      document.getElementById('map').appendChild(btn);
+      btn.addEventListener('click',function(){
+        if(isHist){
+          map.removeLayer(tileHist);
+          tileModern.addTo(map);
+          btn.textContent='Történelmi (1880)';
+        } else {
+          map.removeLayer(tileModern);
+          tileHist.addTo(map);
+          btn.textContent='Modern térkép';
+        }
+        isHist=!isHist;
       });
     })();
   </script>

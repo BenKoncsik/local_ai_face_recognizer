@@ -328,6 +328,14 @@ class Person(Base):
     # System-managed persons (e.g. "Ismeretlen") that must not be renamed or deleted
     is_protected: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Whether this person participates in the family-tree view. Persons that
+    # turn out to be unrelated to the family can be excluded (greyed out /
+    # hidden) without deleting them. Defaults to True so existing persons keep
+    # appearing in the tree.
+    is_family_tree_member: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -450,6 +458,14 @@ class Relationship(Base):
     person_b_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True
     )
+
+    # For Spouse relationships: when/where the marriage started / ended. Flexible
+    # date strings like the person date fields ("1954", "1954.03.12", "1950-es évek").
+    # Unused for ParentChild rows.
+    start_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    end_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    marriage_place: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -466,6 +482,54 @@ class Relationship(Base):
         return (
             f"<Relationship id={self.id} type={self.relationship_type!r} "
             f"a={self.person_a_id} b={self.person_b_id}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FamilyTreeSettings
+# ---------------------------------------------------------------------------
+
+class FamilyTreeSettings(Base):
+    """Singleton settings row for the family-tree view.
+
+    A single row (id == 1) holds the default root person and display
+    preferences. Stored in the DB rather than the YAML config so it travels
+    with the project package and references a concrete person id.
+    """
+
+    __tablename__ = "family_tree_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Person shown as the tree root when the view first opens (NULL = let the
+    # UI pick, e.g. the first family member).
+    default_root_person_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # "tree" (hierarchical) | "radial" — how the graph is laid out.
+    layout: Mapped[str] = mapped_column(String(16), nullable=False, default="tree")
+
+    # Whether non-members (is_family_tree_member == False) are shown greyed out
+    # rather than hidden entirely.
+    include_non_members: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+
+    # Named colour scheme key (resolved to concrete colours in the UI/export).
+    color_scheme: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="default"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<FamilyTreeSettings root={self.default_root_person_id} "
+            f"layout={self.layout!r}>"
         )
 
 

@@ -103,6 +103,7 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("notes",                "TEXT"),
             ("is_protected",         "BOOLEAN NOT NULL DEFAULT 0"),
             ("thumbnail_is_manual",  "BOOLEAN NOT NULL DEFAULT 0"),
+            ("is_family_tree_member", "BOOLEAN NOT NULL DEFAULT 1"),
         ],
         "places": [
             ("thumbnail_is_manual",     "BOOLEAN NOT NULL DEFAULT 0"),
@@ -126,6 +127,11 @@ def _migrate_add_columns(engine: Engine) -> None:
             ("image_latitude", "FLOAT"),
             ("image_longitude", "FLOAT"),
             ("note", "TEXT"),
+        ],
+        "relationships": [
+            ("start_date", "VARCHAR(64)"),
+            ("end_date", "VARCHAR(64)"),
+            ("marriage_place", "VARCHAR(512)"),
         ],
         "faces": [
             ("assignment_source", "VARCHAR(32)"),

@@ -155,8 +155,43 @@ export interface ObjectSummary {
   persons: ObjectPersonRef[];
 }
 
+// A node in the interactive family-tree graph. Edges are person-id lists; the
+// client lays out generation bands, recolours on selection and filters lineages.
+export interface FamilyTreePerson {
+  id: number;
+  name: string;
+  gender: string;
+  nickname: string;
+  marriedName: string;
+  familyCode: string;
+  externalFamilyCode: string;
+  birthDate: string;
+  birthPlace: string;
+  deathDate: string;
+  deathPlace: string;
+  birthYear: string;
+  deathYear: string;
+  notes: string;
+  groups: string[];
+  thumb: string | null;
+  imageCount: number;
+  /** Photos this person appears in (thumbnails), for the detail dialog. */
+  photos: { id: string; thumb: string }[];
+  generation: number;
+  isMember: boolean;
+  parents: number[];
+  children: number[];
+  spouses: number[];
+  spouseMarriageDates: Record<string, string>;
+}
+
+export interface FamilyTree {
+  persons: FamilyTreePerson[];
+}
+
 export interface Manifest {
   generatedAt: string;
+  appVersion: string;
   pageSize: number;
   personCount: number;
   photoCount: number;
@@ -165,7 +200,10 @@ export interface Manifest {
   hasSlideshow: boolean;
   hasObjects: boolean;
   hasCollages: boolean;
+  hasFamilyTree: boolean;
   title: string;
+  hasAuth: boolean;
+  authToken: string;
 }
 
 // ---- Loaders ----
@@ -173,6 +211,7 @@ export interface Manifest {
 export function loadManifest(): Manifest {
   return readJson<Manifest>('manifest.json', {
     generatedAt: '',
+    appVersion: '',
     pageSize: PAGE_SIZE,
     personCount: 0,
     photoCount: 0,
@@ -181,8 +220,15 @@ export function loadManifest(): Manifest {
     hasSlideshow: false,
     hasObjects: false,
     hasCollages: false,
+    hasFamilyTree: false,
     title: 'Face Gallery',
+    hasAuth: false,
+    authToken: '',
   });
+}
+
+export function loadFamilyTree(): FamilyTree {
+  return readJson<FamilyTree>('family-tree.json', { persons: [] });
 }
 
 export function loadPersons(): Person[] {

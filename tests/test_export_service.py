@@ -183,6 +183,46 @@ def test_export_astro_bundle_structure(db, tmp_path):
     assert photo["width"] == 2000  # original dimensions preserved in metadata
 
 
+def test_export_astro_family_tree_bundle(db, tmp_path):
+    """The interactive family-tree bundle carries graph edges and generations."""
+    from app.db.models import Relationship
+
+    photos = tmp_path / "photos"
+    photos.mkdir()
+
+    with session_scope() as session:
+        grandpa = Person(name="Géza Nagy", is_auto_named=False, gender="male")
+        grandma = Person(name="Mária Nagy", is_auto_named=False, gender="female")
+        son = Person(name="Béla Nagy", is_auto_named=False, gender="male")
+        session.add_all([grandpa, grandma, son])
+        session.flush()
+        # Couple at the top, with a shared child.
+        session.add(Relationship(relationship_type="Spouse",
+                                 person_a_id=grandpa.id, person_b_id=grandma.id))
+        session.add(Relationship(relationship_type="ParentChild",
+                                 person_a_id=grandpa.id, person_b_id=son.id))
+        session.add(Relationship(relationship_type="ParentChild",
+                                 person_a_id=grandma.id, person_b_id=son.id))
+        gp_id, gm_id, son_id = grandpa.id, grandma.id, son.id
+
+    with session_scope() as session:
+        data_dir, _ = _run_astro(session, tmp_path)
+
+    manifest = _read_bundle(data_dir, "manifest.json")
+    assert manifest["hasFamilyTree"] is True
+
+    tree = _read_bundle(data_dir, "family-tree.json")
+    by_id = {p["id"]: p for p in tree["persons"]}
+    assert {gp_id, gm_id, son_id} <= set(by_id)
+
+    # Edges are id lists; couple are spouses, son sits one generation below.
+    assert gm_id in by_id[gp_id]["spouses"]
+    assert son_id in by_id[gp_id]["children"]
+    assert gp_id in by_id[son_id]["parents"] and gm_id in by_id[son_id]["parents"]
+    assert by_id[son_id]["generation"] == by_id[gp_id]["generation"] + 1
+    assert by_id[gp_id]["gender"] == "male"
+
+
 def test_export_astro_compare_group_with_multiple_variants(db, tmp_path):
     """A B&W original with two colorized variants exports a 3-member group."""
     photos = tmp_path / "photos"

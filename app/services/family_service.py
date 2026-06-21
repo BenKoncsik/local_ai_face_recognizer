@@ -18,6 +18,7 @@ from app.services.family_code_interpreter import (
     validate_extended_code,
     validate_external_family_code,
 )
+from app.services.family_code_schemes import get_active_scheme
 
 REL_PARENT_CHILD = "ParentChild"
 REL_SPOUSE = "Spouse"
@@ -305,6 +306,97 @@ class FamilyService:
         info = parse_family_code(family_code)
         return info.spouse_of_code if info is not None else None
 
+    # ------------------------------------------------------------------
+    # FamilyCode suggestions (for manually adding relatives)
+    # ------------------------------------------------------------------
+
+    def suggest_spouse_code(self, person_id: int) -> Optional[str]:
+        """Suggest a family code for a new spouse of ``person_id``.
+
+        The first spouse uses the simple trailing-0 form (``C8`` → ``C80``).
+        Further marriages — e.g. after a partner dies — are numbered with the
+        active scheme's spouse marker (default ``H``: ``C8H2``, ``C8H3`` …), so
+        any number of spouses is supported. Returns ``None`` when the person has
+        no usable family code, is themselves a spouse record (you marry the base
+        person, not a spouse entry), or the scheme disables numbered spouses and
+        a first spouse already exists.
+
+        Marker letters follow the user-editable family-code scheme, so a scheme
+        that renames or disables the spouse marker is respected.
+        """
+        person = self._require_person(person_id)
+        info = parse_family_code(person.family_code)
+        if info is None or info.is_spouse:
+            return None
+        base = info.code
+
+        first = f"{base}0"
+        if self.find_by_family_code(first) is None:
+            return first
+
+        spouse_letter = get_active_scheme().spouse_letter
+        if not spouse_letter:
+            return None  # numbered spouses disabled in this scheme
+        nxt = 2
+        while self.find_by_family_code(f"{base}{spouse_letter}{nxt}") is not None:
+            nxt += 1
+        return f"{base}{spouse_letter}{nxt}"
+
+    def suggest_child_code(self, person_id: int) -> Optional[str]:
+        """Suggest a family code for a new child of ``person_id``.
+
+        Children are coded under the non-spouse parent's descendant code with
+        the next free single digit (1-9); ``0`` is reserved for the spouse.
+        When the parent is a *numbered* spouse (``C8H2``) and the active scheme
+        allows braces, the child carries the brace annotation recording which
+        marriage they come from (``C8{2}1``). Returns ``None`` when no code can
+        be derived or all child slots (1-9) are taken.
+        """
+        person = self._require_person(person_id)
+        info = parse_family_code(person.family_code)
+        if info is None:
+            return None
+
+        # Resolve the base descendant code of the non-spouse parent.
+        base = info.spouse_of_code if info.is_spouse else info.code
+        if base is None:
+            return None
+
+        brace = self._numbered_spouse_index(person.family_code)
+        use_brace = brace is not None and get_active_scheme().allow_braces
+
+        def _candidate(digit: int) -> str:
+            if use_brace:
+                return f"{base}{{{brace}}}{digit}"
+            return f"{base}{digit}"
+
+        for digit in range(1, 10):
+            if self.find_by_family_code(_candidate(digit)) is None:
+                return _candidate(digit)
+        return None
+
+    def suggest_parent_code(self, person_id: int) -> Optional[str]:
+        """Suggest the derived family code for a new parent of ``person_id``."""
+        info = self.parse_person_code(person_id)
+        return info.parent_code if info is not None else None
+
+    @staticmethod
+    def _numbered_spouse_index(family_code: Optional[str]) -> Optional[int]:
+        """Return the spouse number if ``family_code`` is a numbered spouse.
+
+        Uses the scheme-aware interpreter, so a renamed spouse marker still
+        resolves correctly. Returns ``None`` for non-spouse / plain-spouse codes.
+        """
+        if not family_code:
+            return None
+        try:
+            info = parse_extended_code(family_code)
+        except ValueError:
+            return None
+        if info.suffix_type == "spouse" and info.spouse_path:
+            return info.spouse_path[0]
+        return None
+
     def list_children_by_family_code(self, family_code: Optional[str]) -> list[Person]:
         code = validate_family_code(family_code)
         if code is None:
@@ -354,13 +446,74 @@ class FamilyService:
     # Relationship commands
     # ------------------------------------------------------------------
 
-    def add_spouse(self, person_id_a: int, person_id_b: int) -> Relationship:
+    def add_spouse(
+        self,
+        person_id_a: int,
+        person_id_b: int,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        marriage_place: Optional[str] = None,
+    ) -> Relationship:
         if person_id_a == person_id_b:
             raise ValueError("A person cannot be their own spouse.")
         self._require_person(person_id_a)
         self._require_person(person_id_b)
         a_id, b_id = sorted((person_id_a, person_id_b))
-        return self._get_or_create_relationship(REL_SPOUSE, a_id, b_id)
+        rel = self._get_or_create_relationship(REL_SPOUSE, a_id, b_id)
+        if start_date is not None:
+            rel.start_date = start_date.strip() or None
+        if end_date is not None:
+            rel.end_date = end_date.strip() or None
+        if marriage_place is not None:
+            rel.marriage_place = marriage_place.strip() or None
+        self._session.flush()
+        return rel
+
+    def set_marriage_period(
+        self,
+        person_id_a: int,
+        person_id_b: int,
+        start_date: Optional[str],
+        end_date: Optional[str],
+        marriage_place: Optional[str] = None,
+    ) -> Optional[Relationship]:
+        """Set the marriage start/end/place on an existing spouse relationship."""
+        a_id, b_id = sorted((person_id_a, person_id_b))
+        rel = (
+            self._session.query(Relationship)
+            .filter(
+                Relationship.relationship_type == REL_SPOUSE,
+                Relationship.person_a_id == a_id,
+                Relationship.person_b_id == b_id,
+            )
+            .first()
+        )
+        if rel is None:
+            return None
+        rel.start_date = (start_date or "").strip() or None
+        rel.end_date = (end_date or "").strip() or None
+        rel.marriage_place = (marriage_place or "").strip() or None
+        self._session.flush()
+        return rel
+
+    def marriage_period(
+        self, person_id_a: int, person_id_b: int
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """Return (start_date, end_date, marriage_place) for a spouse relationship."""
+        a_id, b_id = sorted((person_id_a, person_id_b))
+        rel = (
+            self._session.query(
+                Relationship.start_date, Relationship.end_date, Relationship.marriage_place
+            )
+            .filter(
+                Relationship.relationship_type == REL_SPOUSE,
+                Relationship.person_a_id == a_id,
+                Relationship.person_b_id == b_id,
+            )
+            .first()
+        )
+        return (rel[0], rel[1], rel[2]) if rel is not None else (None, None, None)
 
     def add_parent_child(self, parent_id: int, child_id: int) -> Relationship:
         if parent_id == child_id:
@@ -370,6 +523,34 @@ class FamilyService:
         if self._has_ancestor(parent_id, child_id):
             raise ValueError("This parent/child relationship would create a cycle.")
         return self._get_or_create_relationship(REL_PARENT_CHILD, parent_id, child_id)
+
+    def remove_relationship(
+        self, person_a_id: int, person_b_id: int, relationship_type: str
+    ) -> bool:
+        """Delete a stored relationship row. Returns True if one was removed.
+
+        Spouse rows are stored in ascending id order, so the lookup is
+        normalised the same way :meth:`add_spouse` stores them. Parent/child is
+        directional: ``person_a`` is the parent, ``person_b`` the child.
+        """
+        if relationship_type == REL_SPOUSE:
+            a_id, b_id = sorted((person_a_id, person_b_id))
+        else:
+            a_id, b_id = person_a_id, person_b_id
+        row = (
+            self._session.query(Relationship)
+            .filter(
+                Relationship.relationship_type == relationship_type,
+                Relationship.person_a_id == a_id,
+                Relationship.person_b_id == b_id,
+            )
+            .first()
+        )
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.flush()
+        return True
 
     def link_derived_parents(self, person_id: int) -> list[Relationship]:
         """Materialise the relationships a person's family code implies.
@@ -416,6 +597,30 @@ class FamilyService:
             )
 
         return created
+
+    def regenerate_all_links(self) -> int:
+        """Re-derive relationships from every person's family code.
+
+        Runs :meth:`link_derived_parents` for all persons that have a family
+        code, materialising the parent/child/spouse links their codes imply.
+        Useful after the codes are edited or extended. Per-person failures
+        (e.g. a code that would create a cycle) are skipped so one bad code does
+        not abort the whole pass. Returns the number of relationships created or
+        already present that were touched.
+        """
+        person_ids = [
+            pid
+            for (pid,) in self._session.query(Person.id)
+            .filter(Person.family_code.isnot(None))
+            .all()
+        ]
+        touched = 0
+        for pid in person_ids:
+            try:
+                touched += len(self.link_derived_parents(pid))
+            except ValueError:
+                continue  # invalid/cyclic code — leave it for manual fixing
+        return touched
 
     def are_spouses(self, person_id_a: int, person_id_b: int) -> bool:
         if person_id_a == person_id_b:

@@ -7,6 +7,7 @@ const m = loadManifest();
 const tiles = [
   { href: link('/persons/page/1/'), label: 'Személyek', count: m.personCount, icon: '👤' },
   m.hasObjects ? { href: link('/objects/page/1/'), label: 'Objektumok', count: m.objectCount, icon: '📦' } : null,
+  m.hasFamilyTree ? { href: link('/family-tree/'), label: 'Családfa', icon: '🌳' } : null,
   { href: link('/photos/page/1/'), label: 'Fotók', count: m.photoCount, icon: '🖼️' },
   m.hasMap ? { href: '/map.html', label: 'Térkép', icon: '🗺️' } : null,
   m.hasSlideshow ? { href: '/slideshow.html', label: 'Diavetítés', icon: '▶️' } : null,

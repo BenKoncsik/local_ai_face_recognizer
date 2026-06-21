@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 from sqlalchemy.orm import Session
 
+from app import __version__ as APP_VERSION
 from app.db.models import Face, Image, Person, Relationship
 from app.utils.image_utils import load_image_bgr, save_image_bgr
 
@@ -209,6 +211,8 @@ class ExportService:
         person_id: Optional[int] = None,
         *,
         run_build: bool = True,
+        write_run_scripts: bool = True,
+        server_auth: bool = False,
         astro_project_dir: Optional[str] = None,
         progress_callback: Optional["Callable[[int, str], None]"] = None,
     ) -> Path:
@@ -430,6 +434,13 @@ class ExportService:
         person_records: List[dict] = []
         for person in persons:
             thumb_path, tw, th = _export_person_thumb(person, images_root)
+            # No explicit portrait set: fall back to the person's best face crop
+            # (already exported as faceThumbs), so person cards and the family
+            # tree show a photo whenever one exists — mirroring the desktop app.
+            if not thumb_path:
+                face_thumbs = person_face_thumbs.get(person.id, [])
+                if face_thumbs:
+                    thumb_path, tw, th = face_thumbs[0], 0, 0
             birth_year = _extract_year(person.birth_date)
             death_year = _extract_year(person.death_date)
             from app.services.person_group_service import PersonGroupService
@@ -466,6 +477,20 @@ class ExportService:
         # --- object records (collection page, mirrors person records) ---
         object_records = self._build_object_export_records(
             images_root, image_id_to_photo_id
+        )
+
+        _report(79, "Családfa összeállítása…")
+        # --- family tree (interactive whole-forest graph) ---
+        # Only meaningful for a full export: the graph spans the entire forest,
+        # so a single-person export would reference persons without thumbnails.
+        family_tree = (
+            _build_family_tree_export(
+                self._session,
+                person_records,
+                {ph["id"]: ph["thumb"] for ph in photos},
+            )
+            if person_id is None
+            else None
         )
 
         # --- search index (minimal) ---
@@ -518,21 +543,29 @@ class ExportService:
         # generators, written into public/ so Astro copies them to the dist root.
         public_dir = project / "public"
         has_collages = False
-        if map_records:
-            _write_map_export_files(public_dir, map_records)
-        if tour_records:
-            _write_tour_export_files(
-                public_dir, tour_records, person_details, object_details
-            )
         try:
             if self._has_collages():
                 self.export_collage_html(str(public_dir))
                 has_collages = True
         except Exception as exc:  # noqa: BLE001 — collages are optional parity
             log.warning("Collage export skipped: %s", exc)
+        standalone_flags = {
+            "has_map": bool(map_records),
+            "has_slideshow": bool(tour_records),
+            "has_objects": bool(object_records),
+            "has_family_tree": bool(family_tree and family_tree["persons"]),
+            "has_collages": has_collages,
+        }
+        if map_records:
+            _write_map_export_files(public_dir, map_records, flags=standalone_flags, app_version=APP_VERSION)
+        if tour_records:
+            _write_tour_export_files(
+                public_dir, tour_records, person_details, object_details, flags=standalone_flags,
+            )
 
         manifest = {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "appVersion": APP_VERSION,
             "pageSize": ASTRO_PAGE_SIZE,
             "personCount": len(person_records),
             "photoCount": len(photos),
@@ -541,10 +574,15 @@ class ExportService:
             "hasSlideshow": bool(tour_records),
             "hasObjects": bool(object_records),
             "hasCollages": has_collages,
+            "hasFamilyTree": bool(family_tree and family_tree["persons"]),
             "title": "Face Gallery",
+            "hasAuth": server_auth,
+            "authToken": "",
         }
         _write_json(data_dir / "manifest.json", manifest)
         _write_json(data_dir / "persons.json", person_records)
+        if family_tree and family_tree["persons"]:
+            _write_json(data_dir / "family-tree.json", family_tree)
         _write_json(data_dir / "objects.json", object_records)
         _write_json(data_dir / "photos.json", photos)
         _write_json(data_dir / "map-data.json", map_records)
@@ -572,6 +610,12 @@ class ExportService:
             raise RuntimeError(f"Astro build produced no dist/ at {dist}")
         _report(95, "Fájlok másolása a célmappába…")
         _copy_tree_into(dist, out)
+        # The standalone run scripts launch a *no-auth* static server. The
+        # server/docker bundles serve dist/ behind an OTP auth layer, so they
+        # must not ship these launchers — they would let anyone open the gallery
+        # without logging in. Only the plain static export gets them.
+        if write_run_scripts:
+            _write_run_scripts(out)
         log.info("Astro export → %s", out)
         _report(100, "Kész.")
         return out
@@ -1235,15 +1279,79 @@ def _valid_gps_pair(latitude: Optional[float], longitude: Optional[float]) -> bo
     return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
 
 
-def _write_map_export_files(out: Path, records: List[dict]) -> None:
+def _build_standalone_nav_html(current: str, *, has_map: bool = False, has_slideshow: bool = False,
+                               has_objects: bool = False, has_family_tree: bool = False,
+                               has_collages: bool = False) -> str:
+    items = [
+        ("gallery",     "index.html",                "Galéria"),
+        ("persons",     "persons/page/1/index.html", "Személyek"),
+        ("photos",      "photos/page/1/index.html",  "Fotók"),
+    ]
+    if has_objects:
+        items.append(("objects",     "objects/page/1/index.html", "Objektumok"))
+    if has_family_tree:
+        items.append(("family-tree", "family-tree/index.html",    "Családfa"))
+    if has_collages:
+        items.append(("collages",    "collage_index.html",        "Kollázsok"))
+    if has_map:
+        items.append(("map",         "map.html",                  "Térkép"))
+    if has_slideshow:
+        items.append(("slideshow",   "slideshow.html",            "Diavetítés"))
+    parts = []
+    for key, href, label in items:
+        cur = ' aria-current="page"' if key == current else ""
+        parts.append(f'    <a{cur} href="{href}">{label}</a>')
+    return "<nav>\n" + "\n".join(parts) + "\n  </nav>"
+
+
+def _build_standalone_footer_html(app_version: str) -> str:
+    ver_badge = f'<span class="footer-ver">v{app_version}</span>' if app_version else ""
+    from datetime import datetime, timezone
+    import zoneinfo
+    now_budapest = datetime.now(zoneinfo.ZoneInfo("Europe/Budapest"))
+    generated_str = now_budapest.strftime("%Y. %m. %d. %H:%M")
+    return f"""<footer>
+  <div class="footer-inner">
+    <span class="footer-author">Készítette: <strong>Koncsik Benedek</strong> {ver_badge}</span>
+    <span class="footer-generated">Exportálva: {generated_str}</span>
+    <span class="footer-links">
+      <a href="https://x.com/BenedekKoncsik" target="_blank" rel="noopener" title="X (Twitter)"><svg class="fi" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622 5.91-5.622Zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+      <a href="https://github.com/BenKoncsik" target="_blank" rel="noopener" title="GitHub profil"><svg class="fi" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg></a>
+      <a href="https://github.com/HunKonTech" target="_blank" rel="noopener" title="GitHub szervezet"><svg class="fi" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg> <span class="fi-label">HunKonTech</span></a>
+      <a href="https://github.com/HunKonTech/local_ai_face_recognizer" target="_blank" rel="noopener" title="Projekt GitHub"><svg class="fi" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8Z"/></svg> <span class="fi-label">Repo</span></a>
+      <a href="https://github.com/HunKonTech/local_ai_face_recognizer/releases" target="_blank" rel="noopener" title="Kiadások"><svg class="fi" viewBox="0 0 16 16" fill="currentColor"><path d="M1 7.775V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 0 1 0 2.474l-5.026 5.026a1.75 1.75 0 0 1-2.474 0l-6.25-6.25A1.752 1.752 0 0 1 1 7.775Zm1.5 0c0 .066.026.13.073.177l6.25 6.25a.25.25 0 0 0 .354 0l5.025-5.025a.25.25 0 0 0 0-.354l-6.25-6.25a.25.25 0 0 0-.177-.073H2.75a.25.25 0 0 0-.25.25ZM6 5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg> <span class="fi-label">Releases</span></a>
+    </span>
+  </div>
+</footer>"""
+
+
+_STANDALONE_FOOTER_CSS = """
+footer{border-top:1px solid #2a2a2a;background:#141414;padding:10px 20px}
+.footer-inner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:.78rem;color:#666}
+.footer-author{display:flex;align-items:center;gap:6px}
+.footer-author strong{color:#999;font-weight:600}
+.footer-ver{background:#1d2b45;color:#88aaff;border:1px solid #3e5f9c;border-radius:4px;padding:1px 6px;font-size:.72rem;font-family:monospace}
+.footer-generated{color:#555;font-size:.75rem}
+.footer-links{display:flex;align-items:center;gap:4px}
+.footer-links a{display:inline-flex;align-items:center;gap:4px;color:#555;text-decoration:none;padding:4px 6px;border-radius:5px}
+.footer-links a:hover{color:#aac;background:#1e1e2e}
+.fi{width:15px;height:15px;flex-shrink:0}
+.fi-label{font-size:.72rem}
+"""
+
+
+def _write_map_export_files(out: Path, records: List[dict], *, flags: dict, app_version: str = "") -> None:
     data_json = json.dumps(records, ensure_ascii=False, indent=2)
     (out / "map-data.json").write_text(data_json + "\n", encoding="utf-8")
     (out / "map-data.js").write_text(
         "window.MAP_EXPORT_DATA = " + _json_for_script(records, indent=2) + ";\n",
         encoding="utf-8",
     )
-    (out / "map.html").write_text(_MAP_HTML_TEMPLATE, encoding="utf-8")
-    (out / "map.css").write_text(_MAP_CSS, encoding="utf-8")
+    nav_html = _build_standalone_nav_html("map", **flags)
+    footer_html = _build_standalone_footer_html(app_version)
+    html = _MAP_HTML_TEMPLATE.replace("STANDALONE_NAV_PLACEHOLDER", nav_html).replace("STANDALONE_FOOTER_PLACEHOLDER", footer_html)
+    (out / "map.html").write_text(html, encoding="utf-8")
+    (out / "map.css").write_text(_MAP_CSS + _STANDALONE_FOOTER_CSS, encoding="utf-8")
     (out / "map.js").write_text(_MAP_JS, encoding="utf-8")
 
 
@@ -1325,9 +1433,12 @@ def _write_tour_export_files(
     records: List[dict],
     persons: Optional[Dict[str, dict]] = None,
     objects: Optional[Dict[str, dict]] = None,
+    *,
+    flags: Optional[dict] = None,
 ) -> None:
     persons = persons or {}
     objects = objects or {}
+    flags = flags or {}
     data_json = json.dumps(records, ensure_ascii=False, indent=2)
     (out / "slideshow-data.json").write_text(data_json + "\n", encoding="utf-8")
     (out / "slideshow-data.js").write_text(
@@ -1336,7 +1447,9 @@ def _write_tour_export_files(
         + "window.TOUR_OBJECTS = " + _json_for_script(objects, indent=2) + ";\n",
         encoding="utf-8",
     )
-    (out / "slideshow.html").write_text(_TOUR_HTML_TEMPLATE, encoding="utf-8")
+    nav_html = _build_standalone_nav_html("slideshow", **flags) if flags else ""
+    html = _TOUR_HTML_TEMPLATE.replace("STANDALONE_NAV_PLACEHOLDER", nav_html)
+    (out / "slideshow.html").write_text(html, encoding="utf-8")
     (out / "slideshow.css").write_text(_TOUR_CSS, encoding="utf-8")
     (out / "slideshow.js").write_text(_TOUR_JS, encoding="utf-8")
 
@@ -1354,6 +1467,261 @@ def _json_for_script(value, *, indent: Optional[int] = None) -> str:
 # ---------------------------------------------------------------------------
 # Astro export helpers
 # ---------------------------------------------------------------------------
+
+
+_RUN_SH = r"""#!/usr/bin/env bash
+# Face Gallery – helyi webszerver indítása (macOS / Linux)
+# Futtatás: bash scripts/run.sh
+# (Ha szükséges: chmod +x scripts/run.sh && ./scripts/run.sh)
+
+PORT=8000
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo ""
+echo "  ╔════════════════════════════════════╗"
+echo "  ║  Face Gallery  –  Helyi szerver    ║"
+echo "  ║  http://localhost:$PORT            ║"
+echo "  ║  Leállítás: Ctrl+C                 ║"
+echo "  ╚════════════════════════════════════╝"
+echo ""
+
+# Böngésző megnyitása háttérben (2 mp késéssel)
+( sleep 2
+  open  "http://localhost:$PORT" 2>/dev/null \
+  || xdg-open "http://localhost:$PORT" 2>/dev/null \
+  || true ) &
+
+# ---- Python 3 elindítása ----
+start_py3() {
+  echo "Python 3 szerver indítása ($1)..."
+  exec "$1" -m http.server $PORT --directory "$ROOT"
+}
+
+# ---- Python 2 elindítása ----
+start_py2() {
+  echo "Python 2 szerver indítása..."
+  cd "$ROOT" || exit 1
+  exec python -m SimpleHTTPServer $PORT
+}
+
+# ---- Node.js szerver indítása ----
+start_node() {
+  echo "Node.js szerver indítása..."
+  exec node -e "
+var h=require('http'),fs=require('fs'),p=require('path');
+var m={'.html':'text/html','.css':'text/css','.js':'application/javascript',
+  '.json':'application/json','.jpg':'image/jpeg','.jpeg':'image/jpeg',
+  '.png':'image/png','.gif':'image/gif','.svg':'image/svg+xml',
+  '.webp':'image/webp','.ico':'image/x-icon','.woff2':'font/woff2','.woff':'font/woff'};
+h.createServer(function(req,res){
+  var fp=p.join('$ROOT',decodeURIComponent(req.url.split('?')[0]));
+  try{var s=fs.statSync(fp); if(s.isDirectory()) fp=p.join(fp,'index.html');}catch(e){}
+  fs.readFile(fp,function(err,d){
+    if(err){res.writeHead(404);res.end('Not found');return;}
+    var ext=p.extname(fp).toLowerCase();
+    res.writeHead(200,{'Content-Type':m[ext]||'application/octet-stream'});res.end(d);
+  });
+}).listen($PORT,'127.0.0.1',function(){
+  console.log('Szerver elindult: http://localhost:$PORT');
+});"
+}
+
+# --- Keresési sorrend ---
+# macOS rendszer-Python (12.3+)
+[[ -x /usr/bin/python3 ]] && start_py3 /usr/bin/python3
+
+command -v python3 &>/dev/null && start_py3 python3
+
+if command -v python &>/dev/null; then
+  VER=$(python -c "import sys; print(sys.version_info[0])" 2>/dev/null || echo 0)
+  [[ "$VER" == "3" ]] && start_py3 python
+  [[ "$VER" == "2" ]] && start_py2
+fi
+
+command -v node &>/dev/null && start_node
+
+# --- Automatikus telepítés ---
+echo "Python 3 és Node.js sem található. Telepítés megkísérlése..."
+echo ""
+
+OS="$(uname -s)"
+
+if [[ "$OS" == "Darwin" ]]; then
+  if command -v brew &>/dev/null; then
+    echo "Homebrew segítségével Python 3 telepítése (sudo nélkül)..."
+    brew install python3
+    command -v python3 &>/dev/null && start_py3 python3
+  fi
+  echo ""
+  echo "HIBA: Python 3 nem telepíthető automatikusan."
+  echo ""
+  echo "Kézi telepítési lehetőségek:"
+  echo "  1) Homebrew (ajánlott): https://brew.sh"
+  echo "     majd: brew install python3"
+  echo "  2) python.org: https://www.python.org/downloads/macos/"
+  echo ""
+  echo "Telepítés után futtassa újra: bash scripts/run.sh"
+  exit 1
+fi
+
+if [[ "$OS" == "Linux" ]]; then
+  if   command -v apt-get &>/dev/null; then sudo apt-get update -q && sudo apt-get install -y python3
+  elif command -v dnf     &>/dev/null; then sudo dnf install -y python3
+  elif command -v yum     &>/dev/null; then sudo yum install -y python3
+  elif command -v pacman  &>/dev/null; then sudo pacman -S --noconfirm python
+  elif command -v zypper  &>/dev/null; then sudo zypper install -y python3
+  else
+    echo "Ismeretlen disztribúció. Telepítse manuálisan:"
+    echo "  https://www.python.org/downloads/"
+    exit 1
+  fi
+  command -v python3 &>/dev/null && start_py3 python3
+fi
+
+echo "Nem sikerült elindítani a szervert."
+echo "Telepítse a Python 3-at: https://www.python.org/downloads/"
+exit 1
+"""
+
+_RUN_PS1 = r"""# Face Gallery – helyi webszerver indítása (Windows PowerShell)
+# Futtatás: .\scripts\run.ps1
+#
+# Ha "futtatás tiltott" hibaüzenetet kap:
+#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+#   (majd futtassa újra)
+
+$PORT = 8000
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$Root = Split-Path -Parent $ScriptDir
+
+Write-Host ""
+Write-Host "  ╔════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "  ║  Face Gallery  –  Helyi szerver    ║" -ForegroundColor Cyan
+Write-Host "  ║  http://localhost:$PORT            ║" -ForegroundColor Cyan
+Write-Host "  ║  Leállítás: Ctrl+C                 ║" -ForegroundColor Cyan
+Write-Host "  ╚════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+# Böngésző megnyitása háttérben (2 mp késéssel)
+Start-Job -ScriptBlock {
+    param($url)
+    Start-Sleep 2
+    Start-Process $url
+} -ArgumentList "http://localhost:$PORT" | Out-Null
+
+# ---- Python indítása ----
+function Start-PythonServer([string]$Cmd) {
+    $ver = & $Cmd -c "import sys; print(sys.version_info[0])" 2>$null
+    if ($ver -eq "3") {
+        Write-Host "Python 3 szerver indítása ($Cmd)..."
+        & $Cmd -m http.server $PORT --directory $Root
+        return $true
+    }
+    if ($ver -eq "2") {
+        Write-Host "Python 2 szerver indítása ($Cmd)..."
+        Set-Location $Root
+        & $Cmd -m SimpleHTTPServer $PORT
+        return $true
+    }
+    return $false
+}
+
+# ---- Node.js szerver indítása ----
+function Start-NodeServer {
+    Write-Host "Node.js szerver indítása..."
+    $RootEsc = $Root -replace '\\', '\\\\'
+    $script = @"
+var h=require('http'),fs=require('fs'),p=require('path');
+var m={'.html':'text/html','.css':'text/css','.js':'application/javascript',
+  '.json':'application/json','.jpg':'image/jpeg','.jpeg':'image/jpeg',
+  '.png':'image/png','.gif':'image/gif','.svg':'image/svg+xml',
+  '.webp':'image/webp','.ico':'image/x-icon','.woff2':'font/woff2','.woff':'font/woff'};
+h.createServer(function(req,res){
+  var fp=p.join('$RootEsc',decodeURIComponent(req.url.split('?')[0]));
+  try{var s=fs.statSync(fp); if(s.isDirectory()) fp=p.join(fp,'index.html');}catch(e){}
+  fs.readFile(fp,function(err,d){
+    if(err){res.writeHead(404);res.end('Not found');return;}
+    var ext=p.extname(fp).toLowerCase();
+    res.writeHead(200,{'Content-Type':m[ext]||'application/octet-stream'});res.end(d);
+  });
+}).listen($PORT,'127.0.0.1',function(){
+  console.log('Szerver elindult: http://localhost:$PORT');
+});
+"@
+    node -e $script
+}
+
+# --- Keresési sorrend ---
+foreach ($cmd in @('python3', 'python', 'py')) {
+    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+        if (Start-PythonServer $cmd) { exit 0 }
+    }
+}
+
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    Start-NodeServer
+    exit 0
+}
+
+# --- Automatikus telepítés winget-tel ---
+Write-Host "Python és Node.js nem található. Automatikus telepítés..." -ForegroundColor Yellow
+Write-Host ""
+
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Write-Host "winget segítségével Python 3 telepítése..." -ForegroundColor Yellow
+    try {
+        winget install --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        # PATH frissítése az aktuális sessionben
+        $env:PATH = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+                    [System.Environment]::GetEnvironmentVariable('Path','User')
+        foreach ($cmd in @('python3', 'python', 'py')) {
+            if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+                if (Start-PythonServer $cmd) { exit 0 }
+            }
+        }
+        Write-Host ""
+        Write-Host "Python telepítve. Zárja be ezt az ablakot, nyisson egy új PowerShellt," -ForegroundColor Yellow
+        Write-Host "majd futtassa újra: .\scripts\run.ps1" -ForegroundColor Yellow
+        Read-Host "Enter a kilépéshez"
+        exit 0
+    } catch {
+        Write-Host "winget telepítés sikertelen." -ForegroundColor Red
+    }
+}
+
+# --- Manuális telepítési útmutató ---
+Write-Host ""
+Write-Host "Telepítési lehetőségek:" -ForegroundColor Cyan
+Write-Host "  1) python.org (ajánlott):"
+Write-Host "       https://www.python.org/downloads/windows/"
+Write-Host "     (Jelölje be: 'Add Python to PATH')"
+Write-Host ""
+Write-Host "  2) winget (ha elérhető):"
+Write-Host "       winget install Python.Python.3.12"
+Write-Host ""
+Write-Host "  3) Microsoft Store: keressen rá 'Python 3.12'-re"
+Write-Host ""
+Write-Host "Telepítés után futtassa újra: .\scripts\run.ps1"
+Write-Host ""
+Read-Host "Enter a kilépéshez"
+exit 1
+"""
+
+
+def _write_run_scripts(out: Path) -> None:
+    """Write platform-specific launcher scripts into ``out/scripts/``."""
+    import stat
+
+    scripts_dir = out / "scripts"
+    scripts_dir.mkdir(exist_ok=True)
+
+    sh = scripts_dir / "run.sh"
+    sh.write_text(_RUN_SH, encoding="utf-8")
+    # Make executable for the owning user
+    sh.chmod(sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    (scripts_dir / "run.ps1").write_text(_RUN_PS1, encoding="utf-8")
 
 
 def _default_astro_project_dir() -> Path:
@@ -1563,6 +1931,161 @@ def _build_person_relationship_map(
     return result
 
 
+def _build_family_tree_export(
+    session: Session,
+    person_records: List[dict],
+    photo_thumbs: Optional[Dict[str, str]] = None,
+) -> Optional[dict]:
+    """Build the interactive family-tree graph bundle.
+
+    Returns ``{"persons": [...]}`` where each entry carries the person's identity
+    plus a generation band and parent/child/spouse edges (ids), ready for the
+    client-side renderer to lay out, recolour on selection and filter. Thumbnails
+    reuse the already-exported person thumbnails (``person_records``), so no extra
+    images are written.
+
+    The graph is built **directly from the ``Relationship`` rows** — the same
+    source that drives the in-app family tree and the per-person ``relationships``
+    list — rather than via ``FamilyTreeService``. That keeps the export in lock
+    step with whatever the app shows and avoids depending on optional schema
+    (the ``is_family_tree_member`` column is read best-effort only).
+
+    Returns ``None`` when there are no relationships, so the page is omitted.
+    """
+    by_id = {p["id"]: p for p in person_records}
+    if not by_id:
+        return None
+
+    # parent → children, child → parents, spouse ↔ spouse — restricted to persons
+    # that are actually being exported.
+    parents: Dict[int, set] = defaultdict(set)
+    children: Dict[int, set] = defaultdict(set)
+    spouses: Dict[int, set] = defaultdict(set)
+    # marriage_dates[(a,b)] = "start_date" or "start–end" for spouse pairs
+    marriage_dates: Dict[tuple, str] = {}
+    try:
+        rows = session.query(
+            Relationship.relationship_type,
+            Relationship.person_a_id,
+            Relationship.person_b_id,
+            Relationship.start_date,
+            Relationship.end_date,
+        ).all()
+    except Exception as exc:  # noqa: BLE001 — family tree is optional
+        log.warning("Family tree export skipped: %s", exc)
+        return None
+    for rtype, a_id, b_id, start_date, end_date in rows:
+        if a_id not in by_id or b_id not in by_id:
+            continue
+        kind = (rtype or "").lower()
+        if kind == "parentchild":
+            children[a_id].add(b_id)
+            parents[b_id].add(a_id)
+        elif kind == "spouse":
+            spouses[a_id].add(b_id)
+            spouses[b_id].add(a_id)
+            if start_date or end_date:
+                date_label = start_date or ""
+                if end_date:
+                    date_label = f"{date_label}–{end_date}"
+                key = (min(a_id, b_id), max(a_id, b_id))
+                marriage_dates[key] = date_label
+
+    ids = set(parents) | set(children) | set(spouses)
+    if not ids:
+        return None
+
+    # Show couples as joint parents: a child linked to only one member of a
+    # couple becomes a child of both spouses, so siblings share one bus and both
+    # parents highlight as ancestors — matching the in-app family tree.
+    from app.services.family_tree_service import infer_coparent_links
+
+    for coparent, child in infer_coparent_links(parents, spouses, ids):
+        parents[child].add(coparent)
+        children[coparent].add(child)
+
+    # Generation per node: child = max(parent)+1, spouses aligned. The parent
+    # graph is acyclic, so bounded relaxation converges (mirrors FamilyTreeService).
+    gen = {pid: 0 for pid in ids}
+    for _ in range(len(ids) + 1):
+        changed = False
+        for pid in ids:
+            for parent in parents.get(pid, ()):  # noqa: B007
+                if gen[pid] < gen.get(parent, 0) + 1:
+                    gen[pid] = gen[parent] + 1
+                    changed = True
+        for pid in ids:
+            for spouse in spouses.get(pid, ()):
+                if spouse in gen:
+                    top = max(gen[pid], gen[spouse])
+                    if gen[pid] != top or gen[spouse] != top:
+                        gen[pid] = gen[spouse] = top
+                        changed = True
+        if not changed:
+            break
+
+    # Best-effort membership flags (older DBs may lack the column).
+    members: Dict[int, bool] = {}
+    try:
+        for pid, flag in session.query(Person.id, Person.is_family_tree_member).all():
+            members[pid] = bool(flag)
+    except Exception:  # noqa: BLE001 — column is optional enrichment
+        members = {}
+
+    def _present(pids: set) -> List[int]:
+        return sorted(p for p in pids if p in by_id)
+
+    thumb_map = photo_thumbs or {}
+
+    def _person_photos(rec: dict) -> List[dict]:
+        # Photos this person appears in, with thumbnails, so the family-tree
+        # detail dialog can render a per-person gallery offline (file://). Capped
+        # to keep the inlined JSON small; the panel links to the full person page.
+        out: List[dict] = []
+        for iid in rec.get("imageIds", [])[:60]:
+            thumb = thumb_map.get(iid)
+            if thumb:
+                out.append({"id": iid, "thumb": thumb})
+        return out
+
+    persons: List[dict] = []
+    for pid in sorted(ids, key=lambda p: (gen[p], p)):
+        rec = by_id[pid]
+        persons.append(
+            {
+                "id": pid,
+                "name": rec["name"],
+                "gender": rec["gender"] or "",
+                "nickname": rec.get("nickname", ""),
+                "marriedName": rec.get("marriedName", ""),
+                "familyCode": rec["familyCode"] or "",
+                "externalFamilyCode": rec.get("externalFamilyCode", ""),
+                "birthDate": rec.get("birthDate", ""),
+                "birthPlace": rec.get("birthPlace", ""),
+                "deathDate": rec.get("deathDate", ""),
+                "deathPlace": rec.get("deathPlace", ""),
+                "birthYear": rec["birthYear"],
+                "deathYear": rec["deathYear"],
+                "notes": rec.get("notes", ""),
+                "groups": rec.get("groups", []),
+                "thumb": rec["thumb"],
+                "imageCount": rec.get("imageCount", 0),
+                "photos": _person_photos(rec),
+                "generation": gen[pid],
+                "isMember": members.get(pid, True),
+                "parents": _present(parents.get(pid, set())),
+                "children": _present(children.get(pid, set())),
+                "spouses": _present(spouses.get(pid, set())),
+                "spouseMarriageDates": {
+                    str(sp): marriage_dates[(min(pid, sp), max(pid, sp))]
+                    for sp in spouses.get(pid, set())
+                    if (min(pid, sp), max(pid, sp)) in marriage_dates
+                },
+            }
+        )
+    return {"persons": persons}
+
+
 def _write_json(path: Path, data) -> None:
     """Write compact UTF-8 JSON (no ASCII escaping, minimal separators)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1610,12 +2133,8 @@ _MAP_HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>Face Gallery</h1>
-  <nav>
-    <a href="index.html">Galéria</a>
-    <a href="slideshow.html">Diavetítés</a>
-    <a aria-current="page" href="map.html">Térkép</a>
-  </nav>
+  <a class="brand" href="index.html">Face Gallery</a>
+  STANDALONE_NAV_PLACEHOLDER
   <span id="map-count"></span>
 </header>
 <main>
@@ -1637,6 +2156,7 @@ _MAP_HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="fallback-list"></div>
   </section>
 </main>
+STANDALONE_FOOTER_PLACEHOLDER
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="map-data.js"></script>
@@ -1651,11 +2171,12 @@ body{min-height:100vh;background:#111;color:#ddd;font-family:system-ui,sans-seri
 button,input,select{font:inherit}
 header{background:#1a1a1a;padding:14px 20px;border-bottom:1px solid #333;
        display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
+.brand{font-size:1.15rem;color:#88aaff;font-weight:700;text-decoration:none;white-space:nowrap}
 nav{display:flex;gap:8px;flex-wrap:wrap}
 nav a{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;border-radius:6px;
-      padding:7px 10px;background:#1d2b45;white-space:nowrap}
-nav a:hover,nav a:focus,nav a[aria-current="page"]{border-color:#88aaff;background:#26385a;outline:none}
+      padding:7px 10px;background:#1d2b45;white-space:nowrap;font-size:.9rem}
+nav a:hover,nav a:focus{border-color:#88aaff;background:#26385a;outline:none}
+nav a[aria-current="page"]{background:#2f6df0;border-color:#88aaff;color:#fff}
 #map-count{margin-left:auto;color:#aaa;font-size:.9rem}
 main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 62px)}
 #filters{border-right:1px solid #333;background:#171717;padding:14px;display:flex;
@@ -1673,6 +2194,11 @@ select:focus{outline:none;border-color:#88aaff}
 .list-title{font-size:.82rem;font-weight:700;overflow-wrap:anywhere;line-height:1.25}
 .list-meta{font-size:.74rem;color:#999;overflow-wrap:anywhere;line-height:1.25;margin-top:2px}
 #map-wrap{position:relative;min-width:0;background:#0d0d0d}
+#layer-btn{position:absolute;bottom:38px;right:10px;z-index:1000;
+  background:#1e2a3a;color:#dbe6ff;border:1px solid #3e5f9c;
+  border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.78rem;
+  white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+#layer-btn:hover{background:#26385a;border-color:#88aaff}
 #map{height:calc(100vh - 62px);min-height:520px;width:100%}
 #fallback-list{display:none;padding:16px;max-width:980px}
 .fallback-card{display:grid;grid-template-columns:92px 1fr;gap:12px;margin-bottom:10px;
@@ -1806,16 +2332,40 @@ function initMap(){
     return;
   }
   map = L.map('map', {scrollWheelZoom: true});
-  const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  const tileModern = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
   });
-  tiles.on('tileerror', () => {
+  const tileHist = L.tileLayer('https://tiles.mapire.eu/mercator/europe-19century-thirdsurvey/{z}/{x}/{y}', {
+    maxZoom: 15,
+    attribution: '&copy; <a href="https://mapire.eu">Mapire.eu</a> – Harmadik katonai felmérés (~1880)',
+    errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  });
+  let isHist = false;
+  tileModern.addTo(map);
+  tileModern.on('tileerror', () => {
     els.status.textContent = 'A térképcsempék nem tölthetők be, de a markerek és a lista elérhetők.';
   });
-  tiles.addTo(map);
   markerLayer = L.markerClusterGroup ? L.markerClusterGroup({chunkedLoading: true}) : L.layerGroup();
   markerLayer.addTo(map);
+
+  const btn = document.createElement('button');
+  btn.id = 'layer-btn';
+  btn.textContent = 'Történelmi (1880)';
+  btn.title = 'Váltás modern / 1880-as térkép között (Osztrák-Magyar Monarchia)';
+  document.getElementById('map').appendChild(btn);
+  btn.addEventListener('click', () => {
+    if(isHist){
+      map.removeLayer(tileHist);
+      tileModern.addTo(map);
+      btn.textContent = 'Történelmi (1880)';
+    } else {
+      map.removeLayer(tileModern);
+      tileHist.addTo(map);
+      btn.textContent = 'Modern térkép';
+    }
+    isHist = !isHist;
+  });
 }
 
 function renderMarkers(items){
@@ -1909,12 +2459,8 @@ _TOUR_HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>Képtúra</h1>
-  <nav>
-    <a href="index.html">Galéria</a>
-    <a aria-current="page" href="slideshow.html">Diavetítés</a>
-    <a href="map.html">Térkép</a>
-  </nav>
+  <a class="brand" href="index.html">Face Gallery</a>
+  STANDALONE_NAV_PLACEHOLDER
   <button id="filters-toggle" type="button" aria-expanded="false">Szűrők</button>
   <span id="tour-count"></span>
 </header>
@@ -2043,11 +2589,12 @@ body{min-height:100vh;background:#111;color:#ddd;font-family:system-ui,sans-seri
 button,input,select{font:inherit}
 header{background:#1a1a1a;padding:12px 18px;border-bottom:1px solid #333;
        display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-header h1{font-size:1.2rem;color:#88aaff;white-space:nowrap}
+.brand{font-size:1.15rem;color:#88aaff;font-weight:700;text-decoration:none;white-space:nowrap}
 nav{display:flex;gap:8px;flex-wrap:wrap}
 nav a{color:#dbe6ff;text-decoration:none;border:1px solid #3e5f9c;border-radius:6px;
-      padding:7px 10px;background:#1d2b45;white-space:nowrap}
-nav a:hover,nav a:focus,nav a[aria-current="page"]{border-color:#88aaff;background:#26385a;outline:none}
+      padding:7px 10px;background:#1d2b45;white-space:nowrap;font-size:.9rem}
+nav a:hover,nav a:focus{border-color:#88aaff;background:#26385a;outline:none}
+nav a[aria-current="page"]{background:#2f6df0;border-color:#88aaff;color:#fff}
 #filters-toggle{padding:7px 12px;border:1px solid #3e5f9c;border-radius:6px;color:#eaf0ff;
                 background:#1d2b45;cursor:pointer}
 #filters-toggle:hover{border-color:#88aaff;background:#26385a}

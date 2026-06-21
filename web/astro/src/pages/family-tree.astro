@@ -1,0 +1,950 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { loadFamilyTree, type FamilyTreePerson } from '../lib/data';
+
+// This page is emitted at /family-tree/index.html, so the site root is one level
+// up. The thumbnails are exported as "/assets/..."; rewrite them to "../assets/..."
+// so the JS-injected <image href> resolves on both http and file://
+// (astro-relative-links only rewrites static markup, not runtime-set attributes).
+const rel = (s: string | null) => (s ? '../' + s.replace(/^\//, '') : null);
+const tree = loadFamilyTree();
+const persons: FamilyTreePerson[] = tree.persons.map((p) => ({
+  ...p,
+  thumb: rel(p.thumb),
+  photos: (p.photos ?? []).map((ph) => ({ id: ph.id, thumb: rel(ph.thumb) as string })),
+}));
+const dataJson = JSON.stringify({ persons });
+---
+
+<Layout title="Családfa" active="family-tree" search={false}>
+  <div class="ft-page">
+    <div class="ft-controls">
+      <div class="ft-search">
+        <input id="ft-search" type="search" autocomplete="off" placeholder="Személy keresése…" aria-label="Személy keresése" />
+        <div id="ft-search-results" class="ft-results" hidden></div>
+      </div>
+
+      <label class="ft-field">
+        <span>Nézet</span>
+        <select id="ft-mode">
+          <option value="full">Teljes családfa</option>
+          <option value="ancestors">Csak felmenők</option>
+          <option value="descendants">Csak leszármazottak</option>
+          <option value="lineage">Közvetlen vonal</option>
+        </select>
+      </label>
+
+      <span id="ft-focus" class="ft-focus" hidden></span>
+
+      <span class="ft-zoom">
+        <button id="ft-zoom-out" type="button" title="Kicsinyítés">−</button>
+        <button id="ft-zoom-in" type="button" title="Nagyítás">+</button>
+        <button id="ft-fit" type="button" title="Teljes nézet">Illesztés</button>
+        <button id="ft-reset" type="button" title="Kijelölés törlése">Visszaállítás</button>
+      </span>
+
+      <label class="ft-toggle">
+        <input id="ft-photos" type="checkbox" checked /> Fotók
+      </label>
+    </div>
+
+    <div class="ft-legend">
+      <span><i class="sw sel"></i> Kijelölt</span>
+      <span><i class="sw anc"></i> Felmenő</span>
+      <span><i class="sw desc"></i> Leszármazott</span>
+      <span><i class="sw spouse"></i> Házastárs</span>
+      <span><i class="sw male"></i> Férfi</span>
+      <span><i class="sw female"></i> Nő</span>
+    </div>
+
+    <div class="ft-body">
+      <div id="ft-stage" class="ft-stage">
+        <svg id="ft-svg" xmlns="http://www.w3.org/2000/svg">
+          <g id="ft-viewport">
+            <g id="ft-links"></g>
+            <g id="ft-nodes"></g>
+          </g>
+        </svg>
+        <div id="ft-empty" class="ft-empty" hidden>Nincs megjeleníthető családfa-adat.</div>
+        <div id="ft-hint" class="ft-hint" hidden></div>
+      </div>
+
+      <!-- Right-side detail panel — shown when a node is selected -->
+      <div id="ft-detail" class="ft-detail" hidden>
+        <button id="fdd-close" class="fdd-close" title="Bezárás" type="button">×</button>
+        <div class="fdd-thumb-wrap">
+          <img id="fdd-img" class="fdd-img" alt="" />
+          <div id="fdd-ph" class="fdd-ph">👤</div>
+        </div>
+        <div class="fdd-name" id="fdd-name"></div>
+        <div class="fdd-years" id="fdd-years"></div>
+        <dl class="fdd-meta" id="fdd-meta"></dl>
+        <div id="fdd-groups" class="fdd-groups" hidden></div>
+        <div id="fdd-notes" class="fdd-notes" hidden></div>
+        <div class="fdd-actions">
+          <button id="fdd-gallery-btn" type="button" class="fdd-btn">
+            🖼️ Képek megtekintése
+          </button>
+          <a id="fdd-person-link" href="#" target="_blank" rel="noopener" class="fdd-btn">
+            👤 Személy részletei
+          </a>
+          <a id="fdd-tree-newt" href="#" target="_blank" rel="noopener" class="fdd-btn">
+            ↗ Családfa új lapon
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Per-person photo browser dialog (opened from the detail panel). All
+         data is inline JSON, so it works offline over file://. -->
+    <div id="ft-gallery" class="ftg-overlay" hidden>
+      <div class="ftg-box" role="dialog" aria-modal="true" aria-labelledby="ftg-title">
+        <div class="ftg-head">
+          <span id="ftg-title" class="ftg-title"></span>
+          <a id="ftg-open" href="#" target="_blank" rel="noopener" class="ftg-open">Teljes oldal ↗</a>
+          <button id="ftg-close" type="button" class="ftg-close" title="Bezárás">×</button>
+        </div>
+        <div id="ftg-grid" class="ftg-grid"></div>
+        <div id="ftg-empty" class="ftg-empty" hidden>Ehhez a személyhez nincs exportált fotó.</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="application/json" id="ft-data" set:html={dataJson}></script>
+
+  <style>
+    .ft-page { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 420px; }
+    .ft-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .ft-field { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: #9bb; }
+    .ft-field select, .ft-search input {
+      background: #222; border: 1px solid #444; border-radius: 6px; color: #fff; padding: 7px 10px; font-size: .9rem;
+    }
+    .ft-field select:focus, .ft-search input:focus { outline: none; border-color: #88aaff; }
+    .ft-search { position: relative; flex: 1; min-width: 220px; max-width: 360px; }
+    .ft-search input { width: 100%; }
+    .ft-results {
+      position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 50vh; overflow-y: auto;
+      background: #181818; border: 1px solid #3e5f9c; border-radius: 8px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,.6);
+    }
+    .ft-results a {
+      display: flex; align-items: center; gap: 10px; padding: 7px 10px; text-decoration: none; color: #ddd;
+      border-bottom: 1px solid #262626; cursor: pointer;
+    }
+    .ft-results a:last-child { border-bottom: none; }
+    .ft-results a:hover, .ft-results a.active { background: #26385a; }
+    .ft-results img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; background: #050505; flex: none; }
+    .ft-results .ph { width: 34px; height: 34px; border-radius: 4px; background: #222; flex: none; }
+    .ft-results .r-sub { font-size: .72rem; color: #888; }
+    .ft-results .empty { padding: 10px; color: #888; font-size: .85rem; }
+    .ft-focus { font-size: .85rem; color: #cde; background: #1d2b45; border: 1px solid #3e5f9c; border-radius: 6px; padding: 5px 10px; }
+    .ft-zoom { display: inline-flex; gap: 4px; }
+    .ft-zoom button, .ft-toggle {
+      background: #1d2b45; border: 1px solid #3e5f9c; border-radius: 6px; color: #dbe6ff; padding: 6px 10px;
+      font-size: .85rem; cursor: pointer; white-space: nowrap;
+    }
+    .ft-zoom button:hover { border-color: #88aaff; background: #26385a; }
+    .ft-toggle { display: inline-flex; align-items: center; gap: 6px; }
+
+    .ft-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .78rem; color: #aaa; margin-bottom: 8px; }
+    .ft-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 2px solid #777; }
+    .sw.sel { border-color: #e03030; background: #2a1414; }
+    .sw.anc { border-color: #2f6df0; background: #14203a; }
+    .sw.desc { border-color: #2e9e4f; background: #122a1b; }
+    .sw.spouse { border-color: #c44fd9; background: #2a1430; }
+    .sw.male { border-color: #5b9bd5; background: #bcdcf2; }
+    .sw.female { border-color: #d99a2b; background: #f6d08a; }
+
+    /* Body: SVG canvas + detail panel side by side */
+    .ft-body { display: flex; gap: 8px; flex: 1; min-height: 0; }
+    .ft-stage { position: relative; flex: 1; border: 1px solid #333; border-radius: 8px; overflow: hidden; background: #0d0d0f; min-width: 0; }
+    #ft-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+    #ft-svg.grabbing { cursor: grabbing; }
+    .ft-empty, .ft-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #888; }
+    .ft-hint { top: 14px; transform: translateX(-50%); background: #1d2b45cc; border: 1px solid #3e5f9c; border-radius: 6px; padding: 6px 12px; font-size: .85rem; color: #cde; }
+
+    /* Detail panel — hidden by default; JS removes [hidden] to show it. */
+    /* Explicit rule needed: `.ft-detail { display:flex }` would otherwise win
+       over the browser's low-specificity `[hidden]{display:none}`. */
+    .ft-detail[hidden] { display: none !important; }
+    .ft-detail {
+      width: 256px; flex: none; display: flex; flex-direction: column; gap: 10px;
+      background: #141418; border: 1px solid #333; border-radius: 8px;
+      overflow-y: auto; padding: 14px; position: relative;
+    }
+    .fdd-close {
+      position: absolute; top: 8px; right: 10px; background: none; border: none;
+      color: #777; font-size: 1.3rem; cursor: pointer; line-height: 1; padding: 2px 4px;
+    }
+    .fdd-close:hover { color: #ddd; }
+    .fdd-thumb-wrap { width: 100%; aspect-ratio: 1; background: #0d0d0d; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .fdd-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .fdd-ph { font-size: 3.5rem; color: #333; }
+    .fdd-name { font-size: 1.05rem; font-weight: 700; color: #eee; line-height: 1.3; padding-right: 20px; word-break: break-word; }
+    .fdd-years { font-size: .82rem; color: #888; }
+    .fdd-meta { margin: 0; display: grid; gap: 4px; }
+    .fdd-groups { display: flex; flex-wrap: wrap; gap: 4px; }
+    .fdd-chip { background: #1d2b45; border: 1px solid #3e5f9c; border-radius: 12px; color: #cde; font-size: .74rem; padding: 2px 8px; }
+    .fdd-notes { font-size: .78rem; color: #aab; line-height: 1.45; border-left: 2px solid #3e5f9c; padding-left: 8px; white-space: pre-wrap; word-break: break-word; }
+    .fdd-actions { margin-top: auto; padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+    .fdd-btn {
+      display: block; text-align: center; background: #1d2b45; border: 1px solid #3e5f9c;
+      border-radius: 8px; color: #dbe6ff; padding: 9px 12px; font-size: .85rem;
+      text-decoration: none; transition: border-color .15s, background .15s;
+    }
+    .fdd-btn:hover { border-color: #88aaff; background: #26385a; }
+    button.fdd-btn { cursor: pointer; }
+
+    /* Per-person photo dialog */
+    .ftg-overlay[hidden] { display: none !important; }
+    .ftg-overlay {
+      position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, .72);
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .ftg-box {
+      background: #141418; border: 1px solid #3e5f9c; border-radius: 12px;
+      width: min(960px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, .6); overflow: hidden;
+    }
+    .ftg-head {
+      display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+      border-bottom: 1px solid #2a2a32;
+    }
+    .ftg-title { font-size: 1rem; font-weight: 700; color: #eee; flex: 1; min-width: 0; }
+    .ftg-open {
+      font-size: .82rem; color: #dbe6ff; text-decoration: none; border: 1px solid #3e5f9c;
+      border-radius: 6px; padding: 5px 10px; background: #1d2b45; white-space: nowrap;
+    }
+    .ftg-open:hover { border-color: #88aaff; background: #26385a; }
+    .ftg-close {
+      background: none; border: none; color: #999; font-size: 1.5rem; cursor: pointer;
+      line-height: 1; padding: 0 4px;
+    }
+    .ftg-close:hover { color: #fff; }
+    .ftg-grid {
+      display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      padding: 16px; overflow-y: auto;
+    }
+    .ftg-grid a { display: block; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: #050505; border: 1px solid #2a2a32; }
+    .ftg-grid a:hover { border-color: #88aaff; }
+    .ftg-grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ftg-empty { padding: 28px 16px; text-align: center; color: #888; }
+
+    @media (max-width: 760px) {
+      .ft-body { flex-direction: column; }
+      .ft-detail { width: 100%; height: auto; max-height: 240px; }
+    }
+  </style>
+
+  <!-- The SVG nodes/links/bands are created at runtime (createElementNS), so they
+       never receive Astro's scoped-style attribute. These rules must be global —
+       prefixed with #ft-svg so they don't leak to the rest of the site. -->
+  <style is:global>
+    /* Node styling — gender fills mirror the desktop app. */
+    #ft-svg .node { cursor: pointer; }
+    #ft-svg .node rect.box { fill: #dcdcdc; stroke: #9a9a9a; stroke-width: 1.5; }
+    #ft-svg .node.male rect.box { fill: #bcdcf2; stroke: #5b9bd5; }
+    #ft-svg .node.female rect.box { fill: #f6d08a; stroke: #d99a2b; }
+    #ft-svg .node text { fill: #1a1a1a; font-family: system-ui, sans-serif; }
+    #ft-svg .node text.nm { font-weight: 700; font-size: 12px; }
+    #ft-svg .node text.sub { font-size: 10.5px; fill: #444; }
+    #ft-svg .node.nonmember rect.box { stroke-dasharray: 5 3; }
+    #ft-svg .node.nonmember { opacity: .85; }
+
+    /* Selection highlight colours. */
+    #ft-svg .node.sel rect.box { stroke: #e03030; stroke-width: 4; }
+    #ft-svg .node.anc rect.box { stroke: #2f6df0; stroke-width: 3.5; }
+    #ft-svg .node.desc rect.box { stroke: #2e9e4f; stroke-width: 3.5; }
+    #ft-svg .node.spouse rect.box { stroke: #c44fd9; stroke-width: 3.5; }
+    #ft-svg .ft-nodes-dim .node:not(.sel):not(.anc):not(.desc):not(.spouse) { opacity: .22; }
+
+    /* Generation band labels */
+    #ft-svg .gen-label { fill: #505060; font-size: 11px; font-family: system-ui, sans-serif; font-weight: 600; }
+
+    /* Detail-panel meta rows are injected via innerHTML at runtime (no scoped attr). */
+    .fdd-row { display: flex; gap: 6px; }
+    .fdd-row dt { color: #6b86c0; font-size: .78rem; min-width: 80px; }
+    .fdd-row dd { color: #ccc; font-size: .82rem; word-break: break-all; }
+
+    #ft-svg .link { stroke: #6f6f78; stroke-width: 2; fill: none; }
+    #ft-svg .band-a { fill: #14141a; }
+    #ft-svg .band-b { fill: #181820; }
+    #ft-svg .marriage-date { fill: #aaa; font-size: 9.5px; font-family: system-ui, sans-serif; pointer-events: none; }
+  </style>
+
+  <!-- is:inline keeps this as a plain inline script (NOT an ES module). Astro
+       would otherwise bundle it into an external `type="module"` file, which
+       browsers refuse to load over file:// (CORS) — leaving the whole tree
+       blank when the exported site is opened by double-click. Must be plain JS
+       (no TypeScript syntax), since is:inline scripts are emitted verbatim. -->
+  <script is:inline>
+    (function () {
+      var SVGNS = 'http://www.w3.org/2000/svg';
+      var BOX_W = 176, BOX_H = 62, PHOTO = 46, H_GAP = 26, V_GAP = 74;
+
+      var dataEl = document.getElementById('ft-data');
+      var all = [];
+      try {
+        all = dataEl ? (JSON.parse(dataEl.textContent || '{"persons":[]}').persons || []) : [];
+      } catch (e) { all = []; }
+
+      var svg = document.getElementById('ft-svg');
+      var viewport = document.getElementById('ft-viewport');
+      var gNodes = document.getElementById('ft-nodes');
+      var gLinks = document.getElementById('ft-links');
+      var emptyEl = document.getElementById('ft-empty');
+      var hintEl = document.getElementById('ft-hint');
+      var detailEl = document.getElementById('ft-detail');
+
+      if (!(svg && viewport && gNodes && gLinks)) return;
+      if (!all.length) {
+        if (emptyEl) emptyEl.hidden = false;
+        return;
+      }
+
+      var byId = new Map(all.map(function (p) { return [p.id, p]; }));
+      var nodeEls = new Map();
+      var imgEls = new Map();
+      var posCache = new Map();
+      // Maps raw generation number → 1-based display number (1 = oldest generation).
+      var genDisplayMap = new Map();
+
+      var selectedId = null;
+      var detailId = null;
+      var mode = 'full';
+      var showPhotos = true;
+
+      // ---- transitive walks over the full graph (edges always available) ----
+      function walk(startId, attr) {
+        var seen = new Set();
+        var stack = [startId];
+        while (stack.length) {
+          var n = byId.get(stack.pop());
+          if (!n) continue;
+          var arr = n[attr];
+          for (var i = 0; i < arr.length; i++) {
+            var x = arr[i];
+            if (!seen.has(x)) { seen.add(x); stack.push(x); }
+          }
+        }
+        seen.delete(startId);
+        return seen;
+      }
+
+      // Persons visible under the current mode/focus (null = all).
+      function visibleSet() {
+        if (mode === 'full' || selectedId == null) return null;
+        var keep = new Set([selectedId]);
+        function add(s) { s.forEach(function (x) { keep.add(x); }); }
+        if (mode === 'ancestors' || mode === 'lineage') add(walk(selectedId, 'parents'));
+        if (mode === 'descendants' || mode === 'lineage') add(walk(selectedId, 'children'));
+        // Include spouses of every kept person so couples render together.
+        Array.from(keep).forEach(function (id) {
+          var n = byId.get(id);
+          if (n) n.spouses.forEach(function (sp) { keep.add(sp); });
+        });
+        return keep;
+      }
+
+      // ---- layout: generation bands, barycentre ordering (mirrors the app) ----
+      function layout(persons) {
+        var gens = new Map();
+        persons.forEach(function (p) {
+          if (!gens.has(p.generation)) gens.set(p.generation, []);
+          gens.get(p.generation).push(p);
+        });
+        var sortedGens = Array.from(gens.keys()).sort(function (a, b) { return a - b; });
+
+        // Build display-number map: oldest generation = 1, newest = N.
+        genDisplayMap = new Map();
+        sortedGens.forEach(function (g, i) { genDisplayMap.set(g, i + 1); });
+
+        var colOf = new Map();
+        sortedGens.forEach(function (g, band) {
+          var nodes = gens.get(g);
+          if (band === 0) {
+            nodes.sort(function (a, b) { return a.name.localeCompare(b.name, 'hu') || a.id - b.id; });
+          } else {
+            var bary = function (n) {
+              var cols = n.parents.map(function (pid) { return colOf.get(pid); }).filter(function (c) { return c !== undefined; });
+              if (!cols.length) return Number.POSITIVE_INFINITY;
+              return cols.reduce(function (s, c) { return s + c; }, 0) / cols.length;
+            };
+            nodes.sort(function (a, b) { return (bary(a) - bary(b)) || a.name.localeCompare(b.name, 'hu') || a.id - b.id; });
+          }
+          nodes.forEach(function (n, col) { colOf.set(n.id, col); });
+        });
+        var stepX = BOX_W + H_GAP, stepY = BOX_H + V_GAP;
+        var pos = new Map();
+        sortedGens.forEach(function (g, band) {
+          gens.get(g).forEach(function (n) { pos.set(n.id, { x: colOf.get(n.id) * stepX, y: band * stepY }); });
+        });
+        var maxCols = 1;
+        sortedGens.forEach(function (g) { maxCols = Math.max(maxCols, gens.get(g).length); });
+        var width = maxCols * stepX - H_GAP;
+        return { pos: pos, sortedGens: sortedGens, gens: gens, width: width, stepY: stepY };
+      }
+
+      function elide(s, n) { return s.length <= n ? s : s.slice(0, n - 1) + '…'; }
+
+      function makeNode(p) {
+        var g = document.createElementNS(SVGNS, 'g');
+        g.setAttribute('class', 'node ' + (p.gender === 'male' ? 'male' : p.gender === 'female' ? 'female' : 'unknown') + (p.isMember ? '' : ' nonmember'));
+        g.dataset.id = String(p.id);
+
+        var rect = document.createElementNS(SVGNS, 'rect');
+        rect.setAttribute('class', 'box');
+        rect.setAttribute('width', String(BOX_W));
+        rect.setAttribute('height', String(BOX_H));
+        rect.setAttribute('rx', '6');
+        g.appendChild(rect);
+
+        var textX = 9;
+        if (p.thumb) {
+          var img = document.createElementNS(SVGNS, 'image');
+          img.setAttribute('x', '8');
+          img.setAttribute('y', String((BOX_H - PHOTO) / 2));
+          img.setAttribute('width', String(PHOTO));
+          img.setAttribute('height', String(PHOTO));
+          img.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+          // href is set lazily by updateImages() to avoid loading off-screen thumbnails.
+          img.dataset.src = p.thumb;
+          g.appendChild(img);
+          imgEls.set(p.id, img);
+          textX = 8 + PHOTO + 8;
+        }
+
+        var name = document.createElementNS(SVGNS, 'text');
+        name.setAttribute('class', 'nm');
+        name.setAttribute('x', String(textX));
+        name.setAttribute('y', '24');
+        name.textContent = elide(p.name || '(névtelen)', 20);
+        g.appendChild(name);
+
+        var years = (p.birthYear || p.deathYear) ? ((p.birthYear || '') + '–' + (p.deathYear || '')) : '';
+        var subParts = [years, p.familyCode].filter(Boolean);
+        if (subParts.length) {
+          var sub = document.createElementNS(SVGNS, 'text');
+          sub.setAttribute('class', 'sub');
+          sub.setAttribute('x', String(textX));
+          sub.setAttribute('y', '42');
+          sub.textContent = elide(subParts.join('  ·  '), 22);
+          g.appendChild(sub);
+        }
+
+        // Direct click handlers on each node — bypasses pointer-capture
+        // ambiguity where e.target on the SVG-level click may be the svg itself.
+        g.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (!moved) selectPerson(p.id, false);
+        });
+        g.addEventListener('dblclick', function (e) {
+          e.stopPropagation();
+          window.open('../persons/' + p.id + '/index.html', '_blank', 'noopener');
+        });
+
+        return g;
+      }
+
+      function elbow(points) {
+        var d = points.map(function (pt, i) { return (i === 0 ? 'M' : 'L') + pt[0] + ' ' + pt[1]; }).join(' ');
+        var path = document.createElementNS(SVGNS, 'path');
+        path.setAttribute('class', 'link');
+        path.setAttribute('d', d);
+        return path;
+      }
+
+      // ---- full (re)render for a person subset ----
+      function render() {
+        var keep = visibleSet();
+        var persons = keep ? all.filter(function (p) { return keep.has(p.id); }) : all;
+        var present = new Set(persons.map(function (p) { return p.id; }));
+
+        gNodes.textContent = '';
+        gLinks.textContent = '';
+        nodeEls.clear();
+        imgEls.clear();
+        posCache.clear();
+
+        if (!persons.length) {
+          showHint('Ehhez a nézethez előbb jelölj ki egy személyt a fán vagy a keresőben.');
+          return;
+        }
+        showHint(null);
+
+        var L = layout(persons);
+        var pos = L.pos;
+        L.pos.forEach(function (pt, id) { posCache.set(id, pt); });
+
+        // Alternating generation bands + generation number label.
+        L.sortedGens.forEach(function (g, band) {
+          var r = document.createElementNS(SVGNS, 'rect');
+          r.setAttribute('class', band % 2 === 0 ? 'band-a' : 'band-b');
+          r.setAttribute('x', String(-H_GAP));
+          r.setAttribute('y', String(band * L.stepY - V_GAP / 2));
+          r.setAttribute('width', String(L.width + 2 * H_GAP));
+          r.setAttribute('height', String(L.stepY));
+          gLinks.appendChild(r);
+
+          // Generation number: 1 = oldest, N = youngest — displayed left of band.
+          var dispNum = genDisplayMap.get(g);
+          if (dispNum != null) {
+            var lbl = document.createElementNS(SVGNS, 'text');
+            lbl.setAttribute('class', 'gen-label');
+            lbl.setAttribute('x', String(-H_GAP + 4));
+            lbl.setAttribute('y', String(band * L.stepY - V_GAP / 2 + 16));
+            lbl.textContent = dispNum + '.';
+            gLinks.appendChild(lbl);
+          }
+        });
+
+        // Connectors (spouse lines + parent→child elbows), restricted to the subset.
+        var drawnSpouse = new Set();
+        persons.forEach(function (p) {
+          var a = pos.get(p.id);
+          p.spouses.forEach(function (sp) {
+            if (!present.has(sp)) return;
+            var key = p.id < sp ? p.id + '-' + sp : sp + '-' + p.id;
+            if (drawnSpouse.has(key)) return;
+            drawnSpouse.add(key);
+            var b = pos.get(sp);
+            // Always draw left→right so the line direction is consistent.
+            var left = a.x <= b.x ? a : b;
+            var right = a.x <= b.x ? b : a;
+            var lineY = left.y + BOX_H / 2;
+            gLinks.appendChild(elbow([[left.x + BOX_W, lineY], [right.x, lineY]]));
+            // Marriage date label between the two boxes.
+            var smallerId = p.id < sp ? p.id : sp;
+            var largerId = p.id < sp ? sp : p.id;
+            var dateStr = (byId.get(smallerId) && byId.get(smallerId).spouseMarriageDates && byId.get(smallerId).spouseMarriageDates[String(largerId)]) ||
+                          (byId.get(largerId) && byId.get(largerId).spouseMarriageDates && byId.get(largerId).spouseMarriageDates[String(smallerId)]) || '';
+            if (dateStr) {
+              var midX = (left.x + BOX_W + right.x) / 2;
+              var lbl = document.createElementNS(SVGNS, 'text');
+              lbl.setAttribute('class', 'marriage-date');
+              lbl.setAttribute('x', String(midX));
+              lbl.setAttribute('y', String(lineY - 4));
+              lbl.setAttribute('text-anchor', 'middle');
+              lbl.textContent = dateStr;
+              gLinks.appendChild(lbl);
+            }
+          });
+        });
+
+        // Parent→child connectors: group siblings by shared parent set so we
+        // draw one clean "hat" connector (shared stem + horizontal bar + drops)
+        // instead of separate overlapping elbows per child.
+        var siblingGroups = new Map(); // parentKey → {stemX, stemY, midY, children:[{cx,cy}]}
+        persons.forEach(function (p) {
+          var visParents = p.parents.filter(function (pid) { return present.has(pid); });
+          if (!visParents.length) return;
+          var pKey = visParents.slice().sort(function (a, b) { return a - b; }).join(',');
+          if (!siblingGroups.has(pKey)) {
+            var pPos = visParents.map(function (pid) { return pos.get(pid); });
+            var stemX = pPos.reduce(function (s, c) { return s + c.x + BOX_W / 2; }, 0) / pPos.length;
+            // If the two parents are spouses, the child stem starts at the
+            // midline of the spouse connector (BOX_H/2) instead of the box
+            // bottom (BOX_H), so the vertical drop meets the horizontal line.
+            var parentsAreSpouses = visParents.length === 2 &&
+              (byId.get(visParents[0]) && byId.get(visParents[0]).spouses.indexOf(visParents[1]) !== -1);
+            var parentBottomY = Math.max.apply(null, pPos.map(function (c) { return c.y; }));
+            var stemY = parentsAreSpouses
+              ? parentBottomY + BOX_H / 2
+              : parentBottomY + BOX_H;
+            siblingGroups.set(pKey, { stemX: stemX, stemY: stemY, midY: stemY + V_GAP / 2, children: [] });
+          }
+          var a = pos.get(p.id);
+          siblingGroups.get(pKey).children.push({ cx: a.x + BOX_W / 2, cy: a.y });
+        });
+        siblingGroups.forEach(function (g) {
+          var cxs = g.children.map(function (c) { return c.cx; });
+          // Vertical stem from parent midpoint down to the horizontal bar.
+          gLinks.appendChild(elbow([[g.stemX, g.stemY], [g.stemX, g.midY]]));
+          // Horizontal bar spanning from the stem across to every sibling. Must
+          // include the stem's x, otherwise a single child (or any child whose
+          // column differs from the parent midpoint) leaves the stem and the
+          // child's drop floating in disconnected vertical segments.
+          var barLeft = Math.min.apply(null, cxs.concat([g.stemX]));
+          var barRight = Math.max.apply(null, cxs.concat([g.stemX]));
+          if (barRight > barLeft) {
+            gLinks.appendChild(elbow([[barLeft, g.midY], [barRight, g.midY]]));
+          }
+          // Individual drops from bar down to each child.
+          g.children.forEach(function (c) {
+            gLinks.appendChild(elbow([[c.cx, g.midY], [c.cx, c.cy]]));
+          });
+        });
+
+        // Nodes.
+        persons.forEach(function (p) {
+          var pt = pos.get(p.id);
+          var g = makeNode(p);
+          g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
+          gNodes.appendChild(g);
+          nodeEls.set(p.id, g);
+        });
+
+        applySelection();
+        // Images are loaded after the first paint so the viewport bounds are correct.
+        requestAnimationFrame(updateImages);
+      }
+
+      // ---- selection recolour (no relayout) ----
+      function applySelection() {
+        var anc = new Set(), desc = new Set(), spouses = new Set();
+        if (selectedId != null && byId.has(selectedId)) {
+          anc = walk(selectedId, 'parents');
+          desc = walk(selectedId, 'children');
+          spouses = new Set(byId.get(selectedId).spouses);
+        }
+        gNodes.classList.toggle('ft-nodes-dim', selectedId != null);
+        nodeEls.forEach(function (el, id) {
+          el.classList.remove('sel', 'anc', 'desc', 'spouse');
+          if (id === selectedId) el.classList.add('sel');
+          else if (spouses.has(id)) el.classList.add('spouse');
+          else if (anc.has(id)) el.classList.add('anc');
+          else if (desc.has(id)) el.classList.add('desc');
+        });
+      }
+
+      function showHint(text) {
+        if (!hintEl) return;
+        if (text) { hintEl.textContent = text; hintEl.hidden = false; }
+        else hintEl.hidden = true;
+      }
+
+      // ---- detail panel ----
+      function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+
+      function showDetailPanel(id) {
+        var p = byId.get(id);
+        if (!p || !detailEl) return;
+
+        var imgEl = document.getElementById('fdd-img');
+        var phEl = document.getElementById('fdd-ph');
+        if (p.thumb && imgEl) {
+          imgEl.src = p.thumb;
+          imgEl.style.display = 'block';
+          if (phEl) phEl.style.display = 'none';
+        } else {
+          if (imgEl) imgEl.style.display = 'none';
+          if (phEl) phEl.style.display = 'flex';
+        }
+
+        var nameEl = document.getElementById('fdd-name');
+        if (nameEl) nameEl.textContent = p.name || '(névtelen)';
+
+        var yearsEl = document.getElementById('fdd-years');
+        if (yearsEl) {
+          var yrs = '';
+          if (p.birthDate || p.deathDate) {
+            yrs = (p.birthDate || p.birthYear || '') + ' – ' + (p.deathDate || p.deathYear || '');
+          } else if (p.birthYear || p.deathYear) {
+            yrs = (p.birthYear || '') + '–' + (p.deathYear || '');
+          }
+          yearsEl.textContent = yrs;
+          yearsEl.hidden = !yrs;
+        }
+
+        var metaEl = document.getElementById('fdd-meta');
+        if (metaEl) {
+          var rows = [];
+          if (p.nickname) rows.push(['Becenév', p.nickname]);
+          if (p.marriedName) rows.push(['Házassági név', p.marriedName]);
+          if (p.gender) {
+            var gLbl = p.gender === 'female' ? 'Nő' : p.gender === 'male' ? 'Férfi' : '';
+            if (gLbl) rows.push(['Nem', gLbl]);
+          }
+          var birth = [p.birthDate, p.birthPlace].filter(Boolean).join(', ');
+          if (birth) rows.push(['Születés', birth]);
+          var death = [p.deathDate, p.deathPlace].filter(Boolean).join(', ');
+          if (death) rows.push(['Elhalálozás', death]);
+          if (p.familyCode) rows.push(['Kód', p.familyCode]);
+          if (p.externalFamilyCode) rows.push(['Külső kód', p.externalFamilyCode]);
+          var dispGen = genDisplayMap.get(p.generation);
+          if (dispGen != null) rows.push(['Generáció', dispGen + '.']);
+          metaEl.innerHTML = rows.map(function (r) {
+            return '<div class="fdd-row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
+          }).join('');
+        }
+
+        var groupsEl = document.getElementById('fdd-groups');
+        if (groupsEl) {
+          var grps = p.groups || [];
+          if (grps.length) {
+            groupsEl.innerHTML = grps.map(function (g) {
+              return '<span class="fdd-chip">' + esc(g) + '</span>';
+            }).join('');
+            groupsEl.hidden = false;
+          } else {
+            groupsEl.hidden = true;
+          }
+        }
+
+        var notesEl = document.getElementById('fdd-notes');
+        if (notesEl) {
+          notesEl.textContent = p.notes || '';
+          notesEl.hidden = !p.notes;
+        }
+
+        var personLink = document.getElementById('fdd-person-link');
+        if (personLink) personLink.href = '../persons/' + id + '/index.html';
+
+        var treeNewt = document.getElementById('fdd-tree-newt');
+        if (treeNewt) treeNewt.href = window.location.href;
+
+        var galleryBtn = document.getElementById('fdd-gallery-btn');
+        if (galleryBtn) {
+          var count = (p.photos && p.photos.length) || 0;
+          galleryBtn.textContent = count ? ('🖼️ Képek (' + count + ')') : '🖼️ Nincs fotó';
+          galleryBtn.disabled = !count;
+        }
+
+        detailId = id;
+        detailEl.hidden = false;
+      }
+
+      function hideDetailPanel() {
+        if (detailEl) detailEl.hidden = true;
+      }
+
+      var closeBtn = document.getElementById('fdd-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () {
+        selectedId = null;
+        updateFocusLabel();
+        applySelection();
+        hideDetailPanel();
+      });
+
+      // ---- per-person photo dialog ----
+      var galleryEl = document.getElementById('ft-gallery');
+      var gridEl = document.getElementById('ftg-grid');
+      var ggTitle = document.getElementById('ftg-title');
+      var ggOpen = document.getElementById('ftg-open');
+      var ggEmpty = document.getElementById('ftg-empty');
+
+      function openGallery(id) {
+        var p = byId.get(id);
+        if (!p || !galleryEl) return;
+        if (ggTitle) ggTitle.textContent = (p.name || '(névtelen)') + ' — fotók';
+        if (ggOpen) ggOpen.href = '../persons/' + id + '/index.html';
+        var photos = p.photos || [];
+        if (gridEl) {
+          gridEl.innerHTML = photos.map(function (ph) {
+            return '<a href="../photos/' + esc(ph.id) + '/index.html" target="_blank" rel="noopener">' +
+              '<img src="' + esc(ph.thumb) + '" alt="" loading="lazy" decoding="async"></a>';
+          }).join('');
+        }
+        if (ggEmpty) ggEmpty.hidden = photos.length > 0;
+        galleryEl.hidden = false;
+      }
+      function closeGallery() { if (galleryEl) galleryEl.hidden = true; }
+
+      var galleryBtn = document.getElementById('fdd-gallery-btn');
+      if (galleryBtn) galleryBtn.addEventListener('click', function () {
+        if (detailId != null) openGallery(detailId);
+      });
+      var ggClose = document.getElementById('ftg-close');
+      if (ggClose) ggClose.addEventListener('click', closeGallery);
+      if (galleryEl) galleryEl.addEventListener('click', function (e) {
+        if (e.target === galleryEl) closeGallery();
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeGallery();
+      });
+
+      // ---- pan / zoom ----
+      var tx = 40, ty = 40, scale = 1;
+      function applyTransform() { viewport.setAttribute('transform', 'translate(' + tx + ',' + ty + ') scale(' + scale + ')'); }
+      function viewBoxWH() { var r = svg.getBoundingClientRect(); return { w: r.width, h: r.height }; }
+
+      function fit() {
+        var ids = Array.from(posCache.keys());
+        if (!ids.length) return;
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        ids.forEach(function (id) {
+          var p = posCache.get(id);
+          minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x + BOX_W); maxY = Math.max(maxY, p.y + BOX_H);
+        });
+        var d = viewBoxWH();
+        var pad = 60;
+        var sx = (d.w - pad) / Math.max(1, maxX - minX);
+        var sy = (d.h - pad) / Math.max(1, maxY - minY);
+        scale = Math.min(2, Math.max(0.05, Math.min(sx, sy)));
+        tx = (d.w - (maxX - minX) * scale) / 2 - minX * scale;
+        ty = (d.h - (maxY - minY) * scale) / 2 - minY * scale;
+        applyTransform();
+        updateImages();
+      }
+
+      function centerOn(id) {
+        var p = posCache.get(id);
+        if (!p) return;
+        var d = viewBoxWH();
+        scale = Math.max(scale, 0.8);
+        tx = d.w / 2 - (p.x + BOX_W / 2) * scale;
+        ty = d.h / 2 - (p.y + BOX_H / 2) * scale;
+        applyTransform();
+        updateImages();
+      }
+
+      function zoomAt(cx, cy, factor) {
+        var ns = Math.min(2.5, Math.max(0.04, scale * factor));
+        tx = cx - (cx - tx) * (ns / scale);
+        ty = cy - (cy - ty) * (ns / scale);
+        scale = ns;
+        applyTransform();
+        scheduleImages();
+      }
+
+      // ---- viewport image culling (only load thumbnails that are on screen) ----
+      var imgTimer;
+      function scheduleImages() {
+        window.clearTimeout(imgTimer);
+        imgTimer = window.setTimeout(updateImages, 90);
+      }
+      function updateImages() {
+        if (!imgEls.size) return;
+        var d = viewBoxWH();
+        imgEls.forEach(function (img, id) {
+          var p = posCache.get(id);
+          if (!p) return;
+          var sxMin = tx + p.x * scale, syMin = ty + p.y * scale;
+          var sxMax = sxMin + BOX_W * scale, syMax = syMin + BOX_H * scale;
+          var onScreen = showPhotos && sxMax > -50 && sxMin < d.w + 50 && syMax > -50 && syMin < d.h + 50;
+          var cur = img.getAttribute('href') || img.getAttribute('xlink:href');
+          if (onScreen && !cur) {
+            img.setAttribute('href', img.dataset.src || '');
+          } else if (!onScreen && cur) {
+            img.removeAttribute('href'); img.removeAttribute('xlink:href');
+          }
+        });
+      }
+
+      // ---- wheel zoom + drag pan ----
+      svg.addEventListener('wheel', function (e) {
+        e.preventDefault();
+        var r = svg.getBoundingClientRect();
+        zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+      }, { passive: false });
+
+      var dragging = false, moved = false, lastX = 0, lastY = 0, startX = 0, startY = 0;
+      svg.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        dragging = true; moved = false;
+        lastX = startX = e.clientX; lastY = startY = e.clientY;
+        svg.classList.add('grabbing');
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var dx = e.clientX - lastX, dy = e.clientY - lastY;
+        if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 6) moved = true;
+        tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+        applyTransform(); scheduleImages();
+      });
+      document.addEventListener('mouseup', function (e) {
+        if (!dragging) return;
+        dragging = false; svg.classList.remove('grabbing');
+      });
+
+      // ---- background click: deselect (node clicks use stopPropagation) ----
+      svg.addEventListener('click', function (e) {
+        if (moved) return;
+        selectedId = null;
+        updateFocusLabel();
+        applySelection();
+        hideDetailPanel();
+      });
+
+      function selectPerson(id, recenter) {
+        selectedId = id;
+        updateFocusLabel();
+        showDetailPanel(id);
+        if (mode !== 'full') { render(); centerOn(id); }
+        else { applySelection(); if (recenter) centerOn(id); }
+      }
+
+      // ---- focus label ----
+      var focusEl = document.getElementById('ft-focus');
+      function updateFocusLabel() {
+        if (!focusEl) return;
+        if (selectedId != null && byId.has(selectedId)) {
+          focusEl.textContent = 'Kijelölve: ' + (byId.get(selectedId).name || '(névtelen)');
+          focusEl.hidden = false;
+        } else focusEl.hidden = true;
+      }
+
+      // ---- controls wiring ----
+      var modeSel = document.getElementById('ft-mode');
+      if (modeSel) modeSel.addEventListener('change', function () {
+        mode = modeSel.value;
+        render();
+        if (selectedId != null && mode !== 'full') centerOn(selectedId);
+        else fit();
+      });
+      var zin = document.getElementById('ft-zoom-in');
+      if (zin) zin.addEventListener('click', function () { var d = viewBoxWH(); zoomAt(d.w / 2, d.h / 2, 1.2); });
+      var zout = document.getElementById('ft-zoom-out');
+      if (zout) zout.addEventListener('click', function () { var d = viewBoxWH(); zoomAt(d.w / 2, d.h / 2, 1 / 1.2); });
+      var fitBtn = document.getElementById('ft-fit');
+      if (fitBtn) fitBtn.addEventListener('click', fit);
+      var resetBtn = document.getElementById('ft-reset');
+      if (resetBtn) resetBtn.addEventListener('click', function () {
+        selectedId = null; mode = 'full'; if (modeSel) modeSel.value = 'full';
+        updateFocusLabel(); hideDetailPanel(); render(); fit();
+      });
+      var photosCb = document.getElementById('ft-photos');
+      if (photosCb) photosCb.addEventListener('change', function () { showPhotos = photosCb.checked; updateImages(); });
+
+      // ---- search (works on file:// — all data is inline JSON, no fetch needed) ----
+      var searchInput = document.getElementById('ft-search');
+      var resultsBox = document.getElementById('ft-search-results');
+      function runSearch(q) {
+        if (!resultsBox) return;
+        var needle = q.trim().toLocaleLowerCase('hu-HU');
+        if (!needle) { resultsBox.hidden = true; return; }
+        var hits = all.filter(function (p) { return (p.name || '').toLocaleLowerCase('hu-HU').indexOf(needle) !== -1; }).slice(0, 40);
+        if (!hits.length) { resultsBox.innerHTML = '<div class="empty">Nincs találat.</div>'; resultsBox.hidden = false; return; }
+        resultsBox.innerHTML = hits.map(function (p) {
+          var yrs = (p.birthYear || p.deathYear) ? ((p.birthYear || '') + '–' + (p.deathYear || '')) : '';
+          var img = p.thumb ? '<img src="' + esc(p.thumb) + '" alt="" decoding="async">' : '<span class="ph"></span>';
+          return '<a data-id="' + p.id + '" href="#">' + img + '<span><span class="r-name">' + esc(p.name || '(névtelen)') + '</span>' + (yrs ? '<br><span class="r-sub">' + esc(yrs) + '</span>' : '') + '</span></a>';
+        }).join('');
+        resultsBox.hidden = false;
+      }
+      var sTimer;
+      if (searchInput) searchInput.addEventListener('input', function () {
+        window.clearTimeout(sTimer);
+        sTimer = window.setTimeout(function () { runSearch(searchInput.value); }, 150);
+      });
+      if (resultsBox) resultsBox.addEventListener('click', function (e) {
+        e.preventDefault();
+        var a = e.target.closest ? e.target.closest('a[data-id]') : null;
+        if (!a) return;
+        var id = Number(a.dataset.id);
+        resultsBox.hidden = true;
+        var pn = byId.get(id);
+        if (searchInput) searchInput.value = (pn && pn.name) || '';
+        selectPerson(id, true);
+      });
+      document.addEventListener('click', function (e) {
+        if (resultsBox && !(e.target.closest && e.target.closest('.ft-search'))) resultsBox.hidden = true;
+      });
+
+      window.addEventListener('resize', scheduleImages);
+
+      // ---- initial paint ----
+      // render() synchronously populates posCache; fit() reads the SVG's
+      // bounding rect, which is only valid after the first browser layout pass.
+      // requestAnimationFrame defers fit() until after that first paint.
+      render();
+      requestAnimationFrame(fit);
+    })();
+  </script>
+</Layout>

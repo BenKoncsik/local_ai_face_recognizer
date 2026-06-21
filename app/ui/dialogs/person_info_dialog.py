@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QStyle,
     QTextEdit,
@@ -226,6 +228,21 @@ class PersonInfoDialog(QDialog):
 
         layout.addLayout(form)
 
+        # --- Family relationships (quick add) ---
+        rel_label = QLabel(t("ft_relationships_section"))
+        rel_label.setStyleSheet("margin-top: 8px;")
+        layout.addWidget(rel_label)
+
+        rel_row = QHBoxLayout()
+        self._add_spouse_btn = QPushButton(t("ft_add_spouse_btn"))
+        self._add_spouse_btn.clicked.connect(lambda: self._on_add_relative("spouse"))
+        rel_row.addWidget(self._add_spouse_btn)
+        self._add_child_btn = QPushButton(t("ft_add_child_btn"))
+        self._add_child_btn.clicked.connect(lambda: self._on_add_relative("child"))
+        rel_row.addWidget(self._add_child_btn)
+        rel_row.addStretch()
+        layout.addLayout(rel_row)
+
         # --- Notes ---
         notes_label = QLabel(t("notes"))
         notes_label.setStyleSheet("margin-top: 8px;")
@@ -283,6 +300,12 @@ class PersonInfoDialog(QDialog):
         # Autocomplete / groups / objects load in the background — the dialog
         # shows immediately.
         self._start_data_load()
+
+    def _on_add_relative(self, kind: str) -> None:
+        """Quick-add a spouse / child for this person from the editor."""
+        from app.ui.dialogs.family_tree_editor_dialog import add_relative
+
+        add_relative(self._person_id, kind, self)
 
     @staticmethod
     def _help_tooltip_html(help_text: str) -> str:

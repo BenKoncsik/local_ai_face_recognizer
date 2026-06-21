@@ -1,0 +1,28 @@
+---
+import { loadManifest } from '../lib/data';
+import { link } from '../lib/links';
+
+interface Props {
+  active?: string;
+}
+
+const { active = '' } = Astro.props;
+const manifest = loadManifest();
+
+const nav = [
+  { key: 'gallery',     href: link('/'),                   label: 'Galéria' },
+  { key: 'persons',     href: link('/persons/page/1/'),    label: 'Személyek' },
+  manifest.hasObjects   ? { key: 'objects',     href: link('/objects/page/1/'),  label: 'Objektumok' } : null,
+  manifest.hasFamilyTree ? { key: 'family-tree', href: link('/family-tree/'),    label: 'Családfa'   } : null,
+  { key: 'photos',      href: link('/photos/page/1/'),     label: 'Fotók' },
+  manifest.hasMap       ? { key: 'map',         href: '/map.html',               label: 'Térkép'     } : null,
+  manifest.hasSlideshow ? { key: 'slideshow',   href: '/slideshow.html',         label: 'Diavetítés' } : null,
+  manifest.hasCollages  ? { key: 'collages',    href: '/collage_index.html',     label: 'Kollázsok'  } : null,
+].filter(Boolean) as { key: string; href: string; label: string }[];
+---
+
+<nav>
+  {nav.map((n) => (
+    <a class:list={['nav-link', { active: n.key === active }]} href={n.href}>{n.label}</a>
+  ))}
+</nav>

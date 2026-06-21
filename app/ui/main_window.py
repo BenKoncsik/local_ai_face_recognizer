@@ -62,6 +62,7 @@ from app.ui.i18n import t
 from app.ui.panels.cluster_panel import ClusterPanel
 from app.ui.panels.collage_panel import CollagePanel
 from app.ui.panels.family_search_panel import FamilySearchPanel
+from app.ui.panels.family_tree_panel import FamilyTreePanel
 from app.ui.panels.groups_panel import GroupsPanel
 from app.ui.panels.image_browser_panel import ImageBrowserPanel
 from app.ui.panels.locations_panel import LocationsPanel
@@ -209,6 +210,7 @@ class MainWindow(QMainWindow):
         ):
             self._groups_panel.reload()
 
+
     def _toggle_log_panel(self) -> None:
         if hasattr(self, "_log_dock"):
             self._log_dock.setVisible(not self._log_dock.isVisible())
@@ -231,6 +233,7 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         tb = QToolBar(t("main_toolbar"))
         tb.setMovable(False)
+        self._main_toolbar = tb
         self.addToolBar(tb)
 
         self._folder_btn = QPushButton()
@@ -434,6 +437,11 @@ class MainWindow(QMainWindow):
         # --- Tab 7: Kollázs nézet ---
         self._collage_panel = CollagePanel()
         self._tabs.addTab(self._collage_panel, t("tab_collage"))
+
+        # --- Tab 8: Családfa ---
+        self._family_tree_panel = FamilyTreePanel()
+        self._family_tree_panel.person_data_changed.connect(self._refresh_persons)
+        self._tabs.addTab(self._family_tree_panel, t("tab_family_tree"))
 
         self.setCentralWidget(self._tabs)
 
@@ -749,6 +757,7 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(5, t("tab_objects"))
         self._tabs.setTabText(6, t("tab_groups"))
         self._tabs.setTabText(7, t("tab_collage"))
+        self._tabs.setTabText(8, t("tab_family_tree"))
         self._log_dock.setWindowTitle(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_cluster_panel"):
@@ -763,6 +772,8 @@ class MainWindow(QMainWindow):
             self._persons_panel.retranslate()
         if hasattr(self, "_objects_panel"):
             self._objects_panel.retranslate()
+        if hasattr(self, "_family_tree_panel"):
+            self._family_tree_panel.retranslate()
 
     # ------------------------------------------------------------------
     # Logging
