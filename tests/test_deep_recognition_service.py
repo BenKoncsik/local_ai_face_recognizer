@@ -135,6 +135,33 @@ class TestTrainAndRecognize:
             assert runs[0].n_persons == 2
             assert runs[0].finished_at is not None
 
+    def test_debug_sample_face_reflects_current_model(self, tmp_db, tmp_path):
+        """debug_sample_face returns one trained person's prediction with the
+        current model's full output set (used to refresh the neural-net graph)."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train()
+
+        with session_scope() as s:
+            info = DeepRecognitionService(s, cfg).debug_sample_face()
+            assert info is not None
+            # Output layer covers exactly the two trained persons — via softmax
+            # probabilities (ensemble) or cosine similarities (prototype mode).
+            names = set(info.output_probs) or set(info.all_similarities)
+            assert names == {"Nagy Anna", "Kovács Béla"}
+
+    def test_debug_sample_face_none_without_model(self, tmp_db, tmp_path):
+        """No trained model on disk → no debug info (graph keeps its last state)."""
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+            assert DeepRecognitionService(s, cfg).debug_sample_face() is None
+
     def test_assignment_records_decision_graph(self, tmp_db, tmp_path):
         """Each assignment stores a parseable deep decision graph."""
         import json

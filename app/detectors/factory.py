@@ -178,6 +178,32 @@ def probe_coral(model_path: str | None = None) -> bool:
     return False
 
 
+def _maybe_add_insightface(detector: FaceDetector, config: DetectionConfig) -> FaceDetector:
+    """Wrap *detector* in a CompositeDetector that also runs InsightFace SCRFD.
+
+    InsightFace recovers strongly turned / profile faces the frontal-biased
+    primary detector misses.  No-op when ``multistage_use_insightface`` is off or
+    the optional dependency / model is unavailable — the primary is returned
+    unchanged so installs without InsightFace are unaffected.
+    """
+    if not getattr(config, "multistage_use_insightface", False):
+        return detector
+    try:
+        from app.detectors.composite_detector import CompositeDetector
+        from app.detectors.insightface_detector import InsightFaceDetector
+
+        secondary = InsightFaceDetector(
+            model_pack=config.insightface_model_pack,
+            det_thresh=config.verification_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001 — optional, never fatal
+        log.info("InsightFace co-detector unavailable (%s) — using primary only", exc)
+        return detector
+    composite = CompositeDetector(primary=detector, secondaries=[secondary])
+    log.info("Using composite detector (backend: %s)", composite.backend_name)
+    return composite
+
+
 def create_detector(config: DetectionConfig) -> FaceDetector:
     """Create the best available face detector."""
     if config.coral_model_path:
@@ -215,7 +241,7 @@ def create_detector(config: DetectionConfig) -> FaceDetector:
                 validate_geometry=config.landmark_geometry_enabled,
             )
             log.info("Using CPU detector (backend: %s)", detector.backend_name)
-            return detector
+            return _maybe_add_insightface(detector, config)
         except FileNotFoundError as exc:
             log.warning(
                 "YuNet model unavailable (%s) — falling back to Caffe/Haar CPU "
@@ -228,4 +254,4 @@ def create_detector(config: DetectionConfig) -> FaceDetector:
 
     detector = CpuDetector(model_path=config.cpu_model_path)
     log.info("Using CPU detector (backend: %s)", detector.backend_name)
-    return detector
+    return _maybe_add_insightface(detector, config)

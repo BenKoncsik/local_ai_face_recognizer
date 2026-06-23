@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -101,7 +101,7 @@ class DeepPipelineWorker(QThread):
 
     def __init__(
         self,
-        root_folder: str,
+        root_folders: List[str],
         config: AppConfig,
         mode: str = MODE_RESCAN,
         parent=None,
@@ -111,6 +111,7 @@ class DeepPipelineWorker(QThread):
         drive_mirror_dir: Optional[Path] = None,
         ai_visualization: bool = False,
         ai_debug_log: bool = False,
+        root_folder: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         if mode not in (
@@ -121,7 +122,10 @@ class DeepPipelineWorker(QThread):
             MODE_REBUILD_MODEL,
         ):
             raise ValueError(f"Unknown deep pipeline mode: {mode!r}")
-        self._root_folder = root_folder
+        # Accept legacy single-folder callers via `root_folder` keyword.
+        if root_folder is not None and not root_folders:
+            root_folders = [root_folder]
+        self._root_folders: List[str] = root_folders
         self._config = config
         self._mode = mode
         self._abort = False
@@ -255,7 +259,8 @@ class DeepPipelineWorker(QThread):
         if self._mode == MODE_DETECT_FACES:
             return self._run_detect_only_pipeline()
 
-        n_stages = 10 if self._mode == MODE_REBUILD else 9
+        # Rescan and Rebuild both gain the multi-stage non-face cleanup stage.
+        n_stages = 10 if self._mode == MODE_RESCAN else 11
         stage = [0]
 
         def announce(message: str) -> None:
@@ -314,6 +319,18 @@ class DeepPipelineWorker(QThread):
                 f"  Removed {overlap_stats.faces_removed} duplicate box(es); "
                 f"assigned faces always kept."
             )
+        self._checkpoint()
+
+        # --- Multi-stage false-positive cleanup (rescan + rebuild) ---
+        # Both scan modes re-verify the stored *uncertain* boxes with the
+        # multi-technology ensemble and delete the ones that are not faces (ears,
+        # hair, objects, textures) — so an "újra beolvasás" also cleans up false
+        # positives detected before the gate existed.  High-confidence boxes are
+        # skipped (trusted) and human-confirmed / manually drawn faces are never
+        # deleted, only flagged.  Cheap because only confidence < exemption faces
+        # are loaded and checked.
+        announce("Removing non-face detections (multi-stage verification) …")
+        self._run_multistage_cleanup()
         self._checkpoint()
 
         # --- Permanently-ignored face filter ---
@@ -716,7 +733,7 @@ class DeepPipelineWorker(QThread):
                     progress_cb=cb,
                     image_library_svc=get_image_library_optional(),
                 )
-                return svc.scan(self._root_folder)
+                return svc.scan(self._root_folders)
 
     def _get_pending_detection_ids(self) -> list:
         with session_scope() as session:
@@ -786,6 +803,41 @@ class DeepPipelineWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             log.warning("Overlap resolution failed: %s", exc)
             return OverlapResolutionStats()
+
+    def _run_multistage_cleanup(self) -> None:
+        """Re-verify stored faces with the ensemble and delete the non-faces.
+
+        Best-effort: any failure is logged and the pipeline continues.  Uses the
+        conservative droppable rule of
+        :class:`~app.services.retroactive_verification_service.RetroactiveVerificationService`
+        — manually drawn boxes and human-confirmed assignments are only flagged,
+        never auto-deleted.
+        """
+        from app.services.retroactive_verification_service import (
+            RetroactiveVerificationService,
+        )
+
+        def cb(current, total, path):
+            self._emit_progress(
+                current, total or 0, "Verifying", Path(path).name
+            )
+
+        try:
+            with session_scope() as session:
+                svc = RetroactiveVerificationService(
+                    session=session,
+                    config=self._config,
+                    progress_cb=cb,
+                )
+                report = svc.scan()
+                deleted = svc.delete_faces(report.droppable_ids)
+            self._emit_log(
+                f"  Multi-stage verification: removed {deleted} non-face(s); "
+                f"flagged {report.flagged_count} human-confirmed face(s) for review."
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Multi-stage cleanup stage failed: %s", exc)
+            self._emit_log(f"  Multi-stage verification skipped: {exc}")
 
     def _run_ignored_filter(self) -> None:
         from app.services.ignored_face_service import IgnoredFaceService

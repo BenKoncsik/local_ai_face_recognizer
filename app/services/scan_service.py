@@ -15,7 +15,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Generator, List, Optional
+from typing import Callable, Generator, List, Optional, Union
 
 from sqlalchemy.orm import Session
 
@@ -98,27 +98,37 @@ class ScanService:
         self._progress_cb = progress_cb or (lambda *_: None)
         self._library_svc = image_library_svc
 
-    def scan(self, root_folder: str) -> List[int]:
-        """Scan *root_folder* and return IDs of images that need processing.
+    def scan(self, root_folders: Union[str, List[str]]) -> List[int]:
+        """Scan one or more root folders and return IDs of images that need processing.
 
         "Need processing" means either new or changed since last scan.
 
         Args:
-            root_folder: Path to the root image directory.
+            root_folders: Path(s) to the root image directory/directories.
+                          Accepts a single string or a list of strings.
 
         Returns:
             List of :class:`~app.db.models.Image` primary keys.
         """
-        root = Path(root_folder)
-        if not root.exists():
-            raise FileNotFoundError(f"Root folder not found: {root}")
+        if isinstance(root_folders, str):
+            root_folders = [root_folders]
 
-        log.info("Scanning folder: %s", root)
+        # Validate all folders first.
+        roots: List[Path] = []
+        for folder in root_folders:
+            root = Path(folder)
+            if not root.exists():
+                raise FileNotFoundError(f"Root folder not found: {root}")
+            roots.append(root)
 
-        # Collect all candidate paths first so we can report progress
-        paths = list(discover_images(root, self._config.image_extensions))
+        # Collect all candidate paths across all roots.
+        paths: List[Path] = []
+        for root in roots:
+            log.info("Scanning folder: %s", root)
+            paths.extend(discover_images(root, self._config.image_extensions))
+
         total = len(paths)
-        log.info("Found %d candidate image file(s)", total)
+        log.info("Found %d candidate image file(s) across %d folder(s)", total, len(roots))
 
         new_or_changed: List[int] = []
 

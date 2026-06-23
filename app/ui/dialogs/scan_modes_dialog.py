@@ -1,22 +1,13 @@
-"""Scan and maintenance chooser dialog.
-
-Opens from the toolbar.  A single AI-centric list of operations:
-
-* **Scan & Index** — read the folder for new images and run the AI pipeline
-  (detection → embedding → deep recognition) on them.
-* **AI recognition** — re-scan / train / detect-faces / rebuild for the
-  deep-learning engine.
-* **Maintenance** — geometry-based false-face cleanup plus the assorted
-  face/identity cleanup tools.
-
-The dialog is scrollable so it works on small screens too.
-"""
+"""Scan and maintenance chooser dialog — simplified 3-workflow version."""
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+import logging
+from typing import Optional
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -30,58 +21,75 @@ from PySide6.QtWidgets import (
 
 from app.ui.i18n import t
 
+log = logging.getLogger(__name__)
+
 
 class ScanModesDialog(QDialog):
-    """Modal dialog that lets the user choose scan and cleanup actions."""
+    """Modal dialog for choosing a scan or maintenance workflow."""
 
-    def __init__(
-        self,
-        on_folder_rescan: Callable[[], None],
-        on_reset_unknown_persons: Callable[[], None],
-        on_find_overlapping_unknown_faces: Callable[[], None],
-        on_find_embedding_duplicate_faces: Optional[Callable[[], None]] = None,
-        on_identity_repair_scan: Optional[Callable[[], None]] = None,
-        on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
-        on_revalidate_face_geometry: Optional[Callable[[], None]] = None,
-        on_manage_ignored_faces: Optional[Callable[[], None]] = None,
-        on_deep_rescan: Optional[Callable[[], None]] = None,
-        on_deep_rebuild: Optional[Callable[[], None]] = None,
-        on_deep_train: Optional[Callable[[], None]] = None,
-        on_deep_face_detect: Optional[Callable[[], None]] = None,
-        on_deep_rebuild_model: Optional[Callable[[], None]] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    scan_workflow_started = Signal(str)  # "face_detection" | "full_rescan" | "train_model"
+
+    def __init__(self, parent: Optional[QWidget] = None, config=None) -> None:
         super().__init__(parent)
-        self._on_folder_rescan = on_folder_rescan
-        self._on_reset_unknown_persons = on_reset_unknown_persons
-        self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
-        self._on_find_embedding_duplicate_faces = on_find_embedding_duplicate_faces
-        self._on_identity_repair_scan = on_identity_repair_scan
-        self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
-        self._on_revalidate_face_geometry = on_revalidate_face_geometry
-        self._on_manage_ignored_faces = on_manage_ignored_faces
-        self._on_deep_rescan = on_deep_rescan
-        self._on_deep_rebuild = on_deep_rebuild
-        self._on_deep_train = on_deep_train
-        self._on_deep_face_detect = on_deep_face_detect
-        self._on_deep_rebuild_model = on_deep_rebuild_model
-
+        self._config = config
         self.setWindowTitle(t("scanModes.title"))
-        self.setMinimumWidth(480)
-        self.setMinimumHeight(300)
-        self.resize(560, 680)
+        self.setMinimumWidth(420)
         self._build_ui()
-
-    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        outer.addWidget(self._build_content())
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # ── Sticky close button ──────────────────────────────────────────
+        container = QWidget()
+        cards = QVBoxLayout(container)
+        cards.setContentsMargins(4, 4, 4, 4)
+        cards.setSpacing(10)
+        scroll.setWidget(container)
+
+        cards.addWidget(self._make_card(
+            title=t("workflow_face_detection_title"),
+            desc=t("workflow_face_detection_desc"),
+            workflow="face_detection",
+            danger=False,
+        ))
+        cards.addWidget(self._make_card(
+            title=t("workflow_train_model_title"),
+            desc=t("workflow_train_model_desc"),
+            workflow="train_model",
+            danger=False,
+        ))
+        cards.addWidget(self._make_card(
+            title=t("workflow_full_rescan_title"),
+            desc=t("workflow_full_rescan_desc"),
+            workflow="full_rescan",
+            danger=True,
+        ))
+        cards.addStretch()
+        outer.addWidget(scroll)
+
+        # Multi-technology "verify every face" toggle (no confidence exemption).
+        verify_box = QVBoxLayout()
+        verify_box.setSpacing(2)
+        self._verify_all_chk = QCheckBox(t("scanModes.verifyAll.label"))
+        det = getattr(self._config, "detection", None)
+        self._verify_all_chk.setChecked(bool(getattr(det, "verification_verify_all", False)))
+        self._verify_all_chk.setEnabled(self._config is not None)
+        self._verify_all_chk.toggled.connect(self._on_verify_all_toggled)
+        verify_box.addWidget(self._verify_all_chk)
+
+        verify_tip = QLabel(t("scanModes.verifyAll.tip"))
+        verify_tip.setWordWrap(True)
+        verify_tip.setStyleSheet("color: #A6ADC8; font-size: 11px;")
+        verify_tip.setContentsMargins(22, 0, 0, 0)
+        verify_box.addWidget(verify_tip)
+        outer.addLayout(verify_box)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         close_btn = QPushButton(t("scanModes.close"))
@@ -89,164 +97,7 @@ class ScanModesDialog(QDialog):
         btn_row.addWidget(close_btn)
         outer.addLayout(btn_row)
 
-    def _make_scroll_container(self) -> tuple[QScrollArea, QVBoxLayout]:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        container = QWidget()
-        cards_layout = QVBoxLayout(container)
-        cards_layout.setContentsMargins(4, 4, 4, 4)
-        cards_layout.setSpacing(10)
-        scroll.setWidget(container)
-        return scroll, cards_layout
-
-    # ------------------------------------------------------------------
-    # Single AI-centric list: scan, deep recognition, then maintenance.
-    # ------------------------------------------------------------------
-
-    def _build_content(self) -> QWidget:
-        scroll, cards_layout = self._make_scroll_container()
-
-        intro = QLabel(t("scanModes.deep.intro"))
-        intro.setWordWrap(True)
-        intro.setStyleSheet("color: #A6ADC8; font-style: italic;")
-        cards_layout.addWidget(intro)
-
-        # ── Folder re-read (runs through the AI pipeline) ─────────────────
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.incremental.title"),
-            description=t("scanModes.incremental.description"),
-            button_label=t("scanModes.incremental.startButton"),
-            warning=None,
-            callback=self._launch_folder_rescan,
-            danger=False,
-        ))
-
-        # ── Deep-learning recognition ─────────────────────────────────────
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.deepRescan.title"),
-            description=t("scanModes.deepRescan.description"),
-            button_label=t("scanModes.deepRescan.startButton"),
-            warning=t("scanModes.deepRescan.warning"),
-            callback=self._launch_deep_rescan,
-            danger=False,
-        ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.deepTrain.title"),
-            description=t("scanModes.deepTrain.description"),
-            button_label=t("scanModes.deepTrain.startButton"),
-            warning=t("scanModes.deepTrain.warning"),
-            callback=self._launch_deep_train,
-            danger=False,
-        ))
-        if self._on_deep_rebuild_model is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.rebuildModel.title"),
-                description=t("scanModes.rebuildModel.description"),
-                button_label=t("scanModes.rebuildModel.startButton"),
-                warning=t("scanModes.rebuildModel.warning"),
-                callback=self._launch_deep_rebuild_model,
-                danger=True,
-            ))
-        if self._on_deep_face_detect is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.deepFaceDetect.title"),
-                description=t("scanModes.deepFaceDetect.description"),
-                button_label=t("scanModes.deepFaceDetect.startButton"),
-                warning=t("scanModes.deepFaceDetect.warning"),
-                callback=self._launch_deep_face_detect,
-                danger=False,
-            ))
-
-        # ── Maintenance ───────────────────────────────────────────────────
-        if self._on_revalidate_face_geometry is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.geomCleanup.title"),
-                description=t("scanModes.geomCleanup.description"),
-                button_label=t("scanModes.geomCleanup.startButton"),
-                warning=t("scanModes.geomCleanup.warning"),
-                callback=self._launch_revalidate_face_geometry,
-                danger=True,
-            ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.resetUnknowns.title"),
-            description=t("scanModes.resetUnknowns.description"),
-            button_label=t("scanModes.resetUnknowns.startButton"),
-            warning=t("scanModes.resetUnknowns.warning"),
-            callback=self._launch_reset_unknown_persons,
-            danger=False,
-        ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.overlapCleanup.title"),
-            description=t("scanModes.overlapCleanup.description"),
-            button_label=t("scanModes.overlapCleanup.startButton"),
-            warning=t("scanModes.overlapCleanup.warning"),
-            callback=self._launch_overlapping_unknown_cleanup,
-            danger=False,
-        ))
-        if self._on_find_embedding_duplicate_faces is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.embeddingDuplicates.title"),
-                description=t("scanModes.embeddingDuplicates.description"),
-                button_label=t("scanModes.embeddingDuplicates.startButton"),
-                warning=t("scanModes.embeddingDuplicates.warning"),
-                callback=self._launch_embedding_duplicate_cleanup,
-                danger=False,
-            ))
-        if self._on_identity_repair_scan is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.identityRepair.title"),
-                description=t("scanModes.identityRepair.description"),
-                button_label=t("scanModes.identityRepair.startButton"),
-                warning=t("scanModes.identityRepair.warning"),
-                callback=self._launch_identity_repair_scan,
-                danger=False,
-            ))
-        if self._on_cleanup_empty_unknown_persons is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.cleanupEmptyUnknowns.title"),
-                description=t("scanModes.cleanupEmptyUnknowns.description"),
-                button_label=t("scanModes.cleanupEmptyUnknowns.startButton"),
-                warning=t("scanModes.cleanupEmptyUnknowns.warning"),
-                callback=self._launch_cleanup_empty_unknown_persons,
-                danger=False,
-            ))
-        if self._on_manage_ignored_faces is not None:
-            cards_layout.addWidget(self._make_card(
-                title=t("scanModes.ignoredFaces.title"),
-                description=t("scanModes.ignoredFaces.description"),
-                button_label=t("scanModes.ignoredFaces.startButton"),
-                warning=None,
-                callback=self._launch_manage_ignored_faces,
-                danger=False,
-            ))
-
-        # ── Rebuild from scratch (destructive) ────────────────────────────
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.deepRebuild.title"),
-            description=t("scanModes.deepRebuild.description"),
-            button_label=t("scanModes.deepRebuild.startButton"),
-            warning=t("scanModes.deepRebuild.warning"),
-            callback=self._launch_deep_rebuild,
-            danger=True,
-        ))
-
-        cards_layout.addStretch()
-        return scroll
-
-    # ------------------------------------------------------------------
-
-    def _make_card(
-        self,
-        title: str,
-        description: str,
-        button_label: str,
-        warning: Optional[str],
-        callback: Callable[[], None],
-        danger: bool,
-    ) -> QFrame:
+    def _make_card(self, title: str, desc: str, workflow: str, danger: bool) -> QFrame:
         card = QFrame()
         card.setFrameShape(QFrame.StyledPanel)
         card.setFrameShadow(QFrame.Raised)
@@ -256,107 +107,44 @@ class ScanModesDialog(QDialog):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
 
-        # Title
         title_lbl = QLabel(f"<b>{title}</b>")
         title_lbl.setWordWrap(True)
         layout.addWidget(title_lbl)
 
-        # Description
-        desc_lbl = QLabel(description)
+        desc_lbl = QLabel(desc)
         desc_lbl.setWordWrap(True)
         desc_lbl.setStyleSheet("color: #A6ADC8;")
         desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(desc_lbl)
 
-        # Optional warning line
-        if warning:
-            warn_lbl = QLabel(f"⚠ {warning}")
-            warn_lbl.setWordWrap(True)
-            if danger:
-                warn_lbl.setStyleSheet("color: #F38BA8;")
-            else:
-                warn_lbl.setStyleSheet("color: #F9E2AF;")
-            layout.addWidget(warn_lbl)
-
-        # Button row (right-aligned)
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn = QPushButton(button_label)
+        btn = QPushButton(t("button_start"))
         btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         if danger:
             btn.setStyleSheet(
                 "QPushButton { color: #F38BA8; border-color: #6B3040; }"
                 "QPushButton:hover { background-color: #3D2030; border-color: #F38BA8; }"
-                "QPushButton:disabled { color: #6C7086; border-color: #313244; }"
             )
-        btn.clicked.connect(callback)
+        btn.clicked.connect(lambda: self._launch(workflow))
         btn_row.addWidget(btn)
         layout.addLayout(btn_row)
 
         return card
 
-    # ------------------------------------------------------------------
-    # Callbacks — close dialog then trigger the action so the main window
-    # guard checks (busy, no folder) can still run normally.
+    def _on_verify_all_toggled(self, checked: bool) -> None:
+        """Update the live config and persist the choice to config.yaml."""
+        if self._config is None:
+            return
+        self._config.detection.verification_verify_all = bool(checked)
+        try:
+            from app.config import save_detection_values
 
-    def _launch_deep_rescan(self) -> None:
-        self.accept()
-        if self._on_deep_rescan is not None:
-            self._on_deep_rescan()
+            save_detection_values({"verification_verify_all": bool(checked)})
+            log.info("verification_verify_all set to %s (persisted)", checked)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not persist verification_verify_all: %s", exc)
 
-    def _launch_deep_rebuild(self) -> None:
+    def _launch(self, workflow: str) -> None:
         self.accept()
-        if self._on_deep_rebuild is not None:
-            self._on_deep_rebuild()
-
-    def _launch_deep_train(self) -> None:
-        self.accept()
-        if self._on_deep_train is not None:
-            self._on_deep_train()
-
-    def _launch_deep_face_detect(self) -> None:
-        self.accept()
-        if self._on_deep_face_detect is not None:
-            self._on_deep_face_detect()
-
-    def _launch_deep_rebuild_model(self) -> None:
-        self.accept()
-        if self._on_deep_rebuild_model is not None:
-            self._on_deep_rebuild_model()
-
-    def _launch_folder_rescan(self) -> None:
-        self.accept()
-        self._on_folder_rescan()
-
-    def _launch_overlapping_unknown_cleanup(self) -> None:
-        self.accept()
-        self._on_find_overlapping_unknown_faces()
-
-    def _launch_embedding_duplicate_cleanup(self) -> None:
-        self.accept()
-        if self._on_find_embedding_duplicate_faces is not None:
-            self._on_find_embedding_duplicate_faces()
-
-    def _launch_reset_unknown_persons(self) -> None:
-        self.accept()
-        self._on_reset_unknown_persons()
-
-    def _launch_identity_repair_scan(self) -> None:
-        self.accept()
-        if self._on_identity_repair_scan is not None:
-            self._on_identity_repair_scan()
-
-    def _launch_cleanup_empty_unknown_persons(self) -> None:
-        self.accept()
-        if self._on_cleanup_empty_unknown_persons is not None:
-            self._on_cleanup_empty_unknown_persons()
-
-    def _launch_revalidate_face_geometry(self) -> None:
-        self.accept()
-        if self._on_revalidate_face_geometry is not None:
-            self._on_revalidate_face_geometry()
-
-    def _launch_manage_ignored_faces(self) -> None:
-        self.accept()
-        if self._on_manage_ignored_faces is not None:
-            self._on_manage_ignored_faces()
+        self.scan_workflow_started.emit(workflow)

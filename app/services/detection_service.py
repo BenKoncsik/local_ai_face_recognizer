@@ -339,17 +339,40 @@ class DetectionService:
     # Verification gate (false-positive filter)
     # ------------------------------------------------------------------
 
-    def _get_verifier(self) -> Optional[FaceVerifier]:
-        """Lazily create the crop-level verifier; None when disabled/unavailable."""
+    def _get_verifier(self):
+        """Lazily create the crop-level verification gate; None when disabled.
+
+        With ``detection.multistage_enabled`` the gate is the multi-technology
+        :class:`MultiStageFaceValidator` ensemble; otherwise the legacy single
+        :class:`FaceVerifier`.  Both expose the same ``verify``/``available``
+        surface, so :meth:`_filter_verified` is agnostic to which one runs.
+        """
         if not self._config.detection.verification_enabled:
             return None
         if self._verifier is None:
+            from app.detectors.composite_detector import CompositeDetector
             from app.detectors.yunet_detector import YuNetDetector
 
-            # Reuse the primary detector when it is already a YuNet instance —
-            # no point loading the same model twice.
-            primary = self._detector if isinstance(self._detector, YuNetDetector) else None
-            self._verifier = FaceVerifier(self._config.detection, detector=primary)
+            # The detector may be a CompositeDetector (YuNet + InsightFace); reach
+            # through it to reuse the loaded models in the gate (no second load).
+            base = self._detector
+            insightface = None
+            if isinstance(base, CompositeDetector):
+                insightface = base.get("insightface")
+                base = base.primary
+            primary = base if isinstance(base, YuNetDetector) else None
+            if self._config.detection.multistage_enabled:
+                from app.services.multi_stage_face_validator import (
+                    MultiStageFaceValidator,
+                )
+
+                self._verifier = MultiStageFaceValidator(
+                    self._config.detection,
+                    yunet_detector=primary,
+                    insightface_detector=insightface,
+                )
+            else:
+                self._verifier = FaceVerifier(self._config.detection, detector=primary)
         return self._verifier if self._verifier.available else None
 
     def _filter_verified(
@@ -368,7 +391,13 @@ class DetectionService:
         if verifier is None:
             return detections
 
-        exempt = self._config.detection.verification_confidence_exempt
+        # "Verify all" disables the confidence exemption so every box — even
+        # high-scoring ones — must pass the multi-technology gate.
+        exempt = (
+            2.0
+            if self._config.detection.verification_verify_all
+            else self._config.detection.verification_confidence_exempt
+        )
         kept: List[Detection] = []
         for det in detections:
             if det.confidence >= exempt:

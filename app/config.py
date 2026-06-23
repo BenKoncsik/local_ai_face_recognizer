@@ -132,6 +132,56 @@ class DetectionConfig:
     # detectors.  See app/detectors/landmark_geometry.py.
     landmark_geometry_enabled: bool = True
 
+    # --- Multi-stage verification (independent-technology voting gate) ---
+
+    # Wrap the single-technology YuNet verifier above in an ensemble that asks
+    # several *independent* face detectors/heuristics about the same crop and
+    # only keeps a detection a quorum of them confirm.  A real face is re-found
+    # by multiple technologies (YuNet + Haar + an eye cascade …), while an ear /
+    # object / texture is confirmed by at most one — so the ensemble removes the
+    # false positives a single detector still lets through.  When disabled the
+    # gate behaves exactly like the legacy single-verifier path.
+    multistage_enabled: bool = True
+
+    # Minimum number of *confirming* technologies for a detection to survive.
+    multistage_min_confirmations: int = 2
+
+    # Fail-safe floor: when fewer than this many technologies are actually
+    # available (could give an opinion), fall back to the legacy single-YuNet
+    # verifier instead of voting — so a stripped-down install never deletes
+    # more aggressively than today.
+    multistage_min_available: int = 2
+
+    # Which technologies join the ensemble (YuNet is always in via the base
+    # verifier).  Each silently abstains when its model/library is missing.
+    multistage_use_caffe: bool = True        # OpenCV DNN Caffe SSD (res10)
+    multistage_use_haar: bool = True         # Haar frontal + profile cascade
+    multistage_use_eyes: bool = True         # Haar eye cascade (ear/object gate)
+    # InsightFace SCRFD — used both as a co-detector (recall: finds profile /
+    # turned faces the YuNet/Caffe frontal models miss) and as a strong gate
+    # technology.  Heavy optional dependency (insightface + onnxruntime, ~300 MB
+    # model): when not installed the detector and gate both skip it gracefully,
+    # so leaving this on simply means "use InsightFace if present".
+    multistage_use_insightface: bool = True
+
+    # Vote weight of an InsightFace CONFIRM in the gate.  2 lets InsightFace keep
+    # a hard profile face on its own (those detections only InsightFace finds),
+    # while a lone YuNet hit (weight 1) on hair/texture still needs a second
+    # opinion and is dropped.
+    multistage_insightface_weight: int = 2
+
+    # InsightFace model pack name (used when multistage_use_insightface).
+    insightface_model_pack: str = "buffalo_l"
+
+    # Verify EVERY detected face, ignoring the confidence exemption above.
+    # Normally detections at/above ``verification_confidence_exempt`` are trusted
+    # as-is for speed; with this on, even high-confidence boxes must pass the
+    # multi-technology gate, so high-scoring false positives (ears, the back of a
+    # head, objects) are caught too.  Slower (the gate runs on all faces, and the
+    # retroactive cleanup re-checks every stored face).  Toggled from the Scan &
+    # Maintenance dialog.
+    verification_verify_all: bool = False
+
 
 @dataclass
 class EmbeddingConfig:
@@ -791,6 +841,39 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
                 "landmark_geometry_enabled",
                 cfg.detection.landmark_geometry_enabled,
             ),
+            multistage_enabled=det.get(
+                "multistage_enabled", cfg.detection.multistage_enabled
+            ),
+            multistage_min_confirmations=det.get(
+                "multistage_min_confirmations",
+                cfg.detection.multistage_min_confirmations,
+            ),
+            multistage_min_available=det.get(
+                "multistage_min_available", cfg.detection.multistage_min_available
+            ),
+            multistage_use_caffe=det.get(
+                "multistage_use_caffe", cfg.detection.multistage_use_caffe
+            ),
+            multistage_use_haar=det.get(
+                "multistage_use_haar", cfg.detection.multistage_use_haar
+            ),
+            multistage_use_eyes=det.get(
+                "multistage_use_eyes", cfg.detection.multistage_use_eyes
+            ),
+            multistage_use_insightface=det.get(
+                "multistage_use_insightface",
+                cfg.detection.multistage_use_insightface,
+            ),
+            multistage_insightface_weight=det.get(
+                "multistage_insightface_weight",
+                cfg.detection.multistage_insightface_weight,
+            ),
+            insightface_model_pack=det.get(
+                "insightface_model_pack", cfg.detection.insightface_model_pack
+            ),
+            verification_verify_all=det.get(
+                "verification_verify_all", cfg.detection.verification_verify_all
+            ),
         )
 
         emb = raw.get("embedding", {})
@@ -1175,6 +1258,13 @@ def save_deep_recognition_values(
 ) -> None:
     """Persist selected deep_recognition fields into the YAML config."""
     _update_config_section("deep_recognition", values, config_path)
+
+
+def save_detection_values(
+    values: dict, config_path: Optional[str] = None
+) -> None:
+    """Persist selected detection fields into the YAML config."""
+    _update_config_section("detection", values, config_path)
 
 
 def _update_config_section(

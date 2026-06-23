@@ -39,7 +39,9 @@ class TestFactoryFallback:
         from app.detectors.cpu_detector import CpuDetector
         from app.detectors.factory import create_detector
 
-        config = DetectionConfig(coral_model_path=None, use_yunet=False)
+        config = DetectionConfig(
+            coral_model_path=None, use_yunet=False, multistage_use_insightface=False
+        )
         detector = create_detector(config)
 
         # Should be a CPU detector (possibly Haar if model files absent)
@@ -54,7 +56,8 @@ class TestFactoryFallback:
         monkeypatch.setattr(factory, "probe_coral", lambda *args, **kwargs: False)
 
         config = DetectionConfig(
-            coral_model_path="/nonexistent/model.tflite", use_yunet=False
+            coral_model_path="/nonexistent/model.tflite", use_yunet=False,
+            multistage_use_insightface=False,
         )
         detector = factory.create_detector(config)
         assert isinstance(detector, CpuDetector)
@@ -65,7 +68,9 @@ class TestFactoryFallback:
         from app.detectors import factory
         from app.detectors.yunet_detector import YuNetDetector
 
-        config = DetectionConfig(coral_model_path=None, use_yunet=True)
+        config = DetectionConfig(
+            coral_model_path=None, use_yunet=True, multistage_use_insightface=False
+        )
         detector = factory.create_detector(config)
         # Falls back to CpuDetector only if the YuNet model is missing.
         from app.paths import resource_path
@@ -100,3 +105,82 @@ class TestFaceDetectorInterface:
     def test_repr(self):
         detector = _DummyDetector()
         assert "dummy" in repr(detector)
+
+
+class _FixedDetector(FaceDetector):
+    """Returns a fixed detection list regardless of input."""
+
+    def __init__(self, name, dets):
+        self._name = name
+        self._dets = dets
+
+    @property
+    def backend_name(self):
+        return self._name
+
+    def detect(self, image_bgr, confidence_threshold=0.5, min_face_size=50):
+        return list(self._dets)
+
+
+class TestCompositeDetector:
+    """The composite keeps every primary box and adds only *new* secondary ones."""
+
+    def _img(self):
+        return np.zeros((400, 400, 3), dtype=np.uint8)
+
+    def test_secondary_adds_non_overlapping_face(self):
+        from app.detectors.composite_detector import CompositeDetector
+
+        primary = _FixedDetector("yunet", [Detection(10, 10, 50, 50, 0.9)])
+        secondary = _FixedDetector(  # one overlapping, one brand-new (profile)
+            "insightface_scrfd",
+            [Detection(12, 12, 48, 48, 0.8), Detection(300, 300, 60, 60, 0.7)],
+        )
+        comp = CompositeDetector(primary, [secondary])
+        out = comp.detect(self._img())
+
+        # Primary box kept; overlapping secondary dropped; new one added.
+        assert len(out) == 2
+        assert any(d.x == 10 for d in out)          # primary survives
+        assert any(d.x == 300 for d in out)         # recovered profile face
+        assert "yunet" in comp.backend_name and "insightface" in comp.backend_name
+
+    def test_collapses_primary_duplicate_via_anchor(self):
+        # The primary fires two offset boxes on one face (mutual IoU ~0.27); a
+        # secondary box sees it as one → the lower-confidence duplicate is dropped.
+        from app.detectors.composite_detector import CompositeDetector
+
+        primary = _FixedDetector("yunet", [
+            Detection(100, 100, 120, 120, 0.80),
+            Detection(150, 150, 120, 120, 0.70),  # offset duplicate of the same face
+        ])
+        secondary = _FixedDetector("insightface_scrfd", [Detection(110, 110, 150, 150, 0.85)])
+        out = CompositeDetector(primary, [secondary]).detect(self._img())
+
+        # One face: the higher-confidence primary box survives, the duplicate and
+        # the overlapping anchor are not added.
+        assert len(out) == 1
+        assert out[0].confidence == 0.80
+
+    def test_secondary_with_center_inside_primary_not_added(self):
+        # A secondary box much larger/looser than the primary (IoU below the add
+        # threshold but its centre inside the primary) is the same face — not added.
+        from app.detectors.composite_detector import CompositeDetector
+
+        primary = _FixedDetector("yunet", [Detection(200, 200, 80, 80, 0.8)])
+        secondary = _FixedDetector(
+            "insightface_scrfd", [Detection(120, 120, 260, 260, 0.78)]  # center (250,250) in primary
+        )
+        out = CompositeDetector(primary, [secondary]).detect(self._img())
+        assert len(out) == 1
+        assert (out[0].x, out[0].y) == (200, 200)
+
+    def test_get_reaches_member_detector(self):
+        from app.detectors.composite_detector import CompositeDetector
+
+        primary = _FixedDetector("yunet", [])
+        secondary = _FixedDetector("insightface_scrfd", [])
+        comp = CompositeDetector(primary, [secondary])
+        assert comp.get("insightface") is secondary
+        assert comp.primary is primary
+        assert comp.get("nope") is None

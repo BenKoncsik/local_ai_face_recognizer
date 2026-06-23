@@ -346,14 +346,7 @@ def _make_scan_modes_dialog(_cfg: AppConfig) -> QWidget:
         "app.ui.dialogs.scan_modes_dialog",
         fromlist=["ScanModesDialog"],
     )
-    return mod.ScanModesDialog(
-        on_incremental=_noop,
-        on_full_rescan=_noop,
-        on_face_rescan_fast=_noop,
-        on_face_rescan_accurate=_noop,
-        on_reset_unknown_persons=_noop,
-        on_find_overlapping_unknown_faces=_noop,
-    )
+    return mod.ScanModesDialog(config=_cfg)
 
 
 _register("scan_modes_dialog", _make_scan_modes_dialog)

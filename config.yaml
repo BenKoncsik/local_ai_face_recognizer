@@ -3,6 +3,7 @@ detection:
   min_face_size: 50
   coral_model_path: models/ssd_mobilenet_v2_face_quant_postprocess_edgetpu.tflite
   cpu_model_path: models/res10_300x300_ssd_iter_140000.caffemodel
+  verification_verify_all: true
 embedding:
   model_path: models/mobilefacenet.tflite
   input_size:

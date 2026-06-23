@@ -24,8 +24,18 @@ def _prefs_file() -> Path:
 
 _STRINGS: Dict[str, Dict[str, str]] = {
     # ── Toolbar ───────────────────────────────────────────────────────────────
-    "select_folder": {"en": "Select Folder …", "hu": "Mappa kiválasztása …"},
-    "no_folder":     {"en": "(no folder selected)", "hu": "(nincs mappa kiválasztva)"},
+    "select_folder":      {"en": "Select Folder …", "hu": "Mappa kiválasztása …"},
+    "manage_folders":     {"en": "Manage Folders …", "hu": "Mappák kezelése …"},
+    "no_folder":          {"en": "(no folder selected)", "hu": "(nincs mappa kiválasztva)"},
+    "folders_count":      {"en": "{n} folder(s) selected", "hu": "{n} mappa kiválasztva"},
+    # ── FolderListDialog ──────────────────────────────────────────────────────
+    "folder_list_title":  {"en": "Source Folders", "hu": "Forrás mappák"},
+    "folder_list_hint":   {
+        "en": "Add one or more folders. All sub-folders are scanned automatically.",
+        "hu": "Adj hozzá egy vagy több mappát. Az almappák automatikusan beolvasásra kerülnek.",
+    },
+    "folder_list_add":    {"en": "Add Folder …", "hu": "Mappa hozzáadása …"},
+    "folder_list_remove": {"en": "Remove Selected", "hu": "Kijelölt törlése"},
     "scan_index":    {"en": "Scan & Index", "hu": "Beolvasás és indexelés"},
     "stop":          {"en": "Stop", "hu": "Leállítás"},
     "export_csv":    {"en": "Export CSV", "hu": "CSV exportálás"},
@@ -2580,6 +2590,22 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.close":
         {"en": "Close",
          "hu": "Bezárás"},
+    "scanModes.verifyAll.label":
+        {"en": "Verify every face with multiple technologies (no confidence threshold)",
+         "hu": "Minden arc ellenőrzése több technológiával (nincs konfidencia-küszöb)"},
+    "scanModes.verifyAll.tip":
+        {"en": "When on, the multi-technology face check (YuNet + Caffe + Haar + eye "
+               "cascade + InsightFace) runs on EVERY detected face, not only the "
+               "uncertain ones — so high-confidence false positives (ears, the back "
+               "of a head, objects) are caught and removed too. Slower. Applies to "
+               "detection, Full Rescan and the stored-face re-check. Run a Full "
+               "Rescan afterwards to re-process already-scanned images.",
+         "hu": "Bekapcsolva a több-technológiás arc-ellenőrzés (YuNet + Caffe + Haar + "
+               "szem-kaszkád + InsightFace) MINDEN felismert arcon lefut, nem csak a "
+               "bizonytalanokon — így a magas konfidenciájú fals pozitívok (fül, "
+               "tarkó, tárgyak) is kiszűrődnek. Lassabb. A detektálásra, a Teljes "
+               "újrabeolvasásra és a tárolt arcok újra-ellenőrzésére is vonatkozik. "
+               "A már beolvasott képekhez futtass utána Teljes újrabeolvasást."},
 
     # incremental (scan & index)
     "scanModes.incremental.title":
@@ -2845,6 +2871,95 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "geom_cleanup_status":
         {"en": "Removed {deleted} false face(s)",
          "hu": "{deleted} hamis arc eltávolítva"},
+
+    # Retroactive crop-level verification
+    "scanModes.retroVerify.title":
+        {"en": "Remove False Faces (Crop Re-detection)",
+         "hu": "Hamis arcok eltávolítása (vágat-szintű újra-detektálás)"},
+    "scanModes.retroVerify.description":
+        {"en": "Re-examines every already-detected (non-manual) face by loading its "
+               "original image and running the crop-level face verifier on the stored "
+               "bounding box — the same gate applied to new detections. Faces that "
+               "cannot be re-found inside their own crop (objects, ears, walls, fabric) "
+               "are removed. Manually drawn boxes and faces you assigned by hand are "
+               "never deleted — they are listed for review only. You get a count preview "
+               "before anything is removed.",
+         "hu": "Minden már detektált (nem kézi) arcot újra megvizsgál: betölti az eredeti "
+               "képet, és futtatja a vágat-szintű arc-verifikátort az elmentett "
+               "keretezésen — ugyanolyan kaput alkalmaz, mint az új detektáláskor. Azokat "
+               "az arcokat, amelyeket nem sikerül újra megtalálni a saját kivágásukon "
+               "belül (tárgyak, fülek, falak, szövetek), eltávolítja. A kézzel rajzolt "
+               "kereteket és a kézzel hozzárendelt arcokat soha nem törli — csak "
+               "felülvizsgálatra listázza. A törlés előtt darabszám-előnézetet kapsz."},
+    "scanModes.retroVerify.startButton":
+        {"en": "Re-verify & Remove False Faces",
+         "hu": "Újra-ellenőrzés és hamis arcok törlése"},
+    "scanModes.retroVerify.warning":
+        {"en": "Loads every original image — may be slow on large libraries. "
+               "Deletes non-confirmed non-face detections after a preview.",
+         "hu": "Minden eredeti képet betölt — nagy könyvtárakon lassú lehet. "
+               "Megerősítő előnézet után törli a nem megerősített, nem arc detektálásokat."},
+
+    # ── Simplified scan dialog workflows ──────────────────────────────────────
+    "workflow_face_detection_title":
+        {"en": "Face Detection & Assignment",
+         "hu": "Arcfelismerés és hozzárendelés"},
+    "workflow_face_detection_desc":
+        {"en": "Indexes new images, detects faces, embeds, and assigns known persons.",
+         "hu": "Új képeket indexel, arcokat detektál és emberekhez rendeli."},
+    "workflow_train_model_title":
+        {"en": "Train AI Model",
+         "hu": "AI modell tanítása"},
+    "workflow_train_model_desc":
+        {"en": "Retrains the deep classifier on all labeled persons.",
+         "hu": "Újratanítja az AI modellt az összes elnevezett emberen."},
+    "workflow_full_rescan_title":
+        {"en": "Full Rescan",
+         "hu": "Teljes újrabeolvasás"},
+    "workflow_full_rescan_desc":
+        {"en": "Clears all detections and rebuilds embeddings and clusters from scratch.",
+         "hu": "Felszabadítja az összes detektálást és újraépíti az arcokat."},
+    "button_start":
+        {"en": "Start",
+         "hu": "Kezdés"},
+
+    "retro_verify_title":
+        {"en": "Re-verify Stored Faces (multi-technology)",
+         "hu": "Tárolt arcok újra-ellenőrzése (több technológia)"},
+    "retro_verify_unavailable":
+        {"en": "The crop-level face verifier is unavailable (model missing or "
+               "verification disabled in config). Enable verification_enabled in "
+               "your config and ensure the YuNet model is present.",
+         "hu": "A vágat-szintű arc-verifikátor nem elérhető (a modell hiányzik vagy "
+               "a verification_enabled ki van kapcsolva a konfigban). Kapcsold be a "
+               "verification_enabled opciót, és ellenőrizd, hogy a YuNet modell megvan."},
+    "retro_verify_confirm":
+        {"en": "Checked {scanned} face(s) across {images} image(s).\n\n"
+               "{n} face(s) could not be re-confirmed as real faces and can be removed "
+               "(unassigned or automatically assigned only).\n"
+               "{flagged} manually assigned / drawn face(s) also failed — kept for "
+               "your review and NOT deleted.\n"
+               "{missing} image file(s) could not be loaded and were skipped.\n\n"
+               "Delete the {n} unconfirmed non-face(s) now? This cannot be undone.",
+         "hu": "{images} képen {scanned} arcot ellenőrzött.\n\n"
+               "{n} arc nem erősíthető meg valódi arcként, és eltávolítható "
+               "(csak hozzárendeletlen vagy automatikusan hozzárendelt).\n"
+               "{flagged} kézzel hozzárendelt / rajzolt arc szintén bukott — "
+               "felülvizsgálatra megmarad, NEM töröljük.\n"
+               "{missing} képfájl nem volt betölthető, azokat kihagytuk.\n\n"
+               "Törölhető most a(z) {n} nem megerősített nem arc? Ez nem vonható vissza."},
+    "retro_verify_none":
+        {"en": "Checked {scanned} face(s) across {images} image(s) — "
+               "all confirmed as real faces.\n"
+               "({flagged} manually assigned face(s) failed but are kept for review.)\n"
+               "({missing} image file(s) skipped — files missing from disk.)",
+         "hu": "{images} képen {scanned} arcot ellenőrzött — "
+               "minden megerősítve valódi arcként.\n"
+               "({flagged} kézzel hozzárendelt arc bukott, de felülvizsgálatra megmarad.)\n"
+               "({missing} képfájl kihagyva — fájlok hiányoznak a lemezről.)"},
+    "retro_verify_status":
+        {"en": "Removed {deleted} unconfirmed non-face(s)",
+         "hu": "{deleted} meg nem erősített nem arc eltávolítva"},
 
     # Identity repair results dialog
     "repair_title":      {"en": "Identity Repair — Merge Fragmented Unknowns",

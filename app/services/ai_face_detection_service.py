@@ -144,9 +144,18 @@ class AiFaceDetectionService:
 
                 detector = self._get_detector()
                 primary = detector if isinstance(detector, YuNetDetector) else None
-                self._verifier = FaceVerifier(
-                    self._detection_config, detector=primary
-                )
+                if self._detection_config.multistage_enabled:
+                    from app.services.multi_stage_face_validator import (
+                        MultiStageFaceValidator,
+                    )
+
+                    self._verifier = MultiStageFaceValidator(
+                        self._detection_config, yunet_detector=primary
+                    )
+                else:
+                    self._verifier = FaceVerifier(
+                        self._detection_config, detector=primary
+                    )
             except Exception as exc:  # noqa: BLE001
                 log.warning("AI verification gate unavailable: %s", exc)
                 self._verifier = None
@@ -167,7 +176,11 @@ class AiFaceDetectionService:
         if verifier is None:
             return detections
 
-        exempt = self._detection_config.verification_confidence_exempt
+        exempt = (
+            2.0
+            if self._detection_config.verification_verify_all
+            else self._detection_config.verification_confidence_exempt
+        )
         kept: List[Detection] = []
         for det in detections:
             if det.confidence >= exempt:

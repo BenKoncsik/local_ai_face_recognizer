@@ -13,9 +13,7 @@ Updates in real-time via :meth:`update_info` called from the main window.
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -743,20 +741,18 @@ class NeuralNetworkGraphWidget(QWidget):
             p.drawPath(path)
 
 
-_NN_CACHE_FILE = Path("data/nn_graph_last.json")
-
-
 class NeuralNetworkGraphDialog(QDialog):
     """Standalone window with the full neural-network activation graph.
 
     Opened from the Debug tab (Settings) or from the AI Decision Visualizer
     toolbar.  Uses ``Qt.Window`` so it shows even when Settings is modal.
 
-    Persists the last received activation data to *data/nn_graph_last.json*
-    so closing and reopening the window restores the previous state.
-
-    Call :meth:`update_from_info` to feed a
-    :class:`~app.deep.debug_info.DeepDebugInfo` object.
+    The graph is driven live by :meth:`update_from_info` (fed a
+    :class:`~app.deep.debug_info.DeepDebugInfo`).  It is deliberately *not*
+    persisted to disk: a saved snapshot outlives the model it describes, so
+    after a rebuild/retrain a restored cache would show a stale set of people
+    that no longer exist.  When no current data is available the window shows
+    an explicit empty state (see :meth:`clear`) instead of an old graph.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -765,7 +761,6 @@ class NeuralNetworkGraphDialog(QDialog):
         self.setWindowFlags(Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
         self.resize(1050, 660)
         self._build_ui()
-        self._load_cache()   # restore last run data immediately
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -787,25 +782,21 @@ class NeuralNetworkGraphDialog(QDialog):
         scroll.setWidget(self._graph)
         layout.addWidget(scroll, stretch=1)
 
-    # ── Cache helpers ─────────────────────────────────────────────────────
+    # ── Empty state ───────────────────────────────────────────────────────
 
-    def _save_cache(self, data: dict) -> None:
-        try:
-            _NN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with _NN_CACHE_FILE.open("w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-        except Exception:
-            log.debug("nn_graph: cache write failed", exc_info=True)
+    def clear(self) -> None:
+        """Reset to the empty 'no data' state.
 
-    def _load_cache(self) -> None:
-        try:
-            if not _NN_CACHE_FILE.exists():
-                return
-            with _NN_CACHE_FILE.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            self._render_from_dict(data)
-        except Exception:
-            log.debug("nn_graph: cache read failed", exc_info=True)
+        Called when the window is opened but no current-model activation data
+        is available, so a reused window never keeps showing a previous run.
+        """
+        self._info_label.setText(t("debug_nn_waiting"))
+        self._graph.set_data(
+            embedding_top_dims=[],
+            layer_activations=[],
+            output_probs={},
+            all_similarities={},
+        )
 
     def _render_from_dict(self, data: dict) -> None:
         face_id    = data.get("face_id", -1)
@@ -847,7 +838,7 @@ class NeuralNetworkGraphDialog(QDialog):
         pred      = info.prediction
         winner    = pred.person_name if pred and pred.reason == "assigned" else ""
 
-        cache = {
+        data = {
             "face_id":           info.face_id,
             "mode":              info.mode,
             "decision":          pred.reason,
@@ -859,8 +850,7 @@ class NeuralNetworkGraphDialog(QDialog):
             "all_similarities":  {k: float(v) for k, v in (info.all_similarities or {}).items()},
             "decision_path":     info.decision_path,
         }
-        self._save_cache(cache)
-        self._render_from_dict(cache)
+        self._render_from_dict(data)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

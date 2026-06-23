@@ -1,6 +1,6 @@
 # Face-Local Blueprint
 
-Frissítve: 2026-06-18
+Frissítve: 2026-06-23
 
 Ez a dokumentum a jelenlegi kodbazis architekturajat irja le. Nem user manual,
 hanem fejlesztoi terkep: melyik domain hol lakik, milyen pipeline mozgatja az
@@ -25,10 +25,10 @@ projekt-sync es tavoli kepforras reteg, nem kotelezo felho backend.
 | Terulet | Jelenlegi allapot |
 |---|---|
 | Klasszikus arc pipeline | scan -> detect -> embed -> dedup -> recognize -> ignored filter -> unknown clustering -> consistency -> suggestions |
-| AI/deep pipeline | rescan, rebuild, train-only es analysis-only face detection modok |
-| Detektalas | Coral Edge TPU, OpenCV YuNet, OpenCV DNN SSD, Haar fallback |
+| AI/deep pipeline | rescan, rebuild, rebuild_model, train-only es analysis-only face detection modok |
+| Detektalas | Coral Edge TPU, OpenCV YuNet, OpenCV DNN SSD, Haar fallback, crop-szintű verifikáció |
 | Embedding | TFLite CPU backend, OpenCV SFace fallback, HOG teszt fallback |
-| Felismeres | prototipus/centroid alapu klasszikus felismeres es MLP ensemble alapu deep recognition |
+| Felismeres | centroid alapu klasszikus felismeres es MLP ensemble alapu deep recognition |
 | Adatkezeles | SQLite + SQLAlchemy ORM, WAL, idempotens schema migraciok |
 | UI | PySide6/Qt tabok, dialogusok, QRunnable/QThread hattermunkak |
 | Tavoli munka | Google Drive OAuth, Drive API, lock/heartbeat alapu projekt-session |
@@ -353,8 +353,9 @@ flowchart LR
 
 ### Szakaszok
 
-1. **Scan**: lokalis fajlrendszer vagy Drive projekt indexelese, hash,
-   meret, EXIF GPS, `relative_path`, `RemoteImage`.
+1. **Scan**: lokalis fajlrendszer (egy vagy tobb mappa) vagy Drive projekt indexelese, 
+   SHA-256 hash, meret, EXIF GPS feldolgozasa (hely linkeles), `relative_path` 
+   (hordozhato), `RemoteImage` (Drive).
 2. **Detection**: detektor backend valasztas, high-accuracy es adaptive
    escalation, optional verification gate, landmark es crop mentese.
 3. **Embedding**: pending arcok embeddingje TFLite/SFace backenddel.
@@ -388,6 +389,7 @@ akar percekig futhat es CPU-intenziv lehet.
 |---|---|
 | `rescan` | uj kepek scan/detect/embed, AI face detection, overlap resolution, ignored filter, train+recognize, cluster, consistency, review counters |
 | `rebuild` | automatikus arcboxok torlese, emberi dontesek megtartasa, teljes ujradetektalas es ujratanitas |
+| `rebuild_model` | a neural model torlesevel es nullarol ujratanitsasaval a mar detektalt arcokbol (gyorsabb, mint rebuild) |
 | `train` | hianyzo embeddingek + modell ujratanitasa, arcok modositasa nelkul |
 | `detect_faces` | analysis-only AI face detection minden kepen, `faces` tabla erintese nelkul |
 
@@ -405,14 +407,30 @@ akar percekig futhat es CPU-intenziv lehet.
   lehet.
 - A modell `data/deep_model/deep_face_model.pkl` alatt perzisztalodik, es
   `data_fingerprint` alapjan ujrahasznalhato, ha a cimkezett adat nem valtozott.
+- `rebuild_model` mod hamar feldobja a regi modellt, es tisztan nullarol tanitja meg
+  az osszes jelolt arcbol; gyorsabb mint teljes rebuild es nem hagy stale modelleket.
 
-### AI face detection
+### AI face detection es verifikacio
 
 Az `AiFaceDetectionService` kulon, analysis-only eredmenyt ir az
 `ai_face_detections` tablaba. Nem hoz letre `Face` sort, nem rendel szemelyt,
 nem torol es nem mozgat klasszikus eredmenyeket. Celja diagnosztikai es
 osszehasonlitasi informacio: hol lat az AI arcot, mekkora bboxszal es milyen
 confidence-szel.
+
+#### Crop-szintu verifikacio
+
+A `detection.verification_enabled` config flag alatt egy opt-in crop-szintű 
+FaceVerifier rendszer működik, amely újra-detektálja az arc területét az 
+eredeti képből, hogy szűrje ki a hamis pozitívumokat. Ezt a pipeline 
+detektálás után alkalmazza, illetve visszavetítve a régebb archivált arcokra is.
+
+A `RetroactiveVerificationService` a már tárolt, non-manual arcokat újra-ellenőrzi:
+- Betölti az eredeti képeket, és újra futtatja a crop-level verifikációt
+- Fals pozitívumokat "droppable" (törlendő) vagy "flagged for review" (emberi 
+  felülvizsgálandó) kategóriákba sorolja
+- Manuálisan megadott arcok soha nem törlődnek automatikusan, csak jelölésre 
+  kerülnek felülvizsgálathoz
 
 ## 8. Detektalas, embedding, felismeres
 
@@ -546,13 +564,14 @@ Fo fajl: `app/ui/main_window.py`
 
 | Service | Felelosseg |
 |---|---|
-| `ScanService` | lokalis kepek indexelese, hash, EXIF, relative path, DB rekord |
+| `ScanService` | lokalis kepek indexelese (egy/tobb mappa), SHA-256 hash, EXIF GPS feldolgozasa (hely linkeles), relative path hordozhatasag, DB rekord |
 | `DriveScanService` | Drive kepek listazasa, mirror/cache, `RemoteImage` frissites |
 | `DetectionService` | face detect, high-accuracy, verification, crop, landmark, quality |
 | `EmbeddingService` | pending embeddingek eloallitasa |
 | `RecognitionService` | klasszikus profile-based felismeres |
 | `DeepRecognitionService` | training run, MLP ensemble, auto assignment review muveletek |
 | `AiFaceDetectionService` | analysis-only AI bbox eredmenyek |
+| `RetroactiveVerificationService` | tárolt arcok crop-szintű újra-verifikációja (hamis pozitívum szűrés) |
 | `ClusteringService` | Unknown N klaszterezes, re-cluster same/different korrekciokkal |
 | `SuggestionService` | Unknown -> ismert szemely nevjavaslat |
 | `MergeSuggestionService` | face+nev alapu perzisztalt merge javaslatok |
@@ -932,12 +951,22 @@ valtozasnal coverage mindig kotelezo.
   csak az auto-assign-okat.
 - `.facepack` és export workflow-k kezeljenek missing image library root-ot
   és Drive fetch hibákat gracefully (skip/warn, ne crash).
+- Beolvasás több mappából: `ScanService.scan()` listát fogad, hash/relative_path
+  mellett mtime-alapú resume és EXIF GPS feldolgozás történik mindegyikben.
+- AI detektálás verifikáció: crop-szintű újra-detektálás az arc areájából a hamis 
+  pozitívumok szűrésére; `RetroactiveVerificationService` a régi arcokat is 
+  ellenőrzi, manuális assignments védelme alatt.
+- `rebuild_model` mód: gyorsított modell-újraépítés a képek újra-detektálása nélkül;
+  teljesen kitörli a régi modellt és tisztán tanít nulláról (stale model protection).
 
-## 18. Legutóbbi fejlesztések (Jun 18, 2026)
+## 18. Legutóbbi fejlesztések (Jun 18–23, 2026)
 
 | Komponens | Módosítás | Hatás |
 |-----------|-----------|-------|
-| `DeepPipelineWorker` | Szignifikáns refactor, overlap resolution javítás | Mély tanulási csatorna robusztussága, AI face detection jitterek |
+| `DeepPipelineWorker` | Szignifikáns refactor, overlap resolution javítás, `rebuild_model` mód, multi-folder support | Mély tanulási csatorna robusztussága, gyorsabb modell-újraépítés |
+| `ScanService` | Multi-folder support, EXIF GPS feldolgozása beolvasás során, relative path hordozhatasag | Több mappából való párhuzamos indexálás, automatikus helyelőszálláció |
+| `RetroactiveVerificationService` | Új (Jun 23) | Crop-szintű újra-verifikáció a tárolt arcoknak, hamis pozitívumok szűrése |
+| `FaceVerifier` gate | Crop-szintű verifikáció az arc detektálásban | Valós/hamis pozitívumok szétválasztása már detektáláskor |
 | `PersonSearchSelect` | Új widget (Jun 18) | Egységes személyválasztó összes UI felületen (inline, merge, reassign) |
 | `ImageBrowserPanel` | 3-oszlopos layout rewrite | Felhasználóbarát fájlnézet + universal keresés integráció |
 | `SidebarPanel` | Frissítés (Jun 18) | Rendezési opciók, arccsoportosítás |

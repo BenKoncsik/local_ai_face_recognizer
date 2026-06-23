@@ -54,6 +54,16 @@ pytest>=7.4
 pytest-qt>=4.2
 pytest-cov>=5.0
 
+# ── Optional: InsightFace SCRFD (profile / turned-face recall) ───────────────
+# Adds a strong second detector used as a co-detector (it recovers profile and
+# strongly turned faces the frontal-biased YuNet/Caffe models miss) and as a
+# weighted technology in the multi-stage verification gate.  Heavy (~300 MB
+# model, downloaded on first use).  Absence is not fatal — detection falls back
+# to the primary detector and the gate skips the InsightFace vote.
+#   pip install insightface onnxruntime
+# NOTE: pip may pull numpy>=2; re-pin afterwards with `pip install "numpy<2.0"`.
+# Toggle with detection.multistage_use_insightface in config.yaml.
+
 # ── Optional: Google Coral Edge TPU ──────────────────────────────────────────
 # pycoral is NOT installable via PyPI for all platforms.
 # Install it following the official guide:

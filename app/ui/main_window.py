@@ -768,7 +768,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(t("window_title"))
         # Menu bar titles
         self._mb_file_menu.setTitle(t("mb_file"))
-        self._select_folder_action.setText(t("select_folder"))
+        self._select_folder_action.setText(t("manage_folders"))
         self._mb_scan_menu_action.setText(t("scanModes.openButton"))
         self._mb_tools_menu.setTitle(t("mb_tools"))
         self._mb_merge_menu.setTitle(t("mb_merge"))
@@ -778,8 +778,8 @@ class MainWindow(QMainWindow):
         self._nn_graph_action.setText(t("mb_nn_graph"))
         self._tasks_debug_action.setText(t("tasks_title"))
         # Toolbar
-        self._folder_btn.setText(t("select_folder"))
-        if not hasattr(self, "_root_folder"):
+        self._folder_btn.setText(t("manage_folders"))
+        if not hasattr(self, "_root_folders") or not self._root_folders:
             self._folder_label.setText(f"  {t('no_folder')}")
         self._scan_modes_btn.setText(t("scanModes.openButton"))
         self._tools_menu_btn.setText(t("tb_tools_menu"))
@@ -851,54 +851,92 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_select_folder(self) -> None:
-        start_dir = _last_dir("paths/last_folder", str(Path.home()))
-        folder = QFileDialog.getExistingDirectory(
-            self, t("select_folder"), start_dir
-        )
-        if folder:
-            self._root_folder = folder
-            _save_dir("paths/last_folder", folder)
-            self._set_folder_label(folder)
-            self._scan_modes_btn.setEnabled(True)
-            log.info("Root folder selected: %s", folder)
+        from app.ui.dialogs.folder_list_dialog import FolderListDialog
 
-    def _set_folder_label(self, path: str) -> None:
-        """Show *path* in the toolbar, elided so it never overflows the toolbar."""
+        current = getattr(self, "_root_folders", [])
+        dlg = FolderListDialog(list(current), parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        folders = [f for f in dlg.folders() if Path(f).is_dir()]
+        if not folders:
+            return
+        self._root_folders = folders
+        self._save_folders(folders)
+        self._set_folder_label(folders)
+        self._scan_modes_btn.setEnabled(True)
+        log.info("Source folders updated: %s", folders)
+
+    def _set_folder_label(self, folders) -> None:
+        """Show folder count (or single path) in the toolbar."""
         from PySide6.QtGui import QFontMetrics
 
-        self._folder_label.setToolTip(path)
-        metrics = QFontMetrics(self._folder_label.font())
-        elided = metrics.elidedText(path, Qt.ElideMiddle, 360)
-        self._folder_label.setText(f"  {elided}")
+        if isinstance(folders, str):
+            folders = [folders]
+        if len(folders) == 1:
+            path = folders[0]
+            self._folder_label.setToolTip(path)
+            metrics = QFontMetrics(self._folder_label.font())
+            elided = metrics.elidedText(path, Qt.ElideMiddle, 360)
+            self._folder_label.setText(f"  {elided}")
+        else:
+            tooltip = "\n".join(folders)
+            self._folder_label.setToolTip(tooltip)
+            self._folder_label.setText(
+                f"  {t('folders_count', n=len(folders))}"
+            )
 
     def _restore_last_folder(self) -> None:
-        """Re-select the folder used in the previous session, if it still exists."""
-        last = _last_dir("paths/last_folder", "")
+        """Re-select the folder(s) used in the previous session."""
+        import json
+        from app.app_settings import app_qsettings
+
+        qs = app_qsettings()
+        # New key: JSON list of paths.
+        raw = qs.value("paths/source_folders", None)
+        if raw:
+            try:
+                folders = json.loads(raw) if isinstance(raw, str) else list(raw)
+            except Exception:
+                folders = []
+            folders = [f for f in folders if Path(f).is_dir()]
+            if folders:
+                self._root_folders = folders
+                self._set_folder_label(folders)
+                self._scan_modes_btn.setEnabled(True)
+                log.info("Restored source folders: %s", folders)
+                return
+        # Legacy fallback: single path key.
+        last = qs.value("paths/last_folder", "", type=str)
         if last and Path(last).is_dir():
-            self._root_folder = last
-            self._set_folder_label(last)
+            self._root_folders = [last]
+            self._set_folder_label([last])
             self._scan_modes_btn.setEnabled(True)
-            log.info("Restored last folder: %s", last)
+            log.info("Restored last folder (legacy): %s", last)
+
+    def _save_folders(self, folders) -> None:
+        import json
+        from app.app_settings import app_qsettings
+
+        app_qsettings().setValue("paths/source_folders", json.dumps(folders))
 
     @Slot()
     def _on_open_scan_modes(self) -> None:
-        dlg = ScanModesDialog(
-            on_folder_rescan=self._on_scan,
-            on_reset_unknown_persons=self._on_reset_unknown_persons,
-            on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
-            on_find_embedding_duplicate_faces=self._on_find_embedding_duplicate_faces,
-            on_identity_repair_scan=self._on_identity_repair_scan,
-            on_cleanup_empty_unknown_persons=self._on_cleanup_empty_unknown_persons,
-            on_revalidate_face_geometry=self._on_revalidate_face_geometry,
-            on_manage_ignored_faces=self._on_manage_ignored_faces,
-            on_deep_rescan=self._on_deep_rescan,
-            on_deep_rebuild=self._on_deep_rebuild,
-            on_deep_train=self._on_deep_train,
-            on_deep_face_detect=self._on_deep_face_detect,
-            on_deep_rebuild_model=self._on_deep_rebuild_model,
-            parent=self,
-        )
+        dlg = ScanModesDialog(parent=self, config=self._config)
+        dlg.scan_workflow_started.connect(self._on_scan_workflow_started)
         dlg.exec()
+
+    @Slot(str)
+    def _on_scan_workflow_started(self, workflow_name: str) -> None:
+        if workflow_name == "face_detection":
+            self._on_scan()
+        elif workflow_name == "full_rescan":
+            # Full Rescan = re-detect EVERY image from scratch (MODE_REBUILD), not
+            # just rebuild the neural model — the card promises "clears all
+            # detections and rebuilds from scratch", and only a full re-detection
+            # re-runs the multi-technology gate over already-scanned images.
+            self._on_deep_rebuild()
+        elif workflow_name == "train_model":
+            self._on_deep_train()
 
     # ------------------------------------------------------------------
     # Deep-learning (AI) pipeline
@@ -914,7 +952,7 @@ class MainWindow(QMainWindow):
                 self, t("gdrive_chip_opening"), t("gdrive_scan_no_session")
             )
             return False
-        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
+        if self._gdrive_session is None and not getattr(self, "_root_folders", None):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return False
         if self._pipeline_busy():
@@ -971,7 +1009,7 @@ class MainWindow(QMainWindow):
     def _start_deep_pipeline(self, mode: str) -> None:
         """Launch the deep-learning (AI) pipeline as a Task Manager task."""
         drive_active = self._gdrive_session is not None
-        if not drive_active and not hasattr(self, "_root_folder"):
+        if not drive_active and not getattr(self, "_root_folders", None):
             return
 
         from app.app_settings import app_qsettings
@@ -981,10 +1019,10 @@ class MainWindow(QMainWindow):
 
         if drive_active and self._gdrive_session is not None:
             from app.paths import drive_mirror_dir
-            folders = self._gdrive_session.folders
-            root_id = folders.root_id if folders else ""
+            drive_folders = self._gdrive_session.folders
+            root_id = drive_folders.root_id if drive_folders else ""
             worker = DeepPipelineWorker(
-                root_folder="",          # unused in Drive mode
+                root_folders=[],         # unused in Drive mode
                 config=self._config,
                 mode=mode,
                 db_path_override=self._db_path,
@@ -996,7 +1034,7 @@ class MainWindow(QMainWindow):
             )
         else:
             worker = DeepPipelineWorker(
-                root_folder=self._root_folder,
+                root_folders=list(self._root_folders),
                 config=self._config,
                 mode=mode,
                 db_path_override=self._db_path,
@@ -1089,7 +1127,7 @@ class MainWindow(QMainWindow):
                 self, t("gdrive_chip_opening"), t("gdrive_scan_no_session")
             )
             return
-        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
+        if self._gdrive_session is None and not getattr(self, "_root_folders", None):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
         if self._pipeline_busy():
@@ -1251,6 +1289,109 @@ class MainWindow(QMainWindow):
         self._image_browser._reload_current_face_data()
         self._status_label.setText(t("geom_cleanup_status", deleted=deleted))
 
+    def _on_retroactive_verify(self) -> None:
+        """Re-verify all stored (non-manual) faces via crop-level re-detection.
+
+        Loads each original image and runs the same FaceVerifier gate used
+        during normal detection.  Non-confirmed non-faces are deleted after
+        the user approves a preview.
+        """
+        if self._pipeline_busy():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        from app.services.retroactive_verification_service import (
+            RetroactiveVerificationService,
+        )
+
+        progress_dialog = None
+        try:
+            from PySide6.QtWidgets import QProgressDialog
+            from PySide6.QtCore import Qt
+
+            progress_dialog = QProgressDialog(
+                t("retro_verify_title"), None, 0, 0, self
+            )
+            progress_dialog.setWindowModality(Qt.WindowModal)
+            progress_dialog.setMinimumDuration(500)
+            progress_dialog.setValue(0)
+
+            def _progress(current: int, total: int, path: str) -> None:
+                if progress_dialog:
+                    progress_dialog.setMaximum(total)
+                    progress_dialog.setValue(current)
+                    progress_dialog.setLabelText(
+                        f"{t('retro_verify_title')} ({current}/{total})"
+                    )
+                from PySide6.QtWidgets import QApplication
+                QApplication.processEvents()
+
+            with session_scope() as session:
+                svc = RetroactiveVerificationService(
+                    session, self._config, progress_cb=_progress
+                )
+                report = svc.scan()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Retroactive face verification scan failed")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+        finally:
+            if progress_dialog is not None:
+                progress_dialog.close()
+
+        if self._config.detection.verification_enabled is False or report.scanned == 0 and report.images_loaded == 0:
+            QMessageBox.warning(
+                self, t("retro_verify_title"), t("retro_verify_unavailable")
+            )
+            return
+
+        droppable_ids = report.droppable_ids
+        if not droppable_ids:
+            QMessageBox.information(
+                self,
+                t("retro_verify_title"),
+                t(
+                    "retro_verify_none",
+                    scanned=report.scanned,
+                    images=report.images_loaded,
+                    flagged=report.flagged_count,
+                    missing=report.images_missing,
+                ),
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("retro_verify_title"),
+            t(
+                "retro_verify_confirm",
+                scanned=report.scanned,
+                images=report.images_loaded,
+                n=len(droppable_ids),
+                flagged=report.flagged_count,
+                missing=report.images_missing,
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                deleted = RetroactiveVerificationService(
+                    session, self._config
+                ).delete_faces(droppable_ids)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Retroactive verification delete failed")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        self._current_person_id = None
+        self._current_face_id = None
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+        self._status_label.setText(t("retro_verify_status", deleted=deleted))
+
     @Slot()
     def _on_scan(self) -> None:
         from app.gdrive import preferences as _gprefs
@@ -1263,7 +1404,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
+        if self._gdrive_session is None and not getattr(self, "_root_folders", None):
             QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
             return
 
@@ -3668,15 +3809,45 @@ class MainWindow(QMainWindow):
         from app.ui.dialogs.ai_visualization_window import NeuralNetworkGraphDialog
         if not hasattr(self, "_nn_graph_window") or self._nn_graph_window is None:
             self._nn_graph_window = NeuralNetworkGraphDialog(parent=self)
-        # Feed the latest available info if the AI viz window has history
-        if (
+        # Refresh against the CURRENT trained model so the graph reflects the
+        # live set of persons, not an old model whose people no longer exist.
+        # Falls back to the AI-viz live history; if neither is available, the
+        # graph is cleared to its empty state rather than showing a stale run.
+        info = self._current_model_debug_info()
+        if info is None and (
             hasattr(self, "_ai_viz_window")
             and self._ai_viz_window is not None
             and self._ai_viz_window._history
         ):
-            self._nn_graph_window.update_from_info(self._ai_viz_window._history[-1])
+            info = self._ai_viz_window._history[-1]
+        if info is not None:
+            self._nn_graph_window.update_from_info(info)
+        else:
+            self._nn_graph_window.clear()
         self._nn_graph_window.show()
         self._nn_graph_window.raise_()
+
+    def _current_model_debug_info(self):
+        """A DeepDebugInfo for a representative face on the current trained model.
+
+        Returns None (never raises) when there is no model or no embedded face —
+        the caller then clears the neural-net graph to its empty state.
+        """
+        try:
+            from app.services.deep_recognition_service import DeepRecognitionService
+
+            with session_scope() as session:
+                svc = DeepRecognitionService(
+                    session=session,
+                    config=self._config.deep_recognition,
+                    model_dir=self._config.resolve(
+                        self._config.deep_recognition.model_dir
+                    ),
+                )
+                return svc.debug_sample_face()
+        except Exception:  # noqa: BLE001
+            log.warning("Could not refresh neural-net graph from current model", exc_info=True)
+            return None
 
     @Slot(object)
     def _on_face_debug(self, info: object) -> None:

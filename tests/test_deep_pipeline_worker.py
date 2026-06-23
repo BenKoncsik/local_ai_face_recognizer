@@ -68,12 +68,12 @@ def _add_face(session, image_id, person_id, *, source=None, backend="cpu") -> in
 
 def test_invalid_mode_raises():
     with pytest.raises(ValueError):
-        DeepPipelineWorker(root_folder="/x", config=AppConfig(), mode="bogus")
+        DeepPipelineWorker(root_folders=["/x"], config=AppConfig(), mode="bogus")
 
 
 def test_valid_modes_construct():
     for mode in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN, MODE_REBUILD_MODEL):
-        worker = DeepPipelineWorker(root_folder="/x", config=AppConfig(), mode=mode)
+        worker = DeepPipelineWorker(root_folders=["/x"], config=AppConfig(), mode=mode)
         assert worker.mode == mode
 
 
@@ -91,7 +91,7 @@ def test_rebuild_reset_deletes_stale_model_file(tmp_db, tmp_path):
         img = _add_image(s, "/a.jpg")
         _add_face(s, img, None)  # one auto face so the reset has work to do
 
-    worker = DeepPipelineWorker(root_folder="/x", config=cfg, mode=MODE_REBUILD)
+    worker = DeepPipelineWorker(root_folders=["/x"], config=cfg, mode=MODE_REBUILD)
     worker._reset_for_rebuild()
 
     assert not model_file.exists()
@@ -103,7 +103,7 @@ def test_ai_stage_threads_detection_config(monkeypatch):
     from unittest.mock import MagicMock, patch
 
     cfg = AppConfig()
-    w = DeepPipelineWorker(root_folder="/x", config=cfg, mode=MODE_RESCAN)
+    w = DeepPipelineWorker(root_folders=["/x"], config=cfg, mode=MODE_RESCAN)
     svc = MagicMock()
     svc.detect_images.return_value = MagicMock(
         available=True, images_processed=1, faces_found=0, error=None
@@ -137,7 +137,7 @@ def test_rebuild_reset_keeps_human_decisions(tmp_db):
         unassigned = _add_face(s, img, None)
 
     worker = DeepPipelineWorker(
-        root_folder="/x", config=AppConfig(), mode=MODE_REBUILD
+        root_folders=["/x"], config=AppConfig(), mode=MODE_REBUILD
     )
     n_deleted, n_kept = worker._reset_for_rebuild()
 

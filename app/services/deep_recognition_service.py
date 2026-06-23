@@ -220,6 +220,40 @@ class DeepRecognitionService:
             log.warning("Could not recompute debug info for face %s", face_id)
             return None
 
+    def debug_sample_face(self):
+        """Debug info for a representative embedded face on the *current* model.
+
+        Lets the neural-net graph refresh to the live model — its current set of
+        persons — without needing a full visualization scan.  Prefers a face
+        assigned to a real (named, unprotected) person so the output layer shows
+        a meaningful prediction; falls back to any embedded face.  Returns None
+        (never raises) when there is no trained model or no embedded face.
+        """
+        if not self.model_path.exists():
+            return None
+        try:
+            face = (
+                self._session.query(Face)
+                .join(Person, Face.person_id == Person.id)
+                .filter(Person.is_auto_named == False)  # noqa: E712
+                .filter(Person.is_protected == False)  # noqa: E712
+                .filter(Face.embedding_exists())
+                .order_by(Face.assignment_confidence.desc())
+                .first()
+            )
+            if face is None:
+                face = (
+                    self._session.query(Face)
+                    .filter(Face.embedding_exists())
+                    .first()
+                )
+        except Exception:  # noqa: BLE001
+            log.warning("debug_sample_face: face lookup failed", exc_info=True)
+            return None
+        if face is None:
+            return None
+        return self.debug_info_for_face(face.id)
+
     # ------------------------------------------------------------------
     # Model export / import
     # ------------------------------------------------------------------
