@@ -22,8 +22,8 @@ class UnknownPersonResetOptions:
     delete_face_data: bool = False
     """Delete actual face detection data (embeddings, bboxes) - dangerous!"""
 
-    rerun_recognition: bool = True
-    """Rerun the recognition pipeline after reset."""
+    rebuild_clusters: bool = True
+    """Re-cluster unassigned faces into new Unknown groups after reset."""
 
 
 @dataclass(frozen=True)
@@ -38,8 +38,8 @@ class UnknownPersonResetResult:
     faces_unassigned: bool = False
     """Whether face assignments were removed."""
 
-    recognition_rerun: bool = False
-    """Whether recognition cleanup was performed."""
+    clusters_rebuilt: bool = False
+    """Whether clustering was queued to rebuild Unknown groups."""
 
 
 class UnknownPersonResetService:
@@ -132,5 +132,5 @@ class UnknownPersonResetService:
             unassigned_faces=unassigned_faces,
             persons_deleted=persons_deleted,
             faces_unassigned=faces_unassigned,
-            recognition_rerun=options.rerun_recognition,
+            clusters_rebuilt=options.rebuild_clusters,
         )

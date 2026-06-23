@@ -2621,14 +2621,14 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Rebuild Unknown Identities",
          "hu": "Unknown személyek újraépítése"},
     "scanModes.resetUnknowns.description":
-        {"en": "Deletes every automatically created 'Unknown N' person and makes their faces "
-               "unassigned again. Face boxes and embeddings are preserved. The recognition "
-               "pipeline then runs again, using your named people as training examples, and "
-               "rebuilds the remaining Unknown clusters from scratch.",
-         "hu": "Törli az összes automatikusan létrehozott „Unknown N” személyt, és az arcaikat "
-               "újra hozzárendeletlen állapotba teszi. Az arckeretek és embeddingek megmaradnak. "
-               "Ezután újra lefut a felismerési folyamat az elnevezett személyek tanítási "
-               "mintáival, majd a fennmaradó Unknown klaszterek tisztán újraépülnek."},
+        {"en": "Completely deletes every automatically created 'Unknown N' person and makes "
+               "their faces unassigned again. Face boxes and embeddings are preserved. "
+               "Afterwards, unassigned faces are re-clustered into fresh Unknown groups "
+               "(fast -- no image scanning or model training).",
+         "hu": "Teljesen törli az összes automatikusan létrehozott 'Unknown N' személyt, és az "
+               "arcaikat újra hozzárendeletlen állapotba teszi. Az arckeretek és embeddingek "
+               "megmaradnak. Ezután a hozzárendeletlen arcok újra klaszterezésre kerülnek "
+               "friss Unknown csoportokba (gyors - nem fut újra a detektálás vagy a tanítás)."} ,
     "scanModes.resetUnknowns.startButton":
         {"en": "Rebuild Unknown Identities",
          "hu": "Unknown személyek újraépítése"},
@@ -2673,12 +2673,12 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "resetUnknownOptions.deleteFaceDataTooltip":
         {"en": "⚠ Advanced: Removes embeddings and bounding boxes. Only use if faces need full re-detection.",
          "hu": "⚠ Haladó: Eltávolítja az embeddingeket és kereteket. Csak akkor használja, ha az arcok teljes újra-detektálása szükséges."},
-    "resetUnknownOptions.rerunRecognition":
-        {"en": "Re-run recognition pipeline after reset",
-         "hu": "Felismerési folyamat újrafuttatása a visszaállítás után"},
-    "resetUnknownOptions.rerunRecognitionTooltip":
-        {"en": "Automatically start the recognition pipeline to re-identify unassigned faces",
-         "hu": "A felismerési folyamat automatikus indítása a nem hozzárendelt arcok újra azonosítására"},
+    "resetUnknownOptions.rebuildClusters":
+        {"en": "Rebuild Unknown clusters after reset",
+         "hu": "Unknown klaszterek újraépítése a törlés után"},
+    "resetUnknownOptions.rebuildClustersTooltip":
+        {"en": "After deleting Unknown persons, automatically re-cluster all unassigned faces into new Unknown groups (fast -- no image scanning or model training)",
+         "hu": "Az Unknown személyek törlése után automatikusan újra klaszterezi a nem hozzárendelt arcokat új Unknown csoportokba (gyors - nem fut újra a detektálás vagy a tanítás)"},
     "resetUnknownOptions.reset":
         {"en": "Reset to Defaults",
          "hu": "Alapértelmezett értékek visszaállítása"},
@@ -3495,6 +3495,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "task_deep_rebuild_model": {"en": "AI model rebuild (from scratch)", "hu": "AI modell újraépítése nulláról"},
     "task_deep_train":      {"en": "AI training",             "hu": "AI tanítás"},
     "task_deep_detect":     {"en": "AI face detection",       "hu": "AI arc-detektálás"},
+    "task_deep_cluster":    {"en": "Unknown cluster rebuild",  "hu": "Unknown klaszter újraépítés"},
     "task_astro_export":    {"en": "Website export",          "hu": "Weboldal export"},
     "task_metadata_export": {"en": "Face metadata embed",     "hu": "Arc-metaadatok beágyazása"},
     "task_thumbnail_build": {"en": "Thumbnail generation",    "hu": "Bélyegképek készítése"},

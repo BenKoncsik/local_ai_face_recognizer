@@ -24,6 +24,13 @@ modes exist, matching the two cards of the AI tab in Scan & Maintenance:
     pretrained deep-learning detector sees faces (bounding box + confidence)
     in the ``ai_face_detections`` table.  No Face row is created or changed.
 
+``cluster``
+    Lightweight rebuild of Unknown groups only: runs the permanently-ignored
+    face filter, clusters all unassigned faces into new Unknown N persons,
+    then runs the intra-image consistency pass and refreshes suggestions.
+    No image scanning, no face detection, no model training.  Use this after
+    an Unknown persons reset to rebuild the groups from existing face data.
+
 Accuracy is preferred over speed throughout: training may take minutes and
 is allowed to saturate every CPU core.
 """
@@ -75,6 +82,9 @@ MODE_REBUILD_MODEL = "rebuild_model"
 # Analysis-only AI face detection (where are the faces + confidence); never
 # creates Face rows and never touches the classic recognition results.
 MODE_DETECT_FACES = "detect_faces"
+# Lightweight rebuild of Unknown groups: ignored filter + clustering +
+# intra-image consistency + suggestions. No scan/detection/training.
+MODE_CLUSTER = "cluster"
 
 
 class DeepPipelineWorker(QThread):
@@ -120,6 +130,7 @@ class DeepPipelineWorker(QThread):
             MODE_TRAIN,
             MODE_DETECT_FACES,
             MODE_REBUILD_MODEL,
+            MODE_CLUSTER,
         ):
             raise ValueError(f"Unknown deep pipeline mode: {mode!r}")
         # Accept legacy single-folder callers via `root_folder` keyword.
@@ -258,6 +269,9 @@ class DeepPipelineWorker(QThread):
 
         if self._mode == MODE_DETECT_FACES:
             return self._run_detect_only_pipeline()
+
+        if self._mode == MODE_CLUSTER:
+            return self._run_cluster_only_pipeline()
 
         # Rescan and Rebuild both gain the multi-stage non-face cleanup stage.
         n_stages = 10 if self._mode == MODE_RESCAN else 11
@@ -905,6 +919,29 @@ class DeepPipelineWorker(QThread):
             f"with known people."
         )
         return result
+
+    def _run_cluster_only_pipeline(self) -> PipelineResult:
+        """Lightweight Unknown-group rebuild: filter + cluster + consistency + suggestions."""
+        self._emit_log("Stage 1/3: Applying permanently-ignored face filter …")
+        self._run_ignored_filter()
+        self._checkpoint()
+
+        self._emit_log("Stage 2/3: Grouping unassigned faces into Unknown clusters …")
+        cluster_stats = self._run_clustering()
+        self._checkpoint()
+
+        self._emit_log("Stage 3/3: Unifying same-person faces within each image …")
+        consistency_stats = self._run_intra_image_consistency()
+        n_suggestions = self._run_suggestions()
+
+        summary = (
+            f"Done (cluster) — "
+            f"{cluster_stats.n_new_persons} new Unknown group(s) created | "
+            f"intra-image fixes: {consistency_stats.n_faces_reassigned} | "
+            f"{n_suggestions} suggestion(s)"
+        )
+        self._emit_log(summary)
+        return PipelineResult(True, summary, n_suggestions=n_suggestions)
 
     def _run_clustering(self) -> ClusteringStats:
         try:

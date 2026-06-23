@@ -73,6 +73,7 @@ from app.ui.panels.preview_panel import PreviewPanel
 from app.ui.panels.sidebar_panel import SidebarPanel
 from app.ui.widgets.flow_layout import FlowContainer
 from app.workers.deep_pipeline_worker import (
+    MODE_CLUSTER,
     MODE_DETECT_FACES,
     MODE_REBUILD,
     MODE_REBUILD_MODEL,
@@ -206,8 +207,10 @@ class MainWindow(QMainWindow):
 
     def _toggle_log_panel(self) -> None:
         if hasattr(self, "_log_dock"):
-            self._log_dock.setVisible(not self._log_dock.isVisible())
-            # _on_log_dock_visibility_changed syncs the button via visibilityChanged signal
+            if self._log_dock.isVisible():
+                self._log_dock.hide()
+            else:
+                self._log_dock.show()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -348,8 +351,11 @@ class MainWindow(QMainWindow):
         self._recording_controls.stop_requested.connect(self._on_record_stop)
         tb.addWidget(self._recording_controls)
 
-    def _on_log_action_toggled(self, checked: bool) -> None:
-        self._log_dock.setVisible(checked)
+    def _on_log_action_toggled(self, checked: bool = False) -> None:
+        if self._log_dock.isVisible():
+            self._log_dock.hide()
+        else:
+            self._log_dock.show()
 
     def _build_central(self) -> None:
         # Outer tabs: Arcok | Kollázs
@@ -547,13 +553,16 @@ class MainWindow(QMainWindow):
         self._log_dock = QDockWidget(self)
         self._log_dock.setWidget(self._log_panel)
         self._log_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self._log_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.addDockWidget(Qt.BottomDockWidgetArea, self._log_dock)
         self._log_dock.setMinimumHeight(60)
         self._log_dock.visibilityChanged.connect(self._on_log_dock_visibility_changed)
 
     def _on_log_dock_visibility_changed(self, visible: bool) -> None:
         if hasattr(self, "_log_action"):
+            self._log_action.blockSignals(True)
             self._log_action.setChecked(visible)
+            self._log_action.blockSignals(False)
 
     def _build_status_bar(self) -> None:
         status = QStatusBar()
@@ -921,6 +930,7 @@ class MainWindow(QMainWindow):
             MODE_REBUILD_MODEL: t("task_deep_rebuild_model"),
             MODE_TRAIN: t("task_deep_train"),
             MODE_DETECT_FACES: t("task_deep_detect"),
+            MODE_CLUSTER: t("task_deep_cluster"),
         }.get(mode, t("task_deep_rescan"))
         self._run_pipeline_task(worker, name)
 
@@ -1043,9 +1053,9 @@ class MainWindow(QMainWindow):
             )
         )
 
-        # Only restart the AI pipeline if recognition rerun was selected
-        if options.rerun_recognition:
-            self._start_deep_pipeline(MODE_RESCAN)
+        # Re-cluster unassigned faces into new Unknown groups if selected
+        if options.rebuild_clusters:
+            self._start_deep_pipeline(MODE_CLUSTER)
 
 
     @Slot()

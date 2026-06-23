@@ -64,12 +64,12 @@ class ResetUnknownOptionsDialog(QDialog):
 		)
 		outer.addWidget(self._chk_delete_face_data)
 
-		# Step 4: Rerun recognition
-		self._chk_rerun_recognition = QCheckBox(t("resetUnknownOptions.rerunRecognition"))
-		self._chk_rerun_recognition.setToolTip(
-			t("resetUnknownOptions.rerunRecognitionTooltip")
+		# Step 4: Rebuild Unknown clusters after reset
+		self._chk_rebuild_clusters = QCheckBox(t("resetUnknownOptions.rebuildClusters"))
+		self._chk_rebuild_clusters.setToolTip(
+			t("resetUnknownOptions.rebuildClustersTooltip")
 		)
-		outer.addWidget(self._chk_rerun_recognition)
+		outer.addWidget(self._chk_rebuild_clusters)
 
 		outer.addStretch()
 
@@ -98,7 +98,7 @@ class ResetUnknownOptionsDialog(QDialog):
 		self._chk_delete_persons.setChecked(defaults.delete_unknown_persons)
 		self._chk_delete_assignments.setChecked(defaults.delete_face_assignments)
 		self._chk_delete_face_data.setChecked(defaults.delete_face_data)
-		self._chk_rerun_recognition.setChecked(defaults.rerun_recognition)
+		self._chk_rebuild_clusters.setChecked(defaults.rebuild_clusters)
 
 	def get_options(self) -> UnknownPersonResetOptions:
 		"""Get the configured options."""
@@ -106,5 +106,5 @@ class ResetUnknownOptionsDialog(QDialog):
 			delete_unknown_persons=self._chk_delete_persons.isChecked(),
 			delete_face_assignments=self._chk_delete_assignments.isChecked(),
 			delete_face_data=self._chk_delete_face_data.isChecked(),
-			rerun_recognition=self._chk_rerun_recognition.isChecked(),
+			rebuild_clusters=self._chk_rebuild_clusters.isChecked(),
 		)
