@@ -1,65 +1,47 @@
-"""Smoke test: the (AI-only) scan & maintenance dialog builds without error.
+"""Smoke test: the scan & maintenance dialog builds and wires its signals.
 
-After the classic vector-recognition pipeline was removed, ScanModesDialog has a
-single AI-centric layout (no Classic tab). This guards against missing i18n keys
-or a broken card wiring after that restructure.
+ScanModesDialog has two tabs:
+  * "AI recognition" — three primary workflows, emitted via scan_workflow_started.
+  * "Maintenance (developer)" — cleanup/repair tools that also run automatically,
+    emitted via maintenance_action_started.
+
+This guards against missing i18n keys or broken card wiring after the restructure.
 """
 
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QPushButton, QTabWidget
 
 from app.ui.dialogs.scan_modes_dialog import ScanModesDialog
 
 
 @pytest.fixture
 def dialog(qtbot):
-    calls: list[str] = []
-
-    def cb(name: str):
-        return lambda: calls.append(name)
-
-    dlg = ScanModesDialog(
-        on_folder_rescan=cb("folder_rescan"),
-        on_reset_unknown_persons=cb("reset_unknowns"),
-        on_find_overlapping_unknown_faces=cb("overlap"),
-        on_find_embedding_duplicate_faces=cb("embedding_dup"),
-        on_identity_repair_scan=cb("identity_repair"),
-        on_cleanup_empty_unknown_persons=cb("cleanup_empty"),
-        on_revalidate_face_geometry=cb("geometry"),
-        on_manage_ignored_faces=cb("ignored"),
-        on_deep_rescan=cb("deep_rescan"),
-        on_deep_rebuild=cb("deep_rebuild"),
-        on_deep_train=cb("deep_train"),
-        on_deep_face_detect=cb("deep_face_detect"),
-        on_deep_rebuild_model=cb("deep_rebuild_model"),
-    )
+    dlg = ScanModesDialog(config=None)
     qtbot.addWidget(dlg)
-    dlg._calls = calls  # type: ignore[attr-defined]
     return dlg
 
 
+def test_dialog_has_two_tabs(dialog):
+    tabs = dialog.findChild(QTabWidget)
+    assert tabs is not None
+    assert tabs.count() == 2
+
+
 def test_dialog_builds_with_all_cards(dialog):
-    # Every operation renders a button; the dialog plus the close button means a
-    # healthy build has well more than a handful of buttons.
+    # 3 AI workflow cards + 6 maintenance cards + close button.
     buttons = dialog.findChildren(QPushButton)
-    assert len(buttons) >= 14  # 13 action cards + close
+    assert len(buttons) >= 10
 
 
-def test_folder_rescan_button_invokes_callback(dialog, qtbot):
-    # The folder re-read card is the AI-backed replacement for the old classic
-    # "Scan & Index"; clicking it must fire its callback.
-    dialog._launch_folder_rescan()
-    assert "folder_rescan" in dialog._calls
+def test_workflow_signal_emitted(dialog, qtbot):
+    with qtbot.waitSignal(dialog.scan_workflow_started, timeout=1000) as blocker:
+        dialog._launch_workflow("face_detection")
+    assert blocker.args == ["face_detection"]
 
 
-def test_geometry_cleanup_button_invokes_callback(dialog):
-    dialog._launch_revalidate_face_geometry()
-    assert "geometry" in dialog._calls
-
-
-def test_force_rebuild_model_button_invokes_callback(dialog):
-    # The forced "rebuild AI model from scratch" option.
-    dialog._launch_deep_rebuild_model()
-    assert "deep_rebuild_model" in dialog._calls
+def test_maintenance_signal_emitted(dialog, qtbot):
+    with qtbot.waitSignal(dialog.maintenance_action_started, timeout=1000) as blocker:
+        dialog._launch_maintenance("overlap_cleanup")
+    assert blocker.args == ["overlap_cleanup"]

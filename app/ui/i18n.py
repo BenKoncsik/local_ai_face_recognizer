@@ -2566,6 +2566,22 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.close":
         {"en": "Close",
          "hu": "Bezárás"},
+    "scanModes.tab.ai":
+        {"en": "AI recognition",
+         "hu": "AI felismerés"},
+    "scanModes.tab.maintenance":
+        {"en": "Maintenance (developer)",
+         "hu": "Karbantartás (fejlesztői)"},
+    "scanModes.maintenance.note":
+        {"en": "These cleanup and repair tools now run automatically as part of "
+               "the redesigned detection pipeline (during scan / rescan). They are "
+               "kept here so they can still be launched manually for debugging or "
+               "one-off fixes — a developer convenience.",
+         "hu": "Ezek a tisztító és helyreállító eszközök az újratervezett "
+               "arcdetektálási folyamat részeként már automatikusan lefutnak "
+               "(beolvasáskor / újraolvasáskor). Itt azért maradnak meg, hogy "
+               "hibakereséshez vagy egyszeri javításhoz manuálisan is "
+               "elindíthatók legyenek — ez fejlesztői kényelmi funkció."},
     "scanModes.verifyAll.label":
         {"en": "Verify every face with multiple technologies (no confidence threshold)",
          "hu": "Minden arc ellenőrzése több technológiával (nincs konfidencia-küszöb)"},

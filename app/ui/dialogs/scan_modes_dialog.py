@@ -1,9 +1,16 @@
-"""Scan and maintenance chooser dialog — simplified 3-workflow version."""
+"""Scan and maintenance chooser dialog.
+
+Two tabs:
+  * "AI recognition" — the three primary workflows (scan, train, full rescan).
+  * "Maintenance (developer)" — cleanup/repair tools that now run
+    automatically as part of the redesigned detection pipeline, but are kept
+    here so they can still be triggered manually for debugging / one-off fixes.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -15,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,20 +35,39 @@ log = logging.getLogger(__name__)
 class ScanModesDialog(QDialog):
     """Modal dialog for choosing a scan or maintenance workflow."""
 
-    scan_workflow_started = Signal(str)  # "face_detection" | "full_rescan" | "train_model"
+    # "face_detection" | "full_rescan" | "train_model"
+    scan_workflow_started = Signal(str)
+    # Maintenance action key, e.g. "overlap_cleanup", "identity_repair", …
+    maintenance_action_started = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None, config=None) -> None:
         super().__init__(parent)
         self._config = config
         self.setWindowTitle(t("scanModes.title"))
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(460)
+        self.resize(560, 680)
         self._build_ui()
+
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
+        tabs = QTabWidget()
+        tabs.addTab(self._build_ai_tab(), t("scanModes.tab.ai"))
+        tabs.addTab(self._build_maintenance_tab(), t("scanModes.tab.maintenance"))
+        outer.addWidget(tabs)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = QPushButton(t("scanModes.close"))
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(close_btn)
+        outer.addLayout(btn_row)
+
+    def _make_scroll(self) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -51,27 +78,40 @@ class ScanModesDialog(QDialog):
         cards.setContentsMargins(4, 4, 4, 4)
         cards.setSpacing(10)
         scroll.setWidget(container)
+        return scroll, cards
+
+    # ------------------------------------------------------------------
+    # AI recognition tab — the three primary workflows.
+    # ------------------------------------------------------------------
+
+    def _build_ai_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(6)
+
+        scroll, cards = self._make_scroll()
 
         cards.addWidget(self._make_card(
             title=t("workflow_face_detection_title"),
             desc=t("workflow_face_detection_desc"),
-            workflow="face_detection",
+            on_click=lambda: self._launch_workflow("face_detection"),
             danger=False,
         ))
         cards.addWidget(self._make_card(
             title=t("workflow_train_model_title"),
             desc=t("workflow_train_model_desc"),
-            workflow="train_model",
+            on_click=lambda: self._launch_workflow("train_model"),
             danger=False,
         ))
         cards.addWidget(self._make_card(
             title=t("workflow_full_rescan_title"),
             desc=t("workflow_full_rescan_desc"),
-            workflow="full_rescan",
+            on_click=lambda: self._launch_workflow("full_rescan"),
             danger=True,
         ))
         cards.addStretch()
-        outer.addWidget(scroll)
+        layout.addWidget(scroll)
 
         # Multi-technology "verify every face" toggle (no confidence exemption).
         verify_box = QVBoxLayout()
@@ -88,16 +128,67 @@ class ScanModesDialog(QDialog):
         verify_tip.setStyleSheet("color: #A6ADC8; font-size: 11px;")
         verify_tip.setContentsMargins(22, 0, 0, 0)
         verify_box.addWidget(verify_tip)
-        outer.addLayout(verify_box)
+        layout.addLayout(verify_box)
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        close_btn = QPushButton(t("scanModes.close"))
-        close_btn.clicked.connect(self.reject)
-        btn_row.addWidget(close_btn)
-        outer.addLayout(btn_row)
+        return tab
 
-    def _make_card(self, title: str, desc: str, workflow: str, danger: bool) -> QFrame:
+    # ------------------------------------------------------------------
+    # Maintenance tab — cleanup/repair tools that also run automatically.
+    # ------------------------------------------------------------------
+
+    def _build_maintenance_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(6)
+
+        note = QLabel(f"ℹ {t('scanModes.maintenance.note')}")
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            "color: #89B4FA; font-size: 11px; "
+            "border: 1px solid #45475A; border-radius: 6px; padding: 8px;"
+        )
+        layout.addWidget(note)
+
+        scroll, cards = self._make_scroll()
+
+        # Order mirrors the legacy "Klasszikus" maintenance list.
+        maintenance = [
+            ("resetUnknowns", "reset_unknown_persons", False),
+            ("overlapCleanup", "overlap_cleanup", False),
+            ("embeddingDuplicates", "embedding_duplicates", False),
+            ("identityRepair", "identity_repair", False),
+            ("cleanupEmptyUnknowns", "cleanup_empty_unknowns", False),
+            ("ignoredFaces", "manage_ignored_faces", False),
+        ]
+        for key, action, danger in maintenance:
+            warn_key = f"scanModes.{key}.warning"
+            warning = t(warn_key)
+            if warning == warn_key:  # no warning string defined for this card
+                warning = None
+            cards.addWidget(self._make_card(
+                title=t(f"scanModes.{key}.title"),
+                desc=t(f"scanModes.{key}.description"),
+                on_click=lambda a=action: self._launch_maintenance(a),
+                danger=danger,
+                button_label=t(f"scanModes.{key}.startButton"),
+                warning=warning,
+            ))
+        cards.addStretch()
+        layout.addWidget(scroll)
+        return tab
+
+    # ------------------------------------------------------------------
+
+    def _make_card(
+        self,
+        title: str,
+        desc: str,
+        on_click: Callable[[], None],
+        danger: bool,
+        button_label: Optional[str] = None,
+        warning: Optional[str] = None,
+    ) -> QFrame:
         card = QFrame()
         card.setFrameShape(QFrame.StyledPanel)
         card.setFrameShadow(QFrame.Raised)
@@ -117,16 +208,22 @@ class ScanModesDialog(QDialog):
         desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout.addWidget(desc_lbl)
 
+        if warning:
+            warn_lbl = QLabel(f"⚠ {warning}")
+            warn_lbl.setWordWrap(True)
+            warn_lbl.setStyleSheet("color: #F38BA8;" if danger else "color: #F9E2AF;")
+            layout.addWidget(warn_lbl)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn = QPushButton(t("button_start"))
+        btn = QPushButton(button_label or t("button_start"))
         btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         if danger:
             btn.setStyleSheet(
                 "QPushButton { color: #F38BA8; border-color: #6B3040; }"
                 "QPushButton:hover { background-color: #3D2030; border-color: #F38BA8; }"
             )
-        btn.clicked.connect(lambda: self._launch(workflow))
+        btn.clicked.connect(on_click)
         btn_row.addWidget(btn)
         layout.addLayout(btn_row)
 
@@ -145,6 +242,10 @@ class ScanModesDialog(QDialog):
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not persist verification_verify_all: %s", exc)
 
-    def _launch(self, workflow: str) -> None:
+    def _launch_workflow(self, workflow: str) -> None:
         self.accept()
         self.scan_workflow_started.emit(workflow)
+
+    def _launch_maintenance(self, action: str) -> None:
+        self.accept()
+        self.maintenance_action_started.emit(action)

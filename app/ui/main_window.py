@@ -771,6 +771,7 @@ class MainWindow(QMainWindow):
     def _on_open_scan_modes(self) -> None:
         dlg = ScanModesDialog(parent=self, config=self._config)
         dlg.scan_workflow_started.connect(self._on_scan_workflow_started)
+        dlg.maintenance_action_started.connect(self._on_scan_maintenance_action)
         dlg.exec()
 
     @Slot(str)
@@ -785,6 +786,26 @@ class MainWindow(QMainWindow):
             self._on_deep_rebuild()
         elif workflow_name == "train_model":
             self._on_deep_train()
+
+    @Slot(str)
+    def _on_scan_maintenance_action(self, action: str) -> None:
+        """Dispatch a maintenance action triggered from the Scan & Maintenance
+        dialog's developer tab. These tools also run automatically as part of
+        the redesigned detection pipeline; the tab keeps them manually
+        launchable for debugging and one-off fixes."""
+        handlers = {
+            "reset_unknown_persons": self._on_reset_unknown_persons,
+            "overlap_cleanup": self._on_find_overlapping_unknown_faces,
+            "embedding_duplicates": self._on_find_embedding_duplicate_faces,
+            "identity_repair": self._on_identity_repair_scan,
+            "cleanup_empty_unknowns": self._on_cleanup_empty_unknown_persons,
+            "manage_ignored_faces": self._on_manage_ignored_faces,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            log.warning("Unknown maintenance action: %s", action)
+            return
+        handler()
 
     # ------------------------------------------------------------------
     # Deep-learning (AI) pipeline
