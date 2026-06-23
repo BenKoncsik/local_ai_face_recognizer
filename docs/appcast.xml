@@ -10,14 +10,14 @@
     <item>
       <title>Face-Local 1.0.43</title>
       <sparkle:releaseNotesLink>https://github.com/HunKonTech/local_ai_face_recognizer/releases/tag/v1.0.43</sparkle:releaseNotesLink>
-      <pubDate>Tue, 23 Jun 2026 17:53:25 +0000</pubDate>
+      <pubDate>Tue, 23 Jun 2026 18:25:18 +0000</pubDate>
       <enclosure
         url="https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.43/Face-Local-macOS-sparkle-1.0.43.zip"
         sparkle:version="1.0.43"
         sparkle:shortVersionString="1.0.43"
-        sparkle:edSignature="sparkle:edSignature="wALWDQVzYx6W+C6/5QrLp1BRKGjNphUtDAfqKeDGd7dscbscv+ZyrxJCBOn8TJIj8AzZ/8VwadqengASuIloBw==" length="361511585""
+        sparkle:edSignature="sparkle:edSignature="WFx9Rq0arE5hYSfy0VL7jZyq4ZOza+Q7Y4GUtOMQuF0CNlOTn7pLbmo7cH3hqQHrljzYhgtWfvLME+M2pn0+Ag==" length="361461186""
         sparkle:minimumSystemVersion="12.0"
-        length="361511585"
+        length="361461186"
         type="application/octet-stream"/>
     </item>
   </channel>
