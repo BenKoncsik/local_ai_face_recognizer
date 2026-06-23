@@ -1,11 +1,13 @@
 """Scan and maintenance chooser dialog.
 
-Opens from the toolbar.  Two tabs:
+Opens from the toolbar.  A single AI-centric list of operations:
 
-* **AI recognition (new)** — the simplified deep-learning path with exactly
-  two operations: *Re-scan* (place unknown faces with known people, clean up
-  overlapping boxes) and *Rebuild from scratch*.
-* **Classic** — every legacy scan / re-detection / cleanup operation.
+* **Scan & Index** — read the folder for new images and run the AI pipeline
+  (detection → embedding → deep recognition) on them.
+* **AI recognition** — re-scan / train / detect-faces / rebuild for the
+  deep-learning engine.
+* **Maintenance** — geometry-based false-face cleanup plus the assorted
+  face/identity cleanup tools.
 
 The dialog is scrollable so it works on small screens too.
 """
@@ -22,7 +24,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -35,37 +36,35 @@ class ScanModesDialog(QDialog):
 
     def __init__(
         self,
-        on_incremental: Callable[[], None],
-        on_full_rescan: Callable[[], None],
-        on_face_rescan_fast: Callable[[], None],
-        on_face_rescan_accurate: Callable[[], None],
+        on_folder_rescan: Callable[[], None],
         on_reset_unknown_persons: Callable[[], None],
         on_find_overlapping_unknown_faces: Callable[[], None],
         on_find_embedding_duplicate_faces: Optional[Callable[[], None]] = None,
         on_identity_repair_scan: Optional[Callable[[], None]] = None,
         on_cleanup_empty_unknown_persons: Optional[Callable[[], None]] = None,
+        on_revalidate_face_geometry: Optional[Callable[[], None]] = None,
         on_manage_ignored_faces: Optional[Callable[[], None]] = None,
         on_deep_rescan: Optional[Callable[[], None]] = None,
         on_deep_rebuild: Optional[Callable[[], None]] = None,
         on_deep_train: Optional[Callable[[], None]] = None,
         on_deep_face_detect: Optional[Callable[[], None]] = None,
+        on_deep_rebuild_model: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._on_incremental = on_incremental
-        self._on_full_rescan = on_full_rescan
-        self._on_face_rescan_fast = on_face_rescan_fast
-        self._on_face_rescan_accurate = on_face_rescan_accurate
+        self._on_folder_rescan = on_folder_rescan
         self._on_reset_unknown_persons = on_reset_unknown_persons
         self._on_find_overlapping_unknown_faces = on_find_overlapping_unknown_faces
         self._on_find_embedding_duplicate_faces = on_find_embedding_duplicate_faces
         self._on_identity_repair_scan = on_identity_repair_scan
         self._on_cleanup_empty_unknown_persons = on_cleanup_empty_unknown_persons
+        self._on_revalidate_face_geometry = on_revalidate_face_geometry
         self._on_manage_ignored_faces = on_manage_ignored_faces
         self._on_deep_rescan = on_deep_rescan
         self._on_deep_rebuild = on_deep_rebuild
         self._on_deep_train = on_deep_train
         self._on_deep_face_detect = on_deep_face_detect
+        self._on_deep_rebuild_model = on_deep_rebuild_model
 
         self.setWindowTitle(t("scanModes.title"))
         self.setMinimumWidth(480)
@@ -80,10 +79,7 @@ class ScanModesDialog(QDialog):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_deep_tab(), t("scanModes.tab.deep"))
-        tabs.addTab(self._build_classic_tab(), t("scanModes.tab.classic"))
-        outer.addWidget(tabs)
+        outer.addWidget(self._build_content())
 
         # ── Sticky close button ──────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -107,10 +103,10 @@ class ScanModesDialog(QDialog):
         return scroll, cards_layout
 
     # ------------------------------------------------------------------
-    # AI (deep learning) tab — three operations, kept simple.
+    # Single AI-centric list: scan, deep recognition, then maintenance.
     # ------------------------------------------------------------------
 
-    def _build_deep_tab(self) -> QWidget:
+    def _build_content(self) -> QWidget:
         scroll, cards_layout = self._make_scroll_container()
 
         intro = QLabel(t("scanModes.deep.intro"))
@@ -118,6 +114,17 @@ class ScanModesDialog(QDialog):
         intro.setStyleSheet("color: #A6ADC8; font-style: italic;")
         cards_layout.addWidget(intro)
 
+        # ── Folder re-read (runs through the AI pipeline) ─────────────────
+        cards_layout.addWidget(self._make_card(
+            title=t("scanModes.incremental.title"),
+            description=t("scanModes.incremental.description"),
+            button_label=t("scanModes.incremental.startButton"),
+            warning=None,
+            callback=self._launch_folder_rescan,
+            danger=False,
+        ))
+
+        # ── Deep-learning recognition ─────────────────────────────────────
         cards_layout.addWidget(self._make_card(
             title=t("scanModes.deepRescan.title"),
             description=t("scanModes.deepRescan.description"),
@@ -134,6 +141,15 @@ class ScanModesDialog(QDialog):
             callback=self._launch_deep_train,
             danger=False,
         ))
+        if self._on_deep_rebuild_model is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.rebuildModel.title"),
+                description=t("scanModes.rebuildModel.description"),
+                button_label=t("scanModes.rebuildModel.startButton"),
+                warning=t("scanModes.rebuildModel.warning"),
+                callback=self._launch_deep_rebuild_model,
+                danger=True,
+            ))
         if self._on_deep_face_detect is not None:
             cards_layout.addWidget(self._make_card(
                 title=t("scanModes.deepFaceDetect.title"),
@@ -143,48 +159,17 @@ class ScanModesDialog(QDialog):
                 callback=self._launch_deep_face_detect,
                 danger=False,
             ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.deepRebuild.title"),
-            description=t("scanModes.deepRebuild.description"),
-            button_label=t("scanModes.deepRebuild.startButton"),
-            warning=t("scanModes.deepRebuild.warning"),
-            callback=self._launch_deep_rebuild,
-            danger=True,
-        ))
-        cards_layout.addStretch()
-        return scroll
 
-    # ------------------------------------------------------------------
-    # Classic tab — the legacy operations, unchanged.
-    # ------------------------------------------------------------------
-
-    def _build_classic_tab(self) -> QWidget:
-        scroll, cards_layout = self._make_scroll_container()
-
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.incremental.title"),
-            description=t("scanModes.incremental.description"),
-            button_label=t("scanModes.incremental.startButton"),
-            warning=None,
-            callback=self._launch_incremental,
-            danger=False,
-        ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.faceRescan.title"),
-            description=t("scanModes.faceRescan.description"),
-            button_label=t("scanModes.faceRescan.startButton"),
-            warning=None,
-            callback=self._launch_face_rescan_fast,
-            danger=False,
-        ))
-        cards_layout.addWidget(self._make_card(
-            title=t("scanModes.preciseRescan.title"),
-            description=t("scanModes.preciseRescan.description"),
-            button_label=t("scanModes.preciseRescan.startButton"),
-            warning=t("scanModes.preciseRescan.warning"),
-            callback=self._launch_face_rescan_accurate,
-            danger=False,
-        ))
+        # ── Maintenance ───────────────────────────────────────────────────
+        if self._on_revalidate_face_geometry is not None:
+            cards_layout.addWidget(self._make_card(
+                title=t("scanModes.geomCleanup.title"),
+                description=t("scanModes.geomCleanup.description"),
+                button_label=t("scanModes.geomCleanup.startButton"),
+                warning=t("scanModes.geomCleanup.warning"),
+                callback=self._launch_revalidate_face_geometry,
+                danger=True,
+            ))
         cards_layout.addWidget(self._make_card(
             title=t("scanModes.resetUnknowns.title"),
             description=t("scanModes.resetUnknowns.description"),
@@ -237,14 +222,17 @@ class ScanModesDialog(QDialog):
                 callback=self._launch_manage_ignored_faces,
                 danger=False,
             ))
+
+        # ── Rebuild from scratch (destructive) ────────────────────────────
         cards_layout.addWidget(self._make_card(
-            title=t("scanModes.fullRescan.title"),
-            description=t("scanModes.fullRescan.description"),
-            button_label=t("scanModes.fullRescan.startButton"),
-            warning=t("scanModes.fullRescan.warning"),
-            callback=self._launch_full_rescan,
+            title=t("scanModes.deepRebuild.title"),
+            description=t("scanModes.deepRebuild.description"),
+            button_label=t("scanModes.deepRebuild.startButton"),
+            warning=t("scanModes.deepRebuild.warning"),
+            callback=self._launch_deep_rebuild,
             danger=True,
         ))
+
         cards_layout.addStretch()
         return scroll
 
@@ -331,21 +319,14 @@ class ScanModesDialog(QDialog):
         if self._on_deep_face_detect is not None:
             self._on_deep_face_detect()
 
-    def _launch_incremental(self) -> None:
+    def _launch_deep_rebuild_model(self) -> None:
         self.accept()
-        self._on_incremental()
+        if self._on_deep_rebuild_model is not None:
+            self._on_deep_rebuild_model()
 
-    def _launch_full_rescan(self) -> None:
+    def _launch_folder_rescan(self) -> None:
         self.accept()
-        self._on_full_rescan()
-
-    def _launch_face_rescan_fast(self) -> None:
-        self.accept()
-        self._on_face_rescan_fast()
-
-    def _launch_face_rescan_accurate(self) -> None:
-        self.accept()
-        self._on_face_rescan_accurate()
+        self._on_folder_rescan()
 
     def _launch_overlapping_unknown_cleanup(self) -> None:
         self.accept()
@@ -369,6 +350,11 @@ class ScanModesDialog(QDialog):
         self.accept()
         if self._on_cleanup_empty_unknown_persons is not None:
             self._on_cleanup_empty_unknown_persons()
+
+    def _launch_revalidate_face_geometry(self) -> None:
+        self.accept()
+        if self._on_revalidate_face_geometry is not None:
+            self._on_revalidate_face_geometry()
 
     def _launch_manage_ignored_faces(self) -> None:
         self.accept()

@@ -32,6 +32,10 @@ import cv2
 import numpy as np
 
 from app.detectors.base import Detection, FaceDetector
+from app.detectors.landmark_geometry import (
+    geometry_reject_reason,
+    validate_face_landmarks,
+)
 from app.paths import resource_path
 
 log = logging.getLogger(__name__)
@@ -60,7 +64,11 @@ class YuNetDetector(FaceDetector):
         FileNotFoundError: when no YuNet model file can be located.
     """
 
-    def __init__(self, model_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        validate_geometry: bool = True,
+    ) -> None:
         resolved = self._resolve_model_path(model_path)
         if resolved is None:
             raise FileNotFoundError(
@@ -70,6 +78,9 @@ class YuNetDetector(FaceDetector):
                 "detection.yunet_model_path in config.yaml."
             )
         self._model_path = resolved
+        # Reject detections whose 5 landmarks do not form a plausible face
+        # (the cheap pareidolia gate against tree knots, hands, cards, …).
+        self._validate_geometry = validate_geometry
         # Input size is updated per-image in detect(); the constructor value is
         # just a placeholder.  Thresholds are likewise overridden per call.
         self._net = cv2.FaceDetectorYN.create(
@@ -99,13 +110,24 @@ class YuNetDetector(FaceDetector):
         candidates.append(resource_path(_DEFAULT_MODEL))
         return next((c for c in candidates if c.exists()), None)
 
-    @staticmethod
-    def _is_valid_face(det: Detection, min_face_size: int) -> bool:
+    def _is_valid_face(self, det: Detection, min_face_size: int) -> bool:
         """Return True if the detection looks like a plausible face crop."""
         if det.w < min_face_size or det.h < min_face_size:
             return False
         aspect = det.w / det.h if det.h > 0 else 0
-        return 0.4 <= aspect <= 2.5
+        if not (0.4 <= aspect <= 2.5):
+            return False
+        # Landmark-geometry gate: a non-face (knot, hand, card texture) that
+        # slips through the size+aspect window almost never produces a valid
+        # eye/nose/mouth constellation.  Fails open for None/degenerate points.
+        if self._validate_geometry and det.landmarks is not None:
+            if not validate_face_landmarks(det):
+                log.debug(
+                    "YuNet geometry reject (%s) at (%d,%d,%d,%d)",
+                    geometry_reject_reason(det), det.x, det.y, det.w, det.h,
+                )
+                return False
+        return True
 
     @staticmethod
     def _pad_to_dnn_stride(image_bgr: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:

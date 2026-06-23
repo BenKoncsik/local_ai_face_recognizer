@@ -1970,11 +1970,12 @@ def _build_family_tree_export(
             Relationship.person_b_id,
             Relationship.start_date,
             Relationship.end_date,
+            Relationship.marriage_place,
         ).all()
     except Exception as exc:  # noqa: BLE001 — family tree is optional
         log.warning("Family tree export skipped: %s", exc)
         return None
-    for rtype, a_id, b_id, start_date, end_date in rows:
+    for rtype, a_id, b_id, start_date, end_date, marriage_place in rows:
         if a_id not in by_id or b_id not in by_id:
             continue
         kind = (rtype or "").lower()
@@ -1984,12 +1985,12 @@ def _build_family_tree_export(
         elif kind == "spouse":
             spouses[a_id].add(b_id)
             spouses[b_id].add(a_id)
-            if start_date or end_date:
+            if start_date or end_date or marriage_place:
                 date_label = start_date or ""
                 if end_date:
                     date_label = f"{date_label}–{end_date}"
                 key = (min(a_id, b_id), max(a_id, b_id))
-                marriage_dates[key] = date_label
+                marriage_dates[key] = (date_label, marriage_place or "")
 
     ids = set(parents) | set(children) | set(spouses)
     if not ids:
@@ -2077,7 +2078,10 @@ def _build_family_tree_export(
                 "children": _present(children.get(pid, set())),
                 "spouses": _present(spouses.get(pid, set())),
                 "spouseMarriageDates": {
-                    str(sp): marriage_dates[(min(pid, sp), max(pid, sp))]
+                    str(sp): {
+                        "date": marriage_dates[(min(pid, sp), max(pid, sp))][0],
+                        "place": marriage_dates[(min(pid, sp), max(pid, sp))][1],
+                    }
                     for sp in spouses.get(pid, set())
                     if (min(pid, sp), max(pid, sp)) in marriage_dates
                 },

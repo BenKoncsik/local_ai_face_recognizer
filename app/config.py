@@ -126,6 +126,12 @@ class DetectionConfig:
     # rescues tiny faces the verifier could not score at native resolution.
     verification_min_crop: int = 160
 
+    # Validate YuNet's 5 facial landmarks (eyes above nose above mouth, sane
+    # inter-ocular distance, eye-line tilt) to reject pareidolia (tree knots,
+    # hands, feet, card textures).  Fails open; no-op for landmark-less
+    # detectors.  See app/detectors/landmark_geometry.py.
+    landmark_geometry_enabled: bool = True
+
 
 @dataclass
 class EmbeddingConfig:
@@ -295,25 +301,13 @@ class RecognitionConfig:
     # Minimum confidence for an automatic assignment to be reused as training.
     profile_auto_min_confidence: float = 0.85
 
-    # --- Adaptive threshold (Pass 1) ---
+    # --- Adaptive threshold ---
     # When True, low-quality / small / profile faces get a lower threshold so
-    # they are not unfairly penalised by the fixed base threshold.
+    # they are not unfairly penalised by the fixed base threshold.  Used by the
+    # shared vector scorer / face diagnostics view.
     adaptive_threshold_enabled: bool = True
     # Absolute floor for the adaptive threshold — never goes below this value.
     adaptive_min_threshold: float = 0.55
-
-    # --- Same-image context-assisted recognition (Pass 2) ---
-    # When True, faces that survive pass 1 unresolved are retried with a lower
-    # threshold when the same image already has at least one manually confirmed
-    # person.  Matching is restricted to those confirmed persons only.
-    same_image_assist_enabled: bool = True
-    # Threshold used in the assisted second pass.
-    same_image_assist_threshold: float = 0.62
-    # Minimum number of distinct confirmed persons on the image to activate assist.
-    same_image_assist_min_confirmed: int = 1
-    # Margin requirement for the assisted pass (looser than main margin since
-    # the candidate set is already restricted by image context).
-    same_image_assist_margin: float = 0.05
 
     # --- Image-browser "re-recognize faces" workflow ---
     # Master switch for the user-triggered re-recognition of Unknown faces in
@@ -427,11 +421,15 @@ class AiFaceDetectionConfig:
 
     enabled: bool = True
 
-    # Minimum detector confidence for a detection to be recorded.
-    confidence_threshold: float = 0.60
+    # Minimum detector confidence for a detection to be recorded.  Matches the
+    # classic path (0.65) so the AI pass is not more permissive — a lower value
+    # is the single biggest driver of false positives (cards, hands, knots).
+    confidence_threshold: float = 0.65
 
-    # Minimum face bounding-box width AND height in pixels.
-    min_face_size: int = 20
+    # Minimum face bounding-box width AND height in pixels.  36 is a defensible
+    # floor for trustworthy landmark geometry while still surfacing genuinely
+    # small faces (looser than the classic path's 50).
+    min_face_size: int = 36
 
     # Optional explicit path to the YuNet ``.onnx`` model.  None → the bundled
     # default (models/face_detection_yunet_2023mar.onnx).
@@ -440,6 +438,12 @@ class AiFaceDetectionConfig:
     # Also run this pass when the image browser's "re-recognize faces" action
     # is used (best-effort: an AI failure never breaks re-recognition).
     run_on_rerecognition: bool = True
+
+    # Re-run the crop-level YuNet verification gate (reusing the
+    # ``detection.verification_*`` settings) to reject false positives that
+    # YuNet fires once on the full image but cannot re-confirm in their own
+    # enlarged crop.  Disabled → the AI pass records raw detector output.
+    verification_enabled: bool = True
 
 
 @dataclass
@@ -783,6 +787,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             verification_min_crop=det.get(
                 "verification_min_crop", cfg.detection.verification_min_crop
             ),
+            landmark_geometry_enabled=det.get(
+                "landmark_geometry_enabled",
+                cfg.detection.landmark_geometry_enabled,
+            ),
         )
 
         emb = raw.get("embedding", {})
@@ -875,22 +883,6 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             adaptive_min_threshold=rec.get(
                 "adaptive_min_threshold",
                 cfg.recognition.adaptive_min_threshold,
-            ),
-            same_image_assist_enabled=rec.get(
-                "same_image_assist_enabled",
-                cfg.recognition.same_image_assist_enabled,
-            ),
-            same_image_assist_threshold=rec.get(
-                "same_image_assist_threshold",
-                cfg.recognition.same_image_assist_threshold,
-            ),
-            same_image_assist_min_confirmed=rec.get(
-                "same_image_assist_min_confirmed",
-                cfg.recognition.same_image_assist_min_confirmed,
-            ),
-            same_image_assist_margin=rec.get(
-                "same_image_assist_margin",
-                cfg.recognition.same_image_assist_margin,
             ),
             rerecognition_enabled=rec.get(
                 "rerecognition_enabled",
@@ -998,6 +990,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             model_path=aifd.get("model_path", cfg.ai_face_detection.model_path),
             run_on_rerecognition=aifd.get(
                 "run_on_rerecognition", cfg.ai_face_detection.run_on_rerecognition
+            ),
+            verification_enabled=aifd.get(
+                "verification_enabled", cfg.ai_face_detection.verification_enabled
             ),
         )
 

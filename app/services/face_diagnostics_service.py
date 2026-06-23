@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.config import RecognitionConfig
 from app.db.models import Face, Person
-from app.services.recognition_service import RecognitionService
+from app.services.vector_scoring import FaceVectorScorer
 
 log = logging.getLogger(__name__)
 
@@ -75,8 +75,8 @@ class FaceDiagnosticsService:
         self._session = session
         self._config = config or RecognitionConfig()
         self._top_k = top_k
-        # Reuse the real recognizer so thresholds/scoring match production.
-        self._recognizer = RecognitionService(
+        # Reuse the shared vector scorer so thresholds/scoring match production.
+        self._recognizer = FaceVectorScorer(
             session, config=self._config, exclude_low_quality=exclude_low_quality
         )
 

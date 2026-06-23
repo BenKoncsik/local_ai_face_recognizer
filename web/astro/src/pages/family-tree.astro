@@ -474,6 +474,40 @@ const dataJson = JSON.stringify({ persons });
 
         var L = layout(persons);
         var pos = L.pos;
+
+        // Widen gaps between spouse pairs so marriage-date labels fit.
+        // Per-generation pass: nodes are sorted by x, and we accumulate an
+        // extraShift that is applied to every node to the right of a widened pair.
+        L.sortedGens.forEach(function (g) {
+          var genList = L.gens.get(g).slice().sort(function (a, b) {
+            return L.pos.get(a.id).x - L.pos.get(b.id).x;
+          });
+          var extraShift = 0;
+          genList.forEach(function (n, i) {
+            if (extraShift) {
+              var p = L.pos.get(n.id);
+              L.pos.set(n.id, { x: p.x + extraShift, y: p.y });
+            }
+            if (i + 1 >= genList.length) return;
+            var nxt = genList[i + 1];
+            var nSpouses = (byId.get(n.id) || { spouses: [] }).spouses;
+            if (nSpouses.indexOf(nxt.id) === -1) return;
+            // Consecutive spouse pair — check marriage label width.
+            var sid = Math.min(n.id, nxt.id), lid = Math.max(n.id, nxt.id);
+            var minfo = ((byId.get(sid) || {}).spouseMarriageDates || {})[String(lid)] ||
+                        ((byId.get(lid) || {}).spouseMarriageDates || {})[String(sid)] || null;
+            if (!minfo || (!minfo.date && !minfo.place)) return;
+            var lines = [minfo.date, minfo.place].filter(Boolean);
+            var maxLen = lines.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
+            var neededGap = Math.ceil(maxLen * 5.8) + 40;
+            if (neededGap > H_GAP) extraShift += neededGap - H_GAP;
+          });
+        });
+        // Recompute canvas width after gap expansion.
+        var maxPosX = 0;
+        L.pos.forEach(function (pt) { maxPosX = Math.max(maxPosX, pt.x + BOX_W); });
+        L.width = maxPosX;
+
         L.pos.forEach(function (pt, id) { posCache.set(id, pt); });
 
         // Alternating generation bands + generation number label.
@@ -513,20 +547,41 @@ const dataJson = JSON.stringify({ persons });
             var right = a.x <= b.x ? b : a;
             var lineY = left.y + BOX_H / 2;
             gLinks.appendChild(elbow([[left.x + BOX_W, lineY], [right.x, lineY]]));
-            // Marriage date label between the two boxes.
+            // Marriage date + place label between the two boxes.
             var smallerId = p.id < sp ? p.id : sp;
             var largerId = p.id < sp ? sp : p.id;
-            var dateStr = (byId.get(smallerId) && byId.get(smallerId).spouseMarriageDates && byId.get(smallerId).spouseMarriageDates[String(largerId)]) ||
-                          (byId.get(largerId) && byId.get(largerId).spouseMarriageDates && byId.get(largerId).spouseMarriageDates[String(smallerId)]) || '';
-            if (dateStr) {
+            var minfo = (byId.get(smallerId) && byId.get(smallerId).spouseMarriageDates && byId.get(smallerId).spouseMarriageDates[String(largerId)]) ||
+                        (byId.get(largerId) && byId.get(largerId).spouseMarriageDates && byId.get(largerId).spouseMarriageDates[String(smallerId)]) || null;
+            if (minfo && (minfo.date || minfo.place)) {
               var midX = (left.x + BOX_W + right.x) / 2;
-              var lbl = document.createElementNS(SVGNS, 'text');
-              lbl.setAttribute('class', 'marriage-date');
-              lbl.setAttribute('x', String(midX));
-              lbl.setAttribute('y', String(lineY - 4));
-              lbl.setAttribute('text-anchor', 'middle');
-              lbl.textContent = dateStr;
-              gLinks.appendChild(lbl);
+              var lines = [minfo.date, minfo.place].filter(Boolean);
+              // If both date and place fit on one line, join them; otherwise stack.
+              var combined = lines.join(', ');
+              if (combined.length <= 24 || lines.length === 1) {
+                var lbl = document.createElementNS(SVGNS, 'text');
+                lbl.setAttribute('class', 'marriage-date');
+                lbl.setAttribute('x', String(midX));
+                lbl.setAttribute('y', String(lineY - 4));
+                lbl.setAttribute('text-anchor', 'middle');
+                lbl.textContent = combined;
+                gLinks.appendChild(lbl);
+              } else {
+                // Two-line: place on top, date below (closer to the line).
+                var lblPlace = document.createElementNS(SVGNS, 'text');
+                lblPlace.setAttribute('class', 'marriage-date');
+                lblPlace.setAttribute('x', String(midX));
+                lblPlace.setAttribute('y', String(lineY - 15));
+                lblPlace.setAttribute('text-anchor', 'middle');
+                lblPlace.textContent = minfo.place;
+                gLinks.appendChild(lblPlace);
+                var lblDate = document.createElementNS(SVGNS, 'text');
+                lblDate.setAttribute('class', 'marriage-date');
+                lblDate.setAttribute('x', String(midX));
+                lblDate.setAttribute('y', String(lineY - 4));
+                lblDate.setAttribute('text-anchor', 'middle');
+                lblDate.textContent = minfo.date;
+                gLinks.appendChild(lblDate);
+              }
             }
           });
         });

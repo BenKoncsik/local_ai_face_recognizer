@@ -13,9 +13,9 @@ must never break a selector.
 
 Two scoring paths are combined:
 
-* **Recognition profiles** — the same probabilistic profiles automatic
-  recognition uses (:meth:`RecognitionService.score_persons`).  This is the
-  primary path and matches what the pipeline would decide.
+* **Vector scoring profiles** — embedding profiles built per known person
+  (:meth:`FaceVectorScorer.score_persons`).  This is the primary path and
+  matches how the app groups identities.
 * **Per-person centroid fallback** — when the primary path yields nothing (e.g.
   the query is an auto-named / unknown cluster that has no recognition profile),
   a normalised centroid is built from *every* person's available face
@@ -31,7 +31,7 @@ import numpy as np
 
 from app.config import RecognitionConfig
 from app.db.models import Face, Person
-from app.services.recognition_service import RecognitionService
+from app.services.vector_scoring import FaceVectorScorer
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ def match_scores_for_embedding(
         return {}
     try:
         scores = (
-            RecognitionService(session, recognition_cfg).score_persons(embedding) or {}
+            FaceVectorScorer(session, recognition_cfg).score_persons(embedding) or {}
         )
     except Exception:  # noqa: BLE001 — scoring is best-effort, never fatal
         log.exception("Face-match scoring failed; using default order")
@@ -276,7 +276,7 @@ def match_scores_for_person(
     The deep engine's AI probability is overlaid for recognised people.
     """
     try:
-        svc = RecognitionService(session, recognition_cfg)
+        svc = FaceVectorScorer(session, recognition_cfg)
         profile = svc.build_profiles().get(person.id)
         if profile is not None:
             scores = svc.score_persons(profile.centroid) or {}

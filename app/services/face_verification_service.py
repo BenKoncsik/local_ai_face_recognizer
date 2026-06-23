@@ -25,6 +25,7 @@ import numpy as np
 
 from app.config import DetectionConfig
 from app.detectors.base import Detection, FaceDetector
+from app.detectors.landmark_geometry import validate_face_landmarks
 from app.utils.image_utils import apply_clahe
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,10 @@ class FaceVerifier:
             try:
                 from app.detectors.yunet_detector import YuNetDetector
 
-                self._detector = YuNetDetector(model_path=config.yunet_model_path)
+                self._detector = YuNetDetector(
+                    model_path=config.yunet_model_path,
+                    validate_geometry=config.landmark_geometry_enabled,
+                )
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "Face verification unavailable (%s) — the false-positive "
@@ -131,8 +135,20 @@ class FaceVerifier:
                 log.warning("Verifier detect failed: %s — keeping detection", exc)
                 return det
             for f in found:
-                if self._confirms(local, f):
-                    return self._refine(det, f, offset, scale)
+                if not self._confirms(local, f):
+                    continue
+                # The re-detected box must also be a geometrically plausible
+                # face — closes the gap where pure box-overlap would confirm a
+                # high-contrast non-face (knot/card) re-found in its own crop.
+                # Honours detection.landmark_geometry_enabled so the escape
+                # hatch disables this gate too.
+                if (
+                    self._config.landmark_geometry_enabled
+                    and f.landmarks is not None
+                    and not validate_face_landmarks(f)
+                ):
+                    continue
+                return self._refine(det, f, offset, scale)
         return None
 
     # ------------------------------------------------------------------

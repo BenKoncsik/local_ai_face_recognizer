@@ -111,6 +111,46 @@ def test_verify_adopts_landmarks_for_landmark_less_detection():
         assert 0 <= px <= 640 and 0 <= py <= 480
 
 
+class _BadLandmarkDetector(FaceDetector):
+    """Re-finds a centered, overlapping box but with non-face (collinear) points."""
+
+    @property
+    def backend_name(self) -> str:
+        return "bad_lm"
+
+    def detect(
+        self,
+        image_bgr: np.ndarray,
+        confidence_threshold: float = 0.5,
+        min_face_size: int = 50,
+    ) -> List[Detection]:
+        h, w = image_bgr.shape[:2]
+        fw, fh = int(w * 0.5), int(h * 0.5)
+        x, y = (w - fw) // 2, (h - fh) // 2
+        cx = x + fw / 2.0
+        lm = [[cx, y + fh * f] for f in (0.1, 0.3, 0.5, 0.7, 0.9)]
+        return [Detection(x=x, y=y, w=fw, h=fh, confidence=0.9, landmarks=lm)]
+
+
+def test_verify_rejects_geometrically_implausible_crop():
+    cfg = AppConfig().detection
+    verifier = FaceVerifier(cfg, detector=_BadLandmarkDetector())
+    det = Detection(x=100, y=100, w=60, h=60, confidence=0.4)
+    # The crop re-detection overlaps the candidate but its landmarks are not a
+    # face — the geometry gate must reject it despite the box overlap.
+    assert verifier.verify(_img(), det) is None
+
+
+def test_verify_geometry_gate_honours_disable_flag():
+    """landmark_geometry_enabled=False must skip the verifier's geometry check,
+    so the same implausible-but-overlapping crop is now CONFIRMED."""
+    cfg = AppConfig().detection
+    cfg.landmark_geometry_enabled = False
+    verifier = FaceVerifier(cfg, detector=_BadLandmarkDetector())
+    det = Detection(x=100, y=100, w=60, h=60, confidence=0.4)
+    assert verifier.verify(_img(), det) is not None
+
+
 def test_verifier_unavailable_passes_through(monkeypatch):
     from app.detectors import yunet_detector
 

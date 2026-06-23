@@ -210,7 +210,10 @@ def create_detector(config: DetectionConfig) -> FaceDetector:
         try:
             from app.detectors.yunet_detector import YuNetDetector
 
-            detector = YuNetDetector(model_path=config.yunet_model_path)
+            detector = YuNetDetector(
+                model_path=config.yunet_model_path,
+                validate_geometry=config.landmark_geometry_enabled,
+            )
             log.info("Using CPU detector (backend: %s)", detector.backend_name)
             return detector
         except FileNotFoundError as exc:

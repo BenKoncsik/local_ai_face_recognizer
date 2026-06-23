@@ -14,6 +14,7 @@ from app.db.database import init_db, session_scope
 from app.db.models import Face, Image, Person
 from app.workers.deep_pipeline_worker import (
     MODE_REBUILD,
+    MODE_REBUILD_MODEL,
     MODE_RESCAN,
     MODE_TRAIN,
     DeepPipelineWorker,
@@ -71,9 +72,54 @@ def test_invalid_mode_raises():
 
 
 def test_valid_modes_construct():
-    for mode in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN):
+    for mode in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN, MODE_REBUILD_MODEL):
         worker = DeepPipelineWorker(root_folder="/x", config=AppConfig(), mode=mode)
         assert worker.mode == mode
+
+
+def test_rebuild_reset_deletes_stale_model_file(tmp_db, tmp_path):
+    """A full rebuild also wipes the model file so it cannot linger/be reused."""
+    model_dir = tmp_path / "deep_model"
+    model_dir.mkdir()
+    model_file = model_dir / "deep_face_model.pkl"
+    model_file.write_bytes(b"stale-model")
+
+    cfg = AppConfig()
+    cfg.deep_recognition.model_dir = str(model_dir)
+
+    with session_scope() as s:
+        img = _add_image(s, "/a.jpg")
+        _add_face(s, img, None)  # one auto face so the reset has work to do
+
+    worker = DeepPipelineWorker(root_folder="/x", config=cfg, mode=MODE_REBUILD)
+    worker._reset_for_rebuild()
+
+    assert not model_file.exists()
+
+
+def test_ai_stage_threads_detection_config(monkeypatch):
+    """The in-pipeline AI stage must pass DetectionConfig so the AI pass runs
+    the verification/geometry gate instead of the unprotected legacy path."""
+    from unittest.mock import MagicMock, patch
+
+    cfg = AppConfig()
+    w = DeepPipelineWorker(root_folder="/x", config=cfg, mode=MODE_RESCAN)
+    svc = MagicMock()
+    svc.detect_images.return_value = MagicMock(
+        available=True, images_processed=1, faces_found=0, error=None
+    )
+    monkeypatch.setattr(
+        "app.workers.deep_pipeline_worker.session_scope",
+        lambda: MagicMock(__enter__=lambda s: svc, __exit__=MagicMock()),
+    )
+    with patch(
+        "app.services.ai_face_detection_service.AiFaceDetectionService",
+        return_value=svc,
+    ) as mock_cls:
+        w._run_ai_face_detection([1])
+
+    mock_cls.assert_called_once()
+    assert mock_cls.call_args.kwargs["detection_config"] is cfg.detection
 
 
 def test_rebuild_reset_keeps_human_decisions(tmp_db):

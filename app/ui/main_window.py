@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
     QTabWidget,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +45,6 @@ from app.services.match_scoring import (
     match_scores_for_faces,
     match_scores_for_person,
 )
-from app.services.recognition_service import RecognitionService
 from app.services.unknown_merge_service import UnknownMergeService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
@@ -75,12 +76,12 @@ from app.ui.widgets.flow_layout import FlowContainer
 from app.workers.deep_pipeline_worker import (
     MODE_DETECT_FACES,
     MODE_REBUILD,
+    MODE_REBUILD_MODEL,
     MODE_RESCAN,
     MODE_TRAIN,
     DeepPipelineWorker,
 )
 from app.workers.match_job_worker import MatchJobWorker
-from app.workers.pipeline_worker import PipelineWorker
 
 log = logging.getLogger(__name__)
 
@@ -214,13 +215,16 @@ class MainWindow(QMainWindow):
     def _toggle_log_panel(self) -> None:
         if hasattr(self, "_log_dock"):
             self._log_dock.setVisible(not self._log_dock.isVisible())
+            # _on_log_dock_visibility_changed syncs the button via visibilityChanged signal
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        self._build_menu_bar()
         self._build_toolbar()
+        self._wire_menu_bar_actions()
         self._build_central()
         self._build_log_dock()
         self._build_status_bar()
@@ -229,6 +233,53 @@ class MainWindow(QMainWindow):
         icon_path = app_icon_path()
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+
+    def _build_menu_bar(self) -> None:
+        mb = self.menuBar()
+
+        # ── Fájl ──────────────────────────────────────────────────────────
+        self._mb_file_menu = mb.addMenu("")
+        self._select_folder_action = self._mb_file_menu.addAction(
+            "", self._on_select_folder
+        )
+        self._mb_scan_menu_action = self._mb_file_menu.addAction(
+            "", self._on_open_scan_modes
+        )
+
+        # ── Eszközök ──────────────────────────────────────────────────────
+        # Actions are created in _build_toolbar(); wired here after that call.
+        # We defer population to _wire_menu_bar_actions() called at end of _build_ui.
+        self._mb_tools_menu = mb.addMenu("")
+        self._mb_merge_menu = mb.addMenu("")
+        self._mb_system_menu = mb.addMenu("")
+
+        # ── Debug ─────────────────────────────────────────────────────────
+        self._mb_debug_menu = mb.addMenu("")
+        self._ai_viz_action = self._mb_debug_menu.addAction(
+            "", self._open_ai_viz_window
+        )
+        self._nn_graph_action = self._mb_debug_menu.addAction(
+            "", self._open_nn_graph_window
+        )
+        self._mb_debug_menu.addSeparator()
+        self._tasks_debug_action = self._mb_debug_menu.addAction(
+            "", self._on_open_task_manager
+        )
+
+    def _wire_menu_bar_actions(self) -> None:
+        """Populate the menu bar menus with the QActions built by _build_toolbar."""
+        self._mb_tools_menu.addAction(self._export_action)
+        self._mb_tools_menu.addAction(self._no_face_action)
+
+        self._mb_merge_menu.addAction(self._suggestions_action)
+        self._mb_merge_menu.addAction(self._amerge_action)
+
+        self._mb_system_menu.addAction(self._settings_action)
+        self._mb_system_menu.addAction(self._tasks_action)
+        self._mb_system_menu.addSeparator()
+        self._mb_system_menu.addAction(self._gdrive_action)
+        self._mb_system_menu.addSeparator()
+        self._mb_system_menu.addAction(self._log_action)
 
     def _build_toolbar(self) -> None:
         tb = QToolBar(t("main_toolbar"))
@@ -252,46 +303,50 @@ class MainWindow(QMainWindow):
         self._scan_modes_btn.clicked.connect(self._on_open_scan_modes)
         tb.addWidget(self._scan_modes_btn)
 
-        self._stop_btn = QPushButton()
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self._on_stop)
-        tb.addWidget(self._stop_btn)
+        tb.addSeparator()
+
+        # ── Eszközök dropdown ──────────────────────────────────────────────
+        self._tools_menu = QMenu(self)
+        self._export_action = self._tools_menu.addAction("", self._on_open_export)
+        self._no_face_action = self._tools_menu.addAction("", self._on_no_face_images)
+        self._tools_menu_btn = QToolButton()
+        self._tools_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._tools_menu_btn.setMenu(self._tools_menu)
+        tb.addWidget(self._tools_menu_btn)
 
         tb.addSeparator()
 
-        self._export_btn = QPushButton()
-        self._export_btn.clicked.connect(self._on_open_export)
-        tb.addWidget(self._export_btn)
+        # ── Összevonás dropdown ────────────────────────────────────────────
+        self._merge_menu = QMenu(self)
+        self._suggestions_action = self._merge_menu.addAction("", self._on_show_suggestions)
+        self._suggestions_action.setToolTip(t("suggestions_tip"))
+        self._amerge_action = self._merge_menu.addAction("", self._on_open_amerge_review)
+        self._merge_menu_btn = QToolButton()
+        self._merge_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._merge_menu_btn.setMenu(self._merge_menu)
+        tb.addWidget(self._merge_menu_btn)
 
         tb.addSeparator()
 
-        self._no_face_btn = QPushButton()
-        self._no_face_btn.clicked.connect(self._on_no_face_images)
-        tb.addWidget(self._no_face_btn)
+        # ── Rendszer dropdown ──────────────────────────────────────────────
+        self._system_menu = QMenu(self)
+        self._settings_action = self._system_menu.addAction("", self._on_settings)
+        self._tasks_action = self._system_menu.addAction("", self._on_open_task_manager)
+        self._system_menu.addSeparator()
+        self._gdrive_action = self._system_menu.addAction("", self._on_toggle_drive_project)
+        self._gdrive_action.setVisible(False)
+        self._system_menu.addSeparator()
+        self._log_action = self._system_menu.addAction("", self._on_log_action_toggled)
+        self._log_action.setCheckable(True)
+        self._log_action.setChecked(True)
+        self._system_menu_btn = QToolButton()
+        self._system_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._system_menu_btn.setMenu(self._system_menu)
+        tb.addWidget(self._system_menu_btn)
 
         tb.addSeparator()
 
-        self._suggestions_btn = QPushButton()
-        self._suggestions_btn.setToolTip(t("suggestions_tip"))
-        self._suggestions_btn.clicked.connect(self._on_show_suggestions)
-        tb.addWidget(self._suggestions_btn)
-
-        self._amerge_btn = QPushButton()
-        self._amerge_btn.clicked.connect(self._on_open_amerge_review)
-        tb.addWidget(self._amerge_btn)
-
-        tb.addSeparator()
-
-        self._settings_btn = QPushButton()
-        self._settings_btn.clicked.connect(self._on_settings)
-        tb.addWidget(self._settings_btn)
-
-        self._tasks_btn = QPushButton()
-        self._tasks_btn.clicked.connect(self._on_open_task_manager)
-        tb.addWidget(self._tasks_btn)
-
-        tb.addSeparator()
-
+        # ── Képernyőfelvétel — marad a sorban ─────────────────────────────
         from app.ui.widgets.recording_controls import RecordingControls
         self._recording_controls = RecordingControls()
         self._recording_controls.start_requested.connect(self._on_record_start)
@@ -301,12 +356,8 @@ class MainWindow(QMainWindow):
         self._recording_controls.stop_requested.connect(self._on_record_stop)
         tb.addWidget(self._recording_controls)
 
-        tb.addSeparator()
-
-        self._gdrive_btn = QPushButton()
-        self._gdrive_btn.clicked.connect(self._on_toggle_drive_project)
-        self._gdrive_btn.setVisible(False)  # shown when prefs.is_ready
-        tb.addWidget(self._gdrive_btn)
+    def _on_log_action_toggled(self, checked: bool) -> None:
+        self._log_dock.setVisible(checked)
 
     def _build_central(self) -> None:
         # Outer tabs: Arcok | Kollázs
@@ -329,7 +380,6 @@ class MainWindow(QMainWindow):
 
         self._sidebar = SidebarPanel()
         self._sidebar.person_selected.connect(self._on_person_selected)
-        self._sidebar.set_recluster_callback(self._on_recluster)
         self._sidebar.setMinimumWidth(260)
         self._sidebar.setMaximumWidth(400)
         splitter.addWidget(self._sidebar)
@@ -506,7 +556,12 @@ class MainWindow(QMainWindow):
         self._log_dock.setWidget(self._log_panel)
         self._log_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
         self.addDockWidget(Qt.BottomDockWidgetArea, self._log_dock)
-        self._log_dock.setMinimumHeight(120)
+        self._log_dock.setMinimumHeight(60)
+        self._log_dock.visibilityChanged.connect(self._on_log_dock_visibility_changed)
+
+    def _on_log_dock_visibility_changed(self, visible: bool) -> None:
+        if hasattr(self, "_log_action"):
+            self._log_action.setChecked(visible)
 
     def _build_status_bar(self) -> None:
         status = QStatusBar()
@@ -540,18 +595,6 @@ class MainWindow(QMainWindow):
         )
         self._gdrive_chip_btn.clicked.connect(self._on_gdrive_chip_clicked)
 
-        # Background-task chip — shows "N task(s) running"; click opens the
-        # Task Manager window.
-        self._tasks_chip_btn = QPushButton()
-        self._tasks_chip_btn.setFlat(True)
-        self._tasks_chip_btn.setVisible(False)
-        self._tasks_chip_btn.setStyleSheet(
-            "QPushButton { color: #A6E3A1; font-size: 11px; padding: 1px 6px; "
-            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
-            "QPushButton:hover { background: #313244; }"
-        )
-        self._tasks_chip_btn.clicked.connect(self._on_open_task_manager)
-        status.addPermanentWidget(self._tasks_chip_btn)
         from app.tasks import get_task_manager
         get_task_manager().counts_changed.connect(self._on_task_counts_changed)
         status.addPermanentWidget(self._gdrive_chip_btn)
@@ -723,18 +766,32 @@ class MainWindow(QMainWindow):
 
     def _retranslate(self) -> None:
         self.setWindowTitle(t("window_title"))
+        # Menu bar titles
+        self._mb_file_menu.setTitle(t("mb_file"))
+        self._select_folder_action.setText(t("select_folder"))
+        self._mb_scan_menu_action.setText(t("scanModes.openButton"))
+        self._mb_tools_menu.setTitle(t("mb_tools"))
+        self._mb_merge_menu.setTitle(t("mb_merge"))
+        self._mb_system_menu.setTitle(t("mb_system"))
+        self._mb_debug_menu.setTitle(t("mb_debug"))
+        self._ai_viz_action.setText(t("mb_ai_viz"))
+        self._nn_graph_action.setText(t("mb_nn_graph"))
+        self._tasks_debug_action.setText(t("tasks_title"))
+        # Toolbar
         self._folder_btn.setText(t("select_folder"))
         if not hasattr(self, "_root_folder"):
             self._folder_label.setText(f"  {t('no_folder')}")
         self._scan_modes_btn.setText(t("scanModes.openButton"))
-        self._stop_btn.setText(t("stop"))
-        self._export_btn.setText(t("tb_export"))
-        self._no_face_btn.setText(t("view_no_face"))
-        self._suggestions_btn.setText(t("suggestions_btn"))
-        self._suggestions_btn.setToolTip(t("suggestions_tip"))
+        self._tools_menu_btn.setText(t("tb_tools_menu"))
+        self._export_action.setText(t("tb_export"))
+        self._no_face_action.setText(t("view_no_face"))
+        self._merge_menu_btn.setText(t("tb_merge_menu"))
+        self._suggestions_action.setText(t("suggestions_btn"))
+        self._suggestions_action.setToolTip(t("suggestions_tip"))
         self._refresh_amerge_btn()
-        self._settings_btn.setText(t("settings"))
-        self._tasks_btn.setText(t("tasks_btn"))
+        self._system_menu_btn.setText(t("tb_system_menu"))
+        self._settings_action.setText(t("settings"))
+        self._tasks_action.setText(t("tasks_btn"))
         if hasattr(self, "_tasks_status_btn"):
             self._update_tasks_button_text()
             self._tasks_status_btn.setToolTip(t("tasks_title"))
@@ -759,6 +816,9 @@ class MainWindow(QMainWindow):
         self._tabs.setTabText(7, t("tab_collage"))
         self._tabs.setTabText(8, t("tab_family_tree"))
         self._log_dock.setWindowTitle(t("activity_log"))
+        if hasattr(self, "_log_action"):
+            self._log_action.setText(t("toggle_log"))
+            self._log_action.setToolTip(t("activity_log"))
         self._status_label.setText(t("ready"))
         if hasattr(self, "_cluster_panel"):
             self._cluster_panel.retranslate()
@@ -821,184 +881,21 @@ class MainWindow(QMainWindow):
             log.info("Restored last folder: %s", last)
 
     @Slot()
-    def _on_force_rescan(self) -> None:
-        if not hasattr(self, "_root_folder"):
-            QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
-            return
-        if self._pipeline_busy():
-            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
-            return
-
-        with session_scope() as session:
-            from app.db.models import Face, Image
-            n_images = session.query(Image).count()
-
-        reply = QMessageBox.question(
-            self,
-            t("force_rescan_title"),
-            t("force_rescan_msg", n=n_images),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        with session_scope() as session:
-            from app.db.models import Face, Image, Person
-            deleted = (
-                session.query(Face)
-                .filter(Face.detector_backend != "manual")
-                .delete(synchronize_session="fetch")
-            )
-            session.query(Image).update({"detection_done": False, "embedding_done": False})
-            # Remove auto-named persons that lost all their faces in this wipe.
-            orphans = (
-                session.query(Person)
-                .filter(Person.is_auto_named == True)  # noqa: E712
-                .filter(~Person.faces.any())
-                .all()
-            )
-            for p in orphans:
-                session.delete(p)
-            if orphans:
-                log.info("Force rescan: removed %d orphaned auto-named person(s).", len(orphans))
-
-        self._current_person_id = None
-        self._current_face_id = None
-        self._cluster_panel.clear()
-        self._preview_panel.clear()
-        self._refresh_persons()
-        log.info("Force rescan: reset all %d images, deleted %d auto-detected face(s).", n_images, deleted)
-        self._on_scan()
-
-    def _prepare_redetect(self) -> Optional[int]:
-        """Reset detection flags for all images and delete auto-detected faces.
-
-        Returns the number of images reset, or ``None`` if the caller should
-        abort (e.g. worker already running).
-        """
-        if self._gdrive_session is None and not hasattr(self, "_root_folder"):
-            QMessageBox.warning(self, t("no_folder_title"), t("no_folder_msg"))
-            return None
-        if self._pipeline_busy():
-            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
-            return None
-
-        with session_scope() as session:
-            from app.db.models import Image
-            n_images = session.query(Image).count()
-
-        return n_images
-
-    @Slot()
-    def _on_redetect_fast(self) -> None:
-        n_images = self._prepare_redetect()
-        if n_images is None:
-            return
-
-        reply = QMessageBox.question(
-            self,
-            t("redetect_title"),
-            t("redetect_msg", n=n_images),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        self._reset_detection_state()
-        log.info("Re-detect (fast): reset %d images.", n_images)
-        self._start_pipeline(high_accuracy=False)
-
-    @Slot()
-    def _on_redetect_accurate(self) -> None:
-        n_images = self._prepare_redetect()
-        if n_images is None:
-            return
-
-        reply = QMessageBox.question(
-            self,
-            t("redetect_accurate_title"),
-            t("redetect_accurate_msg", n=n_images),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        self._reset_detection_state()
-        log.info("Re-detect (accurate): reset %d images.", n_images)
-        self._start_pipeline(high_accuracy=True)
-
-    def _reset_detection_state(self) -> None:
-        """Delete unnamed auto-detected faces and reset detection flags on all images.
-
-        Named faces (person_id IS NOT NULL) are intentionally preserved so that
-        person profiles remain intact and recognition can still run after re-detection.
-        """
-        with session_scope() as session:
-            from app.db.models import Face, Image
-            deleted = (
-                session.query(Face)
-                .filter(Face.detector_backend != "manual")
-                .filter(Face.person_id.is_(None))  # keep named faces as training examples
-                .delete(synchronize_session="fetch")
-            )
-            session.query(Image).update({"detection_done": False, "embedding_done": False})
-        log.debug(
-            "Reset detection: %d unnamed auto face(s) deleted (named faces preserved).",
-            deleted,
-        )
-        self._current_person_id = None
-        self._current_face_id = None
-        self._cluster_panel.clear()
-        self._preview_panel.clear()
-        self._refresh_persons()
-
-    def _start_pipeline(self, high_accuracy: bool = False) -> None:
-        """Launch the scan/recognition pipeline as a Task Manager task."""
-        drive_active = self._gdrive_session is not None
-        if not drive_active and not hasattr(self, "_root_folder"):
-            return
-
-        # Drive mode: pass client + folder info; local mode: pass root folder.
-        if drive_active and self._gdrive_session is not None:
-            from app.paths import drive_mirror_dir
-            folders = self._gdrive_session.folders
-            root_id = folders.root_id if folders else ""
-            worker = PipelineWorker(
-                root_folder="",          # unused in Drive mode
-                config=self._config,
-                high_accuracy=high_accuracy,
-                db_path_override=self._db_path,
-                drive_client=self._gdrive_session._client,
-                drive_root_folder_id=root_id,
-                drive_mirror_dir=drive_mirror_dir(root_id),
-            )
-        else:
-            worker = PipelineWorker(
-                root_folder=self._root_folder,
-                config=self._config,
-                high_accuracy=high_accuracy,
-                db_path_override=self._db_path,
-            )
-        worker.log_message.connect(self._log_panel.append_plain)
-        self._run_pipeline_task(worker, t("task_scan"))
-
-    @Slot()
     def _on_open_scan_modes(self) -> None:
         dlg = ScanModesDialog(
-            on_incremental=self._on_scan,
-            on_full_rescan=self._on_force_rescan,
-            on_face_rescan_fast=self._on_redetect_fast,
-            on_face_rescan_accurate=self._on_redetect_accurate,
+            on_folder_rescan=self._on_scan,
             on_reset_unknown_persons=self._on_reset_unknown_persons,
             on_find_overlapping_unknown_faces=self._on_find_overlapping_unknown_faces,
             on_find_embedding_duplicate_faces=self._on_find_embedding_duplicate_faces,
             on_identity_repair_scan=self._on_identity_repair_scan,
             on_cleanup_empty_unknown_persons=self._on_cleanup_empty_unknown_persons,
+            on_revalidate_face_geometry=self._on_revalidate_face_geometry,
             on_manage_ignored_faces=self._on_manage_ignored_faces,
             on_deep_rescan=self._on_deep_rescan,
             on_deep_rebuild=self._on_deep_rebuild,
             on_deep_train=self._on_deep_train,
             on_deep_face_detect=self._on_deep_face_detect,
+            on_deep_rebuild_model=self._on_deep_rebuild_model,
             parent=self,
         )
         dlg.exec()
@@ -1057,6 +954,20 @@ class MainWindow(QMainWindow):
             return
         self._start_deep_pipeline(MODE_REBUILD)
 
+    @Slot()
+    def _on_deep_rebuild_model(self) -> None:
+        if not self._deep_pipeline_guard():
+            return
+        reply = QMessageBox.question(
+            self,
+            t("rebuild_model_confirm_title"),
+            t("rebuild_model_confirm_msg"),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._start_deep_pipeline(MODE_REBUILD_MODEL)
+
     def _start_deep_pipeline(self, mode: str) -> None:
         """Launch the deep-learning (AI) pipeline as a Task Manager task."""
         drive_active = self._gdrive_session is not None
@@ -1100,6 +1011,7 @@ class MainWindow(QMainWindow):
         name = {
             MODE_RESCAN: t("task_deep_rescan"),
             MODE_REBUILD: t("task_deep_rebuild"),
+            MODE_REBUILD_MODEL: t("task_deep_rebuild_model"),
             MODE_TRAIN: t("task_deep_train"),
             MODE_DETECT_FACES: t("task_deep_detect"),
         }.get(mode, t("task_deep_rescan"))
@@ -1232,9 +1144,9 @@ class MainWindow(QMainWindow):
             )
         )
 
-        # Only restart pipeline if recognition rerun was selected
+        # Only restart the AI pipeline if recognition rerun was selected
         if options.rerun_recognition:
-            self._start_pipeline(high_accuracy=False)
+            self._start_deep_pipeline(MODE_RESCAN)
 
 
     @Slot()
@@ -1275,6 +1187,70 @@ class MainWindow(QMainWindow):
                 t("cleanup_empty_unknowns_none"),
             )
 
+    def _on_revalidate_face_geometry(self) -> None:
+        """Re-validate stored faces against landmark geometry and remove the
+        geometrically-impossible, non-manual ones (cards/hands/feet/knots
+        detected before the geometry gate existed).  Preview-first: the scan is
+        read-only and nothing is deleted without an explicit confirmation."""
+        if self._pipeline_busy():
+            QMessageBox.information(self, t("busy_title"), t("busy_msg"))
+            return
+
+        from app.services.face_geometry_cleanup_service import (
+            FaceGeometryCleanupService,
+        )
+
+        try:
+            with session_scope() as session:
+                report = FaceGeometryCleanupService(
+                    session, getattr(self._config, "detection", None)
+                ).scan()
+                scanned = report.scanned
+                flagged = report.flagged_count
+                droppable_ids = report.droppable_ids
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Geometry re-validation scan failed")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        if not droppable_ids:
+            QMessageBox.information(
+                self,
+                t("geom_cleanup_title"),
+                t("geom_cleanup_none", scanned=scanned, flagged=flagged),
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("geom_cleanup_title"),
+            t(
+                "geom_cleanup_confirm",
+                n=len(droppable_ids),
+                scanned=scanned,
+                flagged=flagged,
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            with session_scope() as session:
+                deleted = FaceGeometryCleanupService(session).delete_faces(
+                    droppable_ids
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Geometry re-validation delete failed")
+            QMessageBox.critical(self, t("error"), str(exc))
+            return
+
+        self._current_person_id = None
+        self._current_face_id = None
+        self._refresh_persons()
+        self._image_browser._reload_current_face_data()
+        self._status_label.setText(t("geom_cleanup_status", deleted=deleted))
+
     @Slot()
     def _on_scan(self) -> None:
         from app.gdrive import preferences as _gprefs
@@ -1295,13 +1271,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, t("busy_title"), t("busy_msg"))
             return
 
-        self._start_pipeline(high_accuracy=False)
+        # Folder re-read now runs through the AI (deep) pipeline: scan for new
+        # images, detect + embed faces, then deep-recognize.
+        self._start_deep_pipeline(MODE_RESCAN)
 
     @Slot()
     def _on_stop(self) -> None:
         if self._active_pipeline_task is not None:
             self._active_pipeline_task.cancel()
-            self._stop_btn.setEnabled(False)
 
 
     @Slot()
@@ -1332,18 +1309,17 @@ class MainWindow(QMainWindow):
         self._refresh_match_chip()
 
     def _refresh_amerge_btn(self) -> None:
-        """Label the auto-merge review button with the pending count; hide if 0."""
-        if not hasattr(self, "_amerge_btn"):
+        """Label the auto-merge review action with the pending count."""
+        if not hasattr(self, "_amerge_action"):
             return
         try:
             with session_scope() as session:
                 n = UnknownMergeService(session).count_pending()
         except Exception:  # noqa: BLE001
             n = 0
-        self._amerge_btn.setText(
+        self._amerge_action.setText(
             f"{t('amerge_review_menu')} ({n})" if n else t("amerge_review_menu")
         )
-        self._amerge_btn.setVisible(n > 0)
 
     @Slot()
     def _on_open_amerge_review(self) -> None:
@@ -1675,21 +1651,21 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(400, self._on_open_drive_project)
 
     def _update_gdrive_toolbar_btn(self) -> None:
-        """Show/hide and label the Drive toolbar button based on current state."""
+        """Show/hide and label the Drive action in the System menu."""
         from app.gdrive import preferences
         prefs = preferences.load()
         is_open = self._gdrive_session is not None
 
         if is_open:
-            self._gdrive_btn.setText(t("gdrive_close_project_btn"))
-            self._gdrive_btn.setToolTip(t("gdrive_close_project_tip"))
-            self._gdrive_btn.setVisible(True)
+            self._gdrive_action.setText(t("gdrive_close_project_btn"))
+            self._gdrive_action.setToolTip(t("gdrive_close_project_tip"))
+            self._gdrive_action.setVisible(True)
         elif prefs.is_ready:
-            self._gdrive_btn.setText(t("gdrive_open_project_btn"))
-            self._gdrive_btn.setToolTip(t("gdrive_open_project_tip"))
-            self._gdrive_btn.setVisible(True)
+            self._gdrive_action.setText(t("gdrive_open_project_btn"))
+            self._gdrive_action.setToolTip(t("gdrive_open_project_tip"))
+            self._gdrive_action.setVisible(True)
         else:
-            self._gdrive_btn.setVisible(False)
+            self._gdrive_action.setVisible(False)
 
     def _update_gdrive_chip(self) -> None:
         """Update the status bar Drive chip from the current session state."""
@@ -1752,7 +1728,7 @@ class MainWindow(QMainWindow):
         if self._gdrive_open_thread and self._gdrive_open_thread.isRunning():
             return  # already opening
 
-        self._gdrive_btn.setEnabled(False)
+        self._gdrive_action.setEnabled(False)
         self._gdrive_chip_btn.setText(t("gdrive_chip_opening"))
         self._gdrive_chip_btn.setVisible(True)
 
@@ -1778,7 +1754,7 @@ class MainWindow(QMainWindow):
         thread = _OpenThread(self)
         thread.succeeded.connect(self._on_drive_open_succeeded)
         thread.failed.connect(self._on_drive_open_failed)
-        thread.finished.connect(lambda: self._gdrive_btn.setEnabled(True))
+        thread.finished.connect(lambda: self._gdrive_action.setEnabled(True))
         self._gdrive_open_thread = thread
         thread.start()
 
@@ -1858,7 +1834,7 @@ class MainWindow(QMainWindow):
         session = self._gdrive_session
         self._gdrive_session = None  # mark as closing
         self._gdrive_chip_btn.setText(t("gdrive_chip_closing"))
-        self._gdrive_btn.setEnabled(False)
+        self._gdrive_action.setEnabled(False)
 
         class _CloseThread(QThread):
             done = Signal()
@@ -1899,7 +1875,7 @@ class MainWindow(QMainWindow):
 
         self._update_gdrive_toolbar_btn()
         self._update_gdrive_chip()
-        self._gdrive_btn.setEnabled(True)
+        self._gdrive_action.setEnabled(True)
         self._status_label.setText(t("ready"))
 
     @Slot()
@@ -3309,54 +3285,6 @@ class MainWindow(QMainWindow):
         # table (the dialog only wrote to the DB).
         self._refresh_persons()
 
-    @Slot()
-    def _on_recluster(self) -> None:
-        if getattr(self, "_recluster_running", False):
-            self._on_open_task_manager()
-            return
-        reply = QMessageBox.question(
-            self,
-            t("recluster_title"),
-            t("recluster_msg"),
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        self._status_label.setText(t("reclustering"))
-        self._recluster_running = True
-        recognition_config = self._config.recognition
-
-        def work(ctx):  # noqa: ANN001 — worker thread
-            # recognize_pending() runs as one bulk pass with no UI-facing chunk
-            # boundary, so honour at least a cancel requested while the task was
-            # still queued before starting the (potentially long) work.
-            ctx.checkpoint()
-            with session_scope() as session:
-                assignments, _stats = RecognitionService(
-                    session, recognition_config
-                ).recognize_pending()
-                return len(assignments)
-
-        def on_done(n: object) -> None:
-            self._recluster_running = False
-            self._status_label.setText(t("recluster_done", n=n))
-            self._refresh_persons()
-
-        def on_error(message: str) -> None:
-            self._recluster_running = False
-            self._status_label.setText(t("ready"))
-            QMessageBox.critical(self, t("recluster_title"), message)
-
-        from app.tasks import get_task_manager
-        get_task_manager().submit(
-            t("task_recluster"),
-            work,
-            on_done=on_done,
-            on_error=on_error,
-            on_cancelled=lambda: setattr(self, "_recluster_running", False),
-        )
-
     # ------------------------------------------------------------------
     # Collage import / export
     # ------------------------------------------------------------------
@@ -3830,11 +3758,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_scanning_state(self, scanning: bool) -> None:
-        # The pipeline now runs as a background task, so the UI is never locked
-        # — Scan & Maintenance stays enabled (a second start is guarded by
-        # ``_pipeline_busy``).  Only the Stop button and the passive progress
-        # bar reflect the running state.
-        self._stop_btn.setEnabled(scanning)
         self._progress_bar.setVisible(scanning)
         if scanning:
             self._progress_bar.setValue(0)
@@ -4063,13 +3986,7 @@ class MainWindow(QMainWindow):
         self, running: int, queued: int, paused: int
     ) -> None:
         total = running + queued + paused
-        # Bottom-left always-visible button mirrors the live total count
-        # (running + queued + paused) as a single number.
         self._update_tasks_button_text(total)
-        # Right-side chip appears only while something is pending/running.
-        self._tasks_chip_btn.setVisible(total > 0)
-        if total:
-            self._tasks_chip_btn.setText(f"⚙ {t('tasks_running_chip', n=total)}")
 
     def _update_tasks_button_text(self, total: Optional[int] = None) -> None:
         """Set the bottom Task Manager button label to show the live count."""

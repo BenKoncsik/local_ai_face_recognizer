@@ -17,7 +17,7 @@ moves go through :class:`app.services.identity_service.IdentityService`
 (``reassign_faces_bulk`` / ``reassign_face``, which already clean up emptied
 Unknown clusters and clear the auto-merge markers on a manual override), and the
 intelligent auto-confirm reuses
-:class:`app.services.recognition_service.RecognitionService` scoring.
+:class:`app.services.vector_scoring.FaceVectorScorer` scoring.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from app.services.identity_service import (
     BulkReassignResult,
     IdentityService,
 )
-from app.services.recognition_service import RecognitionService
+from app.services.vector_scoring import FaceVectorScorer
 
 log = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ class UnknownMergeService:
         threshold = self._rec_cfg.unknown_auto_confirm_threshold
         margin = self._rec_cfg.min_margin
 
-        rec = RecognitionService(self._session, self._rec_cfg)
+        rec = FaceVectorScorer(self._session, self._rec_cfg)
         profiles = rec.build_profiles()
         target_has_profile = target_person_id in profiles
         target = self._session.get(Person, target_person_id)

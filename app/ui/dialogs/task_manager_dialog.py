@@ -291,16 +291,16 @@ class PerformancePanel(QWidget):
         layout.addWidget(self._cpu_container, stretch=3)
 
         # --- Memory section ---
-        mem_label = QLabel(t("perf_ram_section"))
-        mem_label.setStyleSheet("color: #888; font-size: 11px;")
-        layout.addWidget(mem_label)
+        self._mem_section_label = QLabel()
+        self._mem_section_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._mem_section_label)
         self._mem_graph = _Sparkline(t("perf_ram"), color="#89b4fa")
         layout.addWidget(self._mem_graph, stretch=2)
 
         # --- Disk I/O section ---
-        io_label = QLabel(t("perf_io_section"))
-        io_label.setStyleSheet("color: #888; font-size: 11px;")
-        layout.addWidget(io_label)
+        self._io_section_label = QLabel()
+        self._io_section_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._io_section_label)
         io_row = QHBoxLayout()
         io_row.setContentsMargins(0, 0, 0, 0)
         io_row.setSpacing(4)
@@ -315,6 +315,7 @@ class PerformancePanel(QWidget):
         layout.addLayout(io_row, stretch=2)
 
         self._build_cpu_graphs()
+        self._update_scope_labels()
 
     # ------------------------------------------------------------------
 
@@ -374,10 +375,22 @@ class PerformancePanel(QWidget):
         self._update_toggle_labels()
         self._rebuild_after_toggle()
 
+    def _update_scope_labels(self) -> None:
+        """Refresh section headers to explicitly show whether scope is app or machine."""
+        if not hasattr(self, "_mem_section_label"):
+            return
+        if self._app_only:
+            self._mem_section_label.setText(t("perf_ram_section_app"))
+            self._io_section_label.setText(t("perf_io_section_app"))
+        else:
+            self._mem_section_label.setText(t("perf_ram_section_machine"))
+            self._io_section_label.setText(t("perf_io_section_machine"))
+
     def _rebuild_after_toggle(self) -> None:
         if self._psutil is None:
             return
         self._build_cpu_graphs()
+        self._update_scope_labels()
         self._mem_graph.clear_samples()
         self._io_read_graph.clear_samples()
         self._io_write_graph.clear_samples()
@@ -406,11 +419,12 @@ class PerformancePanel(QWidget):
         except Exception:  # noqa: BLE001 — io_counters absent on macOS, etc.
             counters = None
 
+        io_scope = t("perf_io_app") if self._app_only else f"{t('perf_io')} {t('perf_scope_sys_short')}"
         if counters is None:
             na = t("perf_na")
             self._io_read_graph.set_value_text(na)
             self._io_write_graph.set_value_text(na)
-            self._io_label.setText(f"{t('perf_io')} {na}")
+            self._io_label.setText(f"{io_scope} {na}")
             self._io_last = None
             self._io_last_wall = None
             return
@@ -423,7 +437,7 @@ class PerformancePanel(QWidget):
             self._io_read_graph.set_value_text(t("perf_io_rate", mb=read_mb))
             self._io_write_graph.add_sample(write_mb)
             self._io_write_graph.set_value_text(t("perf_io_rate", mb=write_mb))
-            self._io_label.setText(f"{t('perf_io')} ↓{read_mb:.1f} ↑{write_mb:.1f} MB/s")
+            self._io_label.setText(f"{io_scope} ↓{read_mb:.1f} ↑{write_mb:.1f} MB/s")
         self._io_last = counters
         self._io_last_wall = now
 
@@ -461,9 +475,9 @@ class PerformancePanel(QWidget):
                 self._app_cpu_graph.set_value_text(f"{app_cpu:.0f}%")
             self._mem_graph.add_sample(mem_pct)
             self._mem_graph.set_value_text(f"{mi // (1024 * 1024)} MB")
-            self._cpu_label.setText(f"{t('perf_cpu')} {app_cpu:.0f}%")
+            self._cpu_label.setText(f"{t('perf_app_cpu')} {app_cpu:.0f}%")
             self._ram_label.setText(
-                f"{t('perf_ram')} "
+                f"{t('perf_ram_app')} "
                 + t("perf_ram_value_app", used=mi // (1024 * 1024), pct=mem_pct)
             )
         else:
@@ -476,9 +490,11 @@ class PerformancePanel(QWidget):
                 self._cpu_total_graph.set_value_text(f"{cpu_total:.0f}%")
             self._mem_graph.add_sample(vm.percent)
             self._mem_graph.set_value_text(f"{vm.percent:.0f}%")
-            self._cpu_label.setText(f"{t('perf_cpu')} {cpu_total:.0f}%")
+            self._cpu_label.setText(
+                f"{t('perf_cpu')} {t('perf_scope_sys_short')} {cpu_total:.0f}%"
+            )
             self._ram_label.setText(
-                f"{t('perf_ram')} "
+                f"{t('perf_ram')} {t('perf_scope_sys_short')} "
                 + t(
                     "perf_ram_value",
                     used=vm.used // (1024 * 1024),

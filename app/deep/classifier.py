@@ -115,6 +115,15 @@ class DeepFaceClassifier:
         return self._state.mode in ("ensemble", "prototype")
 
     @property
+    def person_ids(self) -> tuple[int, ...]:
+        """Person IDs this model was trained to recognise (its class labels).
+
+        Used to detect a *stale* model — one whose people no longer exist in the
+        current database (e.g. after the DB was reset but the model kept).
+        """
+        return tuple(int(c) for c in self._state.classes)
+
+    @property
     def fingerprint(self) -> str:
         return self._state.fingerprint
 

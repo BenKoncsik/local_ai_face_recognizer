@@ -6,6 +6,40 @@ from app import config as config_module
 from app import paths
 
 
+def test_false_positive_gate_keys_load(tmp_path: Path) -> None:
+    """The new false-positive knobs round-trip through load_config."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "\n".join(
+            [
+                "detection:",
+                "  landmark_geometry_enabled: false",
+                "ai_face_detection:",
+                "  verification_enabled: false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config_module.load_config(str(cfg_file))
+
+    assert cfg.detection.landmark_geometry_enabled is False
+    assert cfg.ai_face_detection.verification_enabled is False
+
+
+def test_false_positive_gate_defaults(tmp_path: Path) -> None:
+    """Omitted keys keep the safe defaults and the raised AI thresholds."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("storage:\n  db_path: faces.db\n", encoding="utf-8")
+
+    cfg = config_module.load_config(str(cfg_file))
+
+    assert cfg.detection.landmark_geometry_enabled is True
+    assert cfg.ai_face_detection.verification_enabled is True
+    assert cfg.ai_face_detection.confidence_threshold == 0.65
+    assert cfg.ai_face_detection.min_face_size == 36
+
+
 def test_load_config_resolves_relative_paths_against_config_location(tmp_path: Path) -> None:
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(

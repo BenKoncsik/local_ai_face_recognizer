@@ -61,13 +61,17 @@ from app.services.overlap_resolution_service import (
 )
 from app.services.scan_service import ScanService
 from app.services.suggestion_service import SuggestionService
-from app.workers.pipeline_worker import PipelineResult
+from app.workers.pipeline_result import PipelineResult
 
 log = logging.getLogger(__name__)
 
 MODE_RESCAN = "rescan"
 MODE_REBUILD = "rebuild"
 MODE_TRAIN = "train"
+# Force-rebuild only the neural model: delete the existing model, retrain from
+# scratch on the labeled faces, then re-recognize. No scan/detection — only the
+# model is rebuilt (faster than a full rebuild).
+MODE_REBUILD_MODEL = "rebuild_model"
 # Analysis-only AI face detection (where are the faces + confidence); never
 # creates Face rows and never touches the classic recognition results.
 MODE_DETECT_FACES = "detect_faces"
@@ -109,7 +113,13 @@ class DeepPipelineWorker(QThread):
         ai_debug_log: bool = False,
     ) -> None:
         super().__init__(parent)
-        if mode not in (MODE_RESCAN, MODE_REBUILD, MODE_TRAIN, MODE_DETECT_FACES):
+        if mode not in (
+            MODE_RESCAN,
+            MODE_REBUILD,
+            MODE_TRAIN,
+            MODE_DETECT_FACES,
+            MODE_REBUILD_MODEL,
+        ):
             raise ValueError(f"Unknown deep pipeline mode: {mode!r}")
         self._root_folder = root_folder
         self._config = config
@@ -238,6 +248,9 @@ class DeepPipelineWorker(QThread):
 
         if self._mode == MODE_TRAIN:
             return self._run_train_only_pipeline()
+
+        if self._mode == MODE_REBUILD_MODEL:
+            return self._run_rebuild_model_pipeline()
 
         if self._mode == MODE_DETECT_FACES:
             return self._run_detect_only_pipeline()
@@ -420,6 +433,86 @@ class DeepPipelineWorker(QThread):
         return PipelineResult(True, summary)
 
     # ------------------------------------------------------------------
+    # Force model rebuild (model only, no scan/detection)
+    # ------------------------------------------------------------------
+
+    def _run_rebuild_model_pipeline(self) -> PipelineResult:
+        """Force-rebuild the neural model from scratch and re-apply it.
+
+        Deletes the existing model file, retrains from every labeled face
+        (never reusing the old model), then re-recognizes unknown faces.  Does
+        NOT scan or re-detect — only the model is rebuilt, so it is much faster
+        than a full rebuild and cannot leave a stale model behind.
+        """
+        self._emit_log("Stage 1/3: Deleting the existing AI model …")
+        with session_scope() as session:
+            DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(
+                    self._config.deep_recognition.model_dir
+                ),
+            ).delete_model()
+        self._checkpoint()
+
+        self._emit_log("Stage 2/3: Generating missing face embeddings …")
+        try:
+            embedded = self._run_embedding()
+        except ImportError as exc:
+            log.error("TFLite backend missing: %s", exc)
+            raise RuntimeError(
+                "Hiányzik a TFLite futtatókörnyezet. "
+                "Telepítsd/javítsd a függőségeket:\n"
+                "  pip install ai-edge-litert\n"
+                f"Részletek: {exc}"
+            ) from exc
+        self._checkpoint()
+
+        self._emit_log(
+            "Stage 3/3: Training a fresh neural network and re-recognizing "
+            "(this may take a while — accuracy over speed) …"
+        )
+
+        def train_cb(current, total, detail):
+            self._emit_progress(current, total or 0, "Training", detail)
+
+        def recognize_cb(current, total, detail):
+            self._emit_progress(current, total or 0, "Recognizing", detail)
+
+        with session_scope() as session:
+            svc = DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(
+                    self._config.deep_recognition.model_dir
+                ),
+            )
+            result = svc.train_and_recognize(
+                mode=MODE_REBUILD_MODEL,
+                train_progress_cb=train_cb,
+                recognize_progress_cb=recognize_cb,
+            )
+
+        train = result.train
+        rec = result.recognition
+        acc = (
+            f"{train.validation_accuracy * 100:.1f}%"
+            if train.validation_accuracy is not None
+            else "n/a"
+        )
+        summary = (
+            f"Done (rebuild_model) — model rebuilt from scratch on "
+            f"{train.n_examples} face(s) of {train.n_persons} person(s) "
+            f"(+{train.n_augmented} synthetic), accuracy {acc} | "
+            f"{embedded} face(s) newly embedded | "
+            f"AI re-assigned {rec.n_assigned} of {rec.n_candidates} unknown face(s)"
+        )
+        self._emit_log(summary)
+        return PipelineResult(
+            True, summary, n_auto_assignments=rec.n_assigned
+        )
+
+    # ------------------------------------------------------------------
     # AI face detection (analysis only)
     # ------------------------------------------------------------------
 
@@ -439,7 +532,11 @@ class DeepPipelineWorker(QThread):
             self._emit_progress(current, total or 0, "AI Detect", Path(path).name)
 
         with session_scope() as session:
-            svc = AiFaceDetectionService(session, self._config.ai_face_detection)
+            svc = AiFaceDetectionService(
+                session,
+                self._config.ai_face_detection,
+                detection_config=self._config.detection,
+            )
             image_ids = svc.all_image_ids()
             self._emit_log(
                 f"Stage 1/1: AI face detection on {len(image_ids)} image(s) …"
@@ -458,7 +555,8 @@ class DeepPipelineWorker(QThread):
         summary = (
             f"Done (AI face detection) — {stats.faces_found} face(s) found on "
             f"{stats.images_processed} image(s) "
-            f"({stats.images_failed} unreadable) | detector: {stats.detector_name} | "
+            f"({stats.faces_dropped_verification} false positive(s) filtered, "
+            f"{stats.images_failed} unreadable) | detector: {stats.detector_name} | "
             f"analysis only — no face was assigned, moved or deleted"
         )
         self._emit_log(summary)
@@ -483,7 +581,9 @@ class DeepPipelineWorker(QThread):
         try:
             with session_scope() as session:
                 svc = AiFaceDetectionService(
-                    session, self._config.ai_face_detection
+                    session,
+                    self._config.ai_face_detection,
+                    detection_config=self._config.detection,
                 )
                 stats = svc.detect_images(
                     image_ids,
@@ -564,6 +664,18 @@ class DeepPipelineWorker(QThread):
             )
             for person in orphans:
                 session.delete(person)
+
+        # Rebuild the AI model from scratch too: drop the previous model file so a
+        # stale model (trained on data that no longer exists) can never linger or
+        # be reused. The train stage below retrains fresh (force=True).
+        with session_scope() as session:
+            DeepRecognitionService(
+                session=session,
+                config=self._config.deep_recognition,
+                model_dir=self._config.resolve(
+                    self._config.deep_recognition.model_dir
+                ),
+            ).delete_model()
 
         log.info(
             "Rebuild reset: deleted %d automatic face(s), kept %d human-confirmed.",

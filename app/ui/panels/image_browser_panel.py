@@ -100,10 +100,11 @@ class _BboxEdit:
 _TREE_THUMB_SIZE = 56   # max side of thumbnail icon in tree
 
 # Data roles stored on QTreeWidgetItem
-_ROLE_TYPE      = Qt.UserRole        # "folder" | "image" | "dummy"
+_ROLE_TYPE      = Qt.UserRole        # "folder" | "folder_node" | "image" | "dummy"
 _ROLE_PAYLOAD   = Qt.UserRole + 1    # folder_path (str) | image_id (int)
 _ROLE_CACHE     = Qt.UserRole + 2    # thumbnail_cache_key (str, images only)
 _ROLE_FILE_PATH = Qt.UserRole + 3    # file_path (str, images only)
+_ROLE_TREE_NODE = Qt.UserRole + 4    # _TreeNode (folder/folder_node items only)
 
 # How many images ahead to prefetch in Drive mode.
 _DRIVE_PREFETCH_AHEAD = 4
@@ -400,6 +401,96 @@ def _hline() -> QFrame:
     line.setFrameShape(QFrame.HLine)
     line.setStyleSheet("color: #3a3a3a;")
     return line
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Folder hierarchy helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class _TreeNode:
+    """Node in the pre-computed folder hierarchy."""
+    path: str
+    name: str
+    summary: Optional[FolderSummary] = None   # None → intermediate structural node
+    children: Dict[str, "_TreeNode"] = None   # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.children is None:
+            self.children = {}
+
+    @property
+    def has_images(self) -> bool:
+        return self.summary is not None
+
+    @property
+    def has_children(self) -> bool:
+        return bool(self.children)
+
+
+def _build_folder_tree(folders: List[FolderSummary]) -> List[_TreeNode]:
+    """Build a hierarchical tree from a flat list of FolderSummary objects.
+
+    Finds the longest common path prefix shared by all folder paths and strips it
+    so only the diverging part of each path is shown in the tree.  Intermediate
+    directories (containing no images directly) are created as structural nodes.
+    Returns the sorted list of top-level tree nodes.
+    """
+    if not folders:
+        return []
+
+    summary_map = {f.folder_path: f for f in folders}
+    paths = [f.folder_path for f in folders]
+    parts_list = [Path(p).parts for p in paths]
+
+    # Find common-ancestor depth.  For a single path we strip all but the last
+    # component so the folder itself is shown as the root.
+    if len(parts_list) == 1:
+        common_len = len(parts_list[0]) - 1
+    else:
+        min_len = min(len(p) for p in parts_list)
+        common_len = 0
+        for i in range(min_len):
+            if all(p[i] == parts_list[0][i] for p in parts_list):
+                common_len = i + 1
+            else:
+                break
+
+    # If the common ancestor path itself is one of the data folders (i.e., a
+    # folder is an ancestor of another folder), go one level up so that folder
+    # appears as a tree node rather than being silently skipped.
+    if common_len > 0:
+        common_parts = parts_list[0][:common_len]
+        common_str = common_parts[0] if len(common_parts) == 1 else str(Path(*common_parts))
+        if common_str in summary_map:
+            common_len -= 1
+
+    root: Dict[str, _TreeNode] = {}
+
+    for path_str, parts in zip(paths, parts_list):
+        rel_parts = parts[common_len:]
+        if not rel_parts:
+            continue
+
+        current = root
+        for i, part in enumerate(rel_parts):
+            # Reconstruct the full path up to this depth
+            full_parts = parts[:common_len + i + 1]
+            full_str = full_parts[0] if len(full_parts) == 1 else str(Path(*full_parts))
+            is_leaf = (i == len(rel_parts) - 1)
+
+            if part not in current:
+                current[part] = _TreeNode(
+                    path=full_str,
+                    name=part,
+                    summary=summary_map.get(full_str) if is_leaf else None,
+                )
+            elif is_leaf and full_str in summary_map:
+                current[part].summary = summary_map[full_str]
+
+            current = current[part].children
+
+    return [root[k] for k in sorted(root.keys())]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2341,27 +2432,29 @@ class ImageBrowserPanel(QWidget):
 
         self._tree_hdr_lbl.setText(t("ib3_folders_hdr_n", n=len(folders)))
 
+        # Build and populate the hierarchical folder tree
+        tree_roots = _build_folder_tree(folders)
+        for root_node in tree_roots:
+            self._file_tree.addTopLevelItem(self._make_tree_node_item(root_node))
+
+        # Restore the previously open folder if still present
         restore_item: Optional[QTreeWidgetItem] = None
-        for summary in folders:
-            item = self._make_folder_item(summary)
-            self._file_tree.addTopLevelItem(item)
-            if summary.folder_path == prev_folder:
-                restore_item = item
+        if prev_folder:
+            restore_item = self._find_folder_item_by_path(prev_folder)
 
         if restore_item is not None:
-            self._file_tree.blockSignals(True)
+            self._expand_ancestors(restore_item)
+            # setExpanded fires itemExpanded → _on_tree_item_expanded handles
+            # subfolder creation and image loading automatically
             restore_item.setExpanded(True)
-            self._file_tree.blockSignals(False)
-            # Load children without re-triggering the expanded signal
-            self._load_folder_children(restore_item)
             # Re-select the previously open image if still present
             if self._current_image_id is not None:
                 cache_key = f"thumb_{self._current_image_id}"
-                item = self._tree_items.get(cache_key)
-                if item is not None:
-                    self._file_tree.setCurrentItem(item)
-                    self._file_tree.scrollToItem(item)
-                    self._current_tree_item = item
+                img_item = self._tree_items.get(cache_key)
+                if img_item is not None:
+                    self._file_tree.setCurrentItem(img_item)
+                    self._file_tree.scrollToItem(img_item)
+                    self._current_tree_item = img_item
                     self._update_nav_buttons()
         else:
             # No previously open folder — auto-open first image in first folder
@@ -2408,20 +2501,16 @@ class ImageBrowserPanel(QWidget):
                 return
             folder_path = str(Path(img.file_path).parent)
 
-        for idx in range(self._file_tree.topLevelItemCount()):
-            folder = self._file_tree.topLevelItem(idx)
-            if folder.data(0, _ROLE_PAYLOAD) != folder_path:
-                continue
-            if not folder.isExpanded():
-                folder.setExpanded(True)
-            else:
-                self._load_folder_children(folder)
+        folder_item = self._find_folder_item_by_path(folder_path)
+        if folder_item is not None:
+            self._expand_ancestors(folder_item)
+            # setExpanded fires _on_tree_item_expanded → loads subfolders + images
+            folder_item.setExpanded(True)
             cache_key = f"thumb_{image_id}"
             item = self._tree_items.get(cache_key)
             if item is not None:
                 self._select_tree_item(item)
                 return
-            break
 
         self._load_image(image_id)
         self._prev_btn.setEnabled(False)
@@ -2823,59 +2912,121 @@ class ImageBrowserPanel(QWidget):
     # Tree construction helpers
     # ──────────────────────────────────────────────────────────────────
 
-    def _make_folder_item(self, summary: FolderSummary) -> QTreeWidgetItem:
-        """Create a top-level folder QTreeWidgetItem with a lazy-load dummy child."""
-        if summary.unknown_faces_count > 0:
-            name_color = "#fab387"
-        else:
-            name_color = "#cdd6f4"
+    def _make_tree_node_item(self, node: _TreeNode) -> QTreeWidgetItem:
+        """Create a QTreeWidgetItem for a hierarchy node (data folder or intermediate).
 
-        if summary.total_images == 0 or summary.processed_images == 0:
-            dot = "○"
-            dot_color = "#45475a"
-        elif summary.unprocessed_images == 0:
-            dot = "●"
-            dot_color = "#a6e3a1"
-        else:
-            dot = "●"
-            dot_color = "#f9e2af"
+        Children are loaded lazily on first expand — a dummy child is added for
+        any node that has either subfolders or images.
+        """
+        if node.has_images:
+            summary = node.summary
+            name_color = "#fab387" if summary.unknown_faces_count > 0 else "#cdd6f4"
 
-        # In Drive mode show "☁ <project name>" instead of the ugly mirror path.
-        display = summary.display_name
-        if (
-            self._drive_client is not None
-            and self._drive_mirror_dir is not None
-            and summary.folder_path == str(self._drive_mirror_dir)
-        ):
-            display = f"☁ {self._drive_project_name}" if self._drive_project_name else "☁ Drive"
+            # In Drive mode show "☁ <project name>" instead of the mirror path.
+            display = node.name
+            if (
+                self._drive_client is not None
+                and self._drive_mirror_dir is not None
+                and node.path == str(self._drive_mirror_dir)
+            ):
+                display = f"☁ {self._drive_project_name}" if self._drive_project_name else "☁ Drive"
 
-        label = f"{display}  ({summary.total_images})"
-        item = QTreeWidgetItem([label])
-        item.setData(0, _ROLE_TYPE, "folder")
-        item.setData(0, _ROLE_PAYLOAD, summary.folder_path)
+            label = f"{display}  ({summary.total_images})"
+            item = QTreeWidgetItem([label])
+            item.setData(0, _ROLE_TYPE, "folder")
+            item.setData(0, _ROLE_PAYLOAD, node.path)
+            item.setForeground(0, QColor(name_color))
 
-        # Colour the folder name
-        item.setForeground(0, QColor(name_color))
-
-        # Tooltip with full stats
-        tip_lines = [
-            f"Összes: {summary.total_images}",
-            f"Feldolgozva: {summary.processed_images}",
-        ]
-        if summary.detected_faces_count > 0:
-            tip_lines += [
-                f"Arcok: {summary.detected_faces_count}",
-                f"Ismeretlen: {summary.unknown_faces_count}",
+            tip_lines = [
+                f"Összes: {summary.total_images}",
+                f"Feldolgozva: {summary.processed_images}",
             ]
-        item.setToolTip(0, "\n".join(tip_lines))
+            if summary.detected_faces_count > 0:
+                tip_lines += [
+                    f"Arcok: {summary.detected_faces_count}",
+                    f"Ismeretlen: {summary.unknown_faces_count}",
+                ]
+            item.setToolTip(0, "\n".join(tip_lines))
+        else:
+            # Intermediate structural node (no images directly in this directory)
+            item = QTreeWidgetItem([node.name])
+            item.setData(0, _ROLE_TYPE, "folder_node")
+            item.setData(0, _ROLE_PAYLOAD, node.path)
+            item.setForeground(0, QColor("#89b4fa"))
 
-        # Dummy child so Qt shows the expand triangle
-        dummy = QTreeWidgetItem(["…"])
-        dummy.setData(0, _ROLE_TYPE, "dummy")
-        dummy.setFlags(Qt.NoItemFlags)
-        item.addChild(dummy)
+        # Store the tree node so _on_tree_item_expanded can access children
+        item.setData(0, _ROLE_TREE_NODE, node)
+
+        # Add a dummy child for any node that can be expanded (has subfolders or images)
+        if node.has_children or node.has_images:
+            dummy = QTreeWidgetItem(["…"])
+            dummy.setData(0, _ROLE_TYPE, "dummy")
+            dummy.setFlags(Qt.NoItemFlags)
+            item.addChild(dummy)
 
         return item
+
+    # ── Tree search helpers ───────────────────────────────────────────
+
+    def _find_folder_item_by_path(self, folder_path: str) -> Optional[QTreeWidgetItem]:
+        """DFS search for the 'folder' item whose payload matches *folder_path*.
+
+        Intermediate 'folder_node' items are expanded on-the-fly as needed so
+        that their lazy-loaded subfolder children become available to search.
+        Only paths that are proper ancestors of *folder_path* are expanded —
+        unrelated branches are never touched.
+        """
+        target = Path(folder_path)
+
+        def _could_contain(item_path: str) -> bool:
+            """True if *folder_path* equals or is a descendant of *item_path*."""
+            try:
+                target.relative_to(item_path)
+                return True
+            except ValueError:
+                return False
+
+        def _search(item: QTreeWidgetItem) -> Optional[QTreeWidgetItem]:
+            item_type = item.data(0, _ROLE_TYPE)
+            item_payload = item.data(0, _ROLE_PAYLOAD) or ""
+
+            if item_type == "folder" and item_payload == folder_path:
+                return item
+
+            if item_type in ("folder", "folder_node") and _could_contain(item_payload):
+                # Expand the item (lazy-load its children) if not already done
+                if not item.isExpanded():
+                    item.setExpanded(True)
+                for i in range(item.childCount()):
+                    result = _search(item.child(i))
+                    if result is not None:
+                        return result
+
+            return None
+
+        for i in range(self._file_tree.topLevelItemCount()):
+            result = _search(self._file_tree.topLevelItem(i))
+            if result is not None:
+                return result
+        return None
+
+    def _expand_ancestors(self, item: QTreeWidgetItem) -> None:
+        """Expand all ancestor items so *item* is visible in the tree."""
+        parent = item.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+
+    def _iter_data_folders(self):
+        """Yield all 'folder' type items in DFS (display) order."""
+        def _recurse(item: QTreeWidgetItem):
+            if item.data(0, _ROLE_TYPE) == "folder":
+                yield item
+            for i in range(item.childCount()):
+                yield from _recurse(item.child(i))
+
+        for i in range(self._file_tree.topLevelItemCount()):
+            yield from _recurse(self._file_tree.topLevelItem(i))
 
     def _make_placeholder_icon(self) -> QIcon:
         px = QPixmap(_TREE_THUMB_SIZE, _TREE_THUMB_SIZE)
@@ -2887,10 +3038,31 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
-        if item.data(0, _ROLE_TYPE) != "folder":
+        item_type = item.data(0, _ROLE_TYPE)
+        if item_type not in ("folder", "folder_node"):
             return
-        # Check if children are already loaded (not just a dummy)
-        if item.childCount() == 1 and item.child(0).data(0, _ROLE_TYPE) == "dummy":
+        # Only act while a dummy placeholder is still present
+        has_dummy = any(
+            item.child(i).data(0, _ROLE_TYPE) == "dummy"
+            for i in range(item.childCount())
+        )
+        if not has_dummy:
+            return
+
+        node: Optional[_TreeNode] = item.data(0, _ROLE_TREE_NODE)
+
+        # Remove the dummy
+        for i in range(item.childCount() - 1, -1, -1):
+            if item.child(i).data(0, _ROLE_TYPE) == "dummy":
+                item.removeChild(item.child(i))
+
+        # Add subfolder/folder_node children first (sorted by name)
+        if node is not None:
+            for child_name in sorted(node.children.keys()):
+                item.addChild(self._make_tree_node_item(node.children[child_name]))
+
+        # For data folders, also lazy-load the images inside that folder
+        if item_type == "folder":
             self._load_folder_children(item)
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
@@ -3144,12 +3316,23 @@ class ImageBrowserPanel(QWidget):
         self.person_data_changed.emit()
 
     def _load_folder_children(self, folder_item: QTreeWidgetItem) -> None:
-        """Replace dummy child with real image child items and start thumbnail workers."""
+        """Append image children to a data folder; subfolder children remain untouched.
+
+        Called after the dummy placeholder has already been removed by
+        _on_tree_item_expanded (or by the restore path).  Safe to call
+        multiple times: stale image/placeholder children are removed first.
+        """
         folder_path: str = folder_item.data(0, _ROLE_PAYLOAD)
 
-        # Remove dummy children
-        while folder_item.childCount():
-            folder_item.removeChild(folder_item.child(0))
+        # Remove any stale image/placeholder children (dummy was already removed
+        # by _on_tree_item_expanded; subfolder nodes are always preserved)
+        to_remove = [
+            folder_item.child(i)
+            for i in range(folder_item.childCount())
+            if folder_item.child(i).data(0, _ROLE_TYPE) in ("dummy", "image", "placeholder")
+        ]
+        for child in to_remove:
+            folder_item.removeChild(child)
 
         # Clear stale tree_items entries that belonged to this folder
         # (identified by checking which image items are still parented here)
@@ -3275,28 +3458,49 @@ class ImageBrowserPanel(QWidget):
             return
 
         idx = parent.indexOfChild(current)
-        folder_idx = self._file_tree.indexOfTopLevelItem(parent)
+        data_folders = list(self._iter_data_folders())
+        parent_idx = next((i for i, f in enumerate(data_folders) if f is parent), -1)
 
-        has_prev = (idx > 0) or (folder_idx > 0)
+        has_prev = (idx > 0) or (parent_idx > 0)
         has_next = (idx < parent.childCount() - 1) or (
-            folder_idx < self._file_tree.topLevelItemCount() - 1
+            0 <= parent_idx < len(data_folders) - 1
         )
 
         self._prev_btn.setEnabled(has_prev)
         self._next_btn.setEnabled(has_next)
 
     def _open_first_image(self) -> None:
-        """Expand the first folder and select its first image."""
-        if self._file_tree.topLevelItemCount() == 0:
-            return
-        first_folder = self._file_tree.topLevelItem(0)
-        if not first_folder.isExpanded():
-            first_folder.setExpanded(True)
-        if first_folder.childCount() == 0:
-            return
-        first_child = first_folder.child(0)
-        if first_child.data(0, _ROLE_TYPE) == "image":
-            self._select_tree_item(first_child)
+        """Expand the path to the first data folder and select its first image.
+
+        Walks down the first branch of the tree, expanding folder_node items
+        lazily until the first 'folder' (data) item is found and opened.
+        """
+        item: Optional[QTreeWidgetItem] = (
+            self._file_tree.topLevelItem(0)
+            if self._file_tree.topLevelItemCount() > 0
+            else None
+        )
+        while item is not None:
+            item_type = item.data(0, _ROLE_TYPE)
+            if item_type == "folder":
+                item.setExpanded(True)  # fires _on_tree_item_expanded → loads images
+                for i in range(item.childCount()):
+                    if item.child(i).data(0, _ROLE_TYPE) == "image":
+                        self._select_tree_item(item.child(i))
+                        return
+                return
+            elif item_type == "folder_node":
+                item.setExpanded(True)  # fires lazy loading of subfolder items
+                # Find the first non-dummy child after expansion
+                next_item = None
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    if child.data(0, _ROLE_TYPE) in ("folder", "folder_node"):
+                        next_item = child
+                        break
+                item = next_item
+            else:
+                break
 
     # ── Overlay control handlers ──────────────────────────────────────────
 
@@ -3390,30 +3594,34 @@ class ImageBrowserPanel(QWidget):
                 self._select_tree_item(candidate)
                 return
 
-        # Cross to next / previous folder
-        folder_idx = self._file_tree.indexOfTopLevelItem(parent)
-        next_folder_idx = folder_idx + direction
+        # Cross to next / previous data folder
+        data_folders = list(self._iter_data_folders())
+        parent_idx = next((i for i, f in enumerate(data_folders) if f is parent), -1)
+        next_folder_idx = parent_idx + direction
 
-        if not (0 <= next_folder_idx < self._file_tree.topLevelItemCount()):
-            return  # Already at first/last folder
+        if not (0 <= next_folder_idx < len(data_folders)):
+            return  # Already at first/last data folder
 
-        next_folder = self._file_tree.topLevelItem(next_folder_idx)
+        next_folder = data_folders[next_folder_idx]
 
         # Collapse current folder, expand the target folder
         parent.setExpanded(False)
+        self._expand_ancestors(next_folder)
         if not next_folder.isExpanded():
             next_folder.setExpanded(True)
-            # _on_tree_item_expanded runs synchronously → children populated now
+            # _on_tree_item_expanded runs synchronously → images loaded now
 
-        n = next_folder.childCount()
-        if n == 0:
+        # Collect image children (subfolder items may appear first)
+        image_children = [
+            next_folder.child(i)
+            for i in range(next_folder.childCount())
+            if next_folder.child(i).data(0, _ROLE_TYPE) == "image"
+        ]
+        if not image_children:
             return
 
-        # Pick first child when going forward, last when going backward
-        child_idx = 0 if direction > 0 else n - 1
-        candidate = next_folder.child(child_idx)
-        if candidate.data(0, _ROLE_TYPE) == "image":
-            self._select_tree_item(candidate)
+        candidate = image_children[0] if direction > 0 else image_children[-1]
+        self._select_tree_item(candidate)
 
     # ──────────────────────────────────────────────────────────────────
     # Thumbnail callbacks

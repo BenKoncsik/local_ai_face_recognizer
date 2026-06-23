@@ -86,46 +86,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "ignored_faces_unknown_source": {"en": "(unknown source)", "hu": "(ismeretlen forrás)"},
     "remove_face":        {"en": "Remove Selected Face", "hu": "Kiválasztott arc eltávolítása"},
     "reassign_face":      {"en": "Reassign Face …", "hu": "Arc áthelyezése …"},
-    "recluster_all":      {"en": "Recognize Unassigned", "hu": "Névtelen arcok felismerése"},
-    "force_rescan":       {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
-    "force_rescan_title": {"en": "Force Full Rescan", "hu": "Teljes újrabeolvasás"},
-    "force_rescan_msg":   {"en": "Delete all detected faces and re-run detection on all {n} images?\n"
-                                 "This will use the current detector (Coral TPU if available).\n"
-                                 "Manually marked faces are preserved.",
-                           "hu": "Törli az összes automatikusan felismert arcot és újra futtatja a detektálást mind a(z) {n} képen?\n"
-                                 "A jelenlegi detektor lesz használva (Coral TPU ha elérhető).\n"
-                                 "A kézzel jelölt arcok megmaradnak."},
-    "redetect_faces":          {"en": "Re-detect Faces", "hu": "Arcok újrakeresése"},
-    "redetect_faces_accurate": {"en": "Re-detect (Accurate)", "hu": "Újrakeresés (pontos)"},
-    "redetect_faces_tip":      {"en": "Re-run face detection on all images, fast mode.\n"
-                                      "Manually marked faces are preserved.",
-                                "hu": "Arcok újrakeresése az összes képen, gyors módban.\n"
-                                      "A kézzel jelölt arcok megmaradnak."},
-    "redetect_faces_accurate_tip": {"en": "Re-run face detection in high-accuracy mode:\n"
-                                         "multiple preprocessing variants, lower confidence threshold.\n"
-                                         "Slower but finds more faces.\n"
-                                         "Manually marked faces are preserved.",
-                                    "hu": "Arcok újrakeresése pontos módban:\n"
-                                         "több képfeldolgozási variáció, alacsonyabb konfidencia küszöb.\n"
-                                         "Lassabb, de több arcot talál.\n"
-                                         "A kézzel jelölt arcok megmaradnak."},
-    "redetect_title":          {"en": "Re-detect Faces", "hu": "Arcok újrakeresése"},
-    "redetect_accurate_title": {"en": "Re-detect Faces — Accurate Mode",
-                                "hu": "Arcok újrakeresése — Pontos mód"},
-    "redetect_msg":            {"en": "Re-run fast face detection on all {n} images?\n"
-                                      "Existing auto-detected faces will be replaced.\n"
-                                      "Manually marked faces are preserved.",
-                                "hu": "Újra futtatja a gyors arcdetektálást mind a(z) {n} képen?\n"
-                                      "A meglévő automatikusan felismert arcok lecserélődnek.\n"
-                                      "A kézzel jelölt arcok megmaradnak."},
-    "redetect_accurate_msg":   {"en": "Re-run face detection in HIGH ACCURACY mode on all {n} images?\n"
-                                      "Uses multiple preprocessing variants (contrast, brightness)\n"
-                                      "and a lower confidence threshold — slower but finds more faces.\n\n"
-                                      "Manually marked faces are preserved.",
-                                "hu": "Újra futtatja az arcdetektálást PONTOS módban mind a(z) {n} képen?\n"
-                                      "Több képfeldolgozási variációt (kontraszt, fényesség) és\n"
-                                      "alacsonyabb konfidencia küszöböt használ — lassabb, de több arcot talál.\n\n"
-                                      "A kézzel jelölt arcok megmaradnak."},
     "people_label":       {"en": "People", "hu": "Személyek"},
     "search_placeholder": {"en": "Search person name …", "hu": "Személy neve …"},
     "n_persons":          {"en": "{n} person(s)", "hu": "{n} személy"},
@@ -134,6 +94,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "window_title":       {"en": "Face-Local — Offline Face Grouping",
                            "hu": "Face-Local — Offline arcfelismerő"},
     "activity_log":       {"en": "Activity Log", "hu": "Tevékenységnapló"},
+    "toggle_log":         {"en": "Log", "hu": "Napló"},
     "main_toolbar":       {"en": "Main", "hu": "Fő eszköztár"},
 
     # ── Screen recording ──────────────────────────────────────────────────────
@@ -779,15 +740,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                           "hu": "Először válasszon ki egy mappát."},
     "busy_title":        {"en": "Busy", "hu": "Foglalt"},
     "busy_msg":          {"en": "A scan is already running.", "hu": "Már fut egy beolvasás."},
-    "recluster_title":   {"en": "Recognize Unassigned Faces",
-                          "hu": "Névtelen arcok felismerése"},
-    "recluster_msg":     {"en": "Recognize unassigned and auto-named faces from the people you have already labeled?\n"
-                                "Existing manually categorized people are preserved.",
-                          "hu": "Felismerje a még névtelen vagy automatikus arcokat a már megjelölt személyek alapján?\n"
-                                "A kézzel kategorizált személyek megmaradnak."},
-    "reclustering":      {"en": "Recognizing faces …", "hu": "Arcok felismerése …"},
-    "recluster_done":    {"en": "Recognition complete: {n} face(s) assigned",
-                          "hu": "Felismerés kész: {n} arc hozzárendelve"},
 
     # ── Dialogs — rename ─────────────────────────────────────────────────────
     "empty_name_title":     {"en": "Empty Name", "hu": "Üres név"},
@@ -1371,8 +1323,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "face_tooltip":      {"en": "<b>{person}</b><br>Face #{id} · confidence {confidence:.2f}<br>Backend: {backend}<br>File: {file}",
                           "hu": "<b>{person}</b><br>Arc #{id} · konfidencia {confidence:.2f}<br>Backend: {backend}<br>Fájl: {file}"},
     "all_faces":         {"en": "All Faces", "hu": "Összes arc"},
-    "recluster_tip":     {"en": "Recognize unresolved faces from labeled people",
-                          "hu": "Névtelen arcok felismerése a megjelölt személyek alapján"},
     "preview_empty":     {"en": "Click a face thumbnail to preview",
                           "hu": "Kattints egy arc bélyegképre az előnézethez"},
     "preview_tip":       {"en": "Click a face to select it\nRight-click for options\nClick empty area to zoom",
@@ -1439,6 +1389,17 @@ _STRINGS: Dict[str, Dict[str, str]] = {
 
     # ── Toolbar — short labels (no emoji) ────────────────────────────────
     "tb_export":              {"en": "Export",       "hu": "Export"},
+    "tb_tools_menu":          {"en": "Tools ▾",      "hu": "Eszközök ▾"},
+    "tb_merge_menu":          {"en": "Merge ▾",      "hu": "Összevonás ▾"},
+    "tb_system_menu":         {"en": "System ▾",     "hu": "Rendszer ▾"},
+    "mb_file":                {"en": "File",         "hu": "Fájl"},
+    "mb_scan":                {"en": "Scan",         "hu": "Szkennelés"},
+    "mb_tools":               {"en": "Tools",        "hu": "Eszközök"},
+    "mb_merge":               {"en": "Merge",        "hu": "Összevonás"},
+    "mb_system":              {"en": "System",       "hu": "Rendszer"},
+    "mb_debug":               {"en": "Debug",        "hu": "Debug"},
+    "mb_ai_viz":              {"en": "AI Decision Visualizer", "hu": "AI döntés vizualizátor"},
+    "mb_nn_graph":            {"en": "Neural Network Graph",   "hu": "Neurális háló gráf"},
 
     # ── Export dialog — collage sections ──────────────────────────────────
     "export_collage_import_group": {"en": "Collage Import",
@@ -2270,14 +2231,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "scanModes.title":
         {"en": "Scan & Maintenance",
          "hu": "Beolvasás és karbantartás"},
-    "scanModes.tab.deep":
-        {"en": "AI Recognition (new)",
-         "hu": "AI felismerés (új)"},
-    "scanModes.tab.classic":
-        {"en": "Classic",
-         "hu": "Klasszikus"},
-
-    # ── Deep-learning (AI) tab ────────────────────────────────────────────
+    # ── Deep-learning (AI) operations ─────────────────────────────────────
     "scanModes.deep.intro":
         {"en": "The new deep-learning engine trains a neural network from the people "
                "you have already categorized, then places unknown faces with them. "
@@ -2398,6 +2352,41 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                "majd újraépül. A kézzel rajzolt keretek és az ember által "
                "megerősített személy-hozzárendelések tanítóadatként megmaradnak.\n\n"
                "Nagy képkönyvtárnál ez sokáig tarthat."},
+
+    # ── Force-rebuild the neural model only (no scan/detection) ────────────
+    "scanModes.rebuildModel.title":
+        {"en": "Force-Rebuild AI Model",
+         "hu": "AI modell kényszerített újraépítése"},
+    "scanModes.rebuildModel.description":
+        {"en": "Deletes the current neural model and trains a brand-new one from "
+               "scratch on your labeled faces, then re-recognizes the unknown "
+               "faces. Face boxes and detections are NOT touched — only the model "
+               "is rebuilt, so it is much faster than a full rebuild. Use this "
+               "after resetting the database, or whenever the model seems off and "
+               "you want a guaranteed fresh model (never reuses the old one).",
+         "hu": "Törli a jelenlegi neurális modellt, és teljesen nulláról épít egy "
+               "újat a felcímkézett arcokból, majd újra felismeri az ismeretlen "
+               "arcokat. Az arckereteket és a detektálást NEM érinti — csak a "
+               "modellt építi újra, így sokkal gyorsabb a teljes újraépítésnél. "
+               "Használd adatbázis-reset után, vagy ha a modell gyanúsan "
+               "viselkedik és garantáltan friss modellt szeretnél (sosem "
+               "használja újra a régit)."},
+    "scanModes.rebuildModel.startButton":
+        {"en": "Rebuild Model from Scratch",
+         "hu": "Modell újraépítése nulláról"},
+    "scanModes.rebuildModel.warning":
+        {"en": "Replaces the AI model — face boxes are kept, only the model is rebuilt",
+         "hu": "Lecseréli az AI modellt — az arckeretek megmaradnak, csak a modell épül újra"},
+    "rebuild_model_confirm_title":
+        {"en": "Force-Rebuild AI Model",
+         "hu": "AI modell kényszerített újraépítése"},
+    "rebuild_model_confirm_msg":
+        {"en": "Delete the current AI model and train a new one from scratch?\n\n"
+               "Your face boxes and person assignments are kept; only the neural "
+               "model is rebuilt and unknown faces are re-recognized.",
+         "hu": "Törli a jelenlegi AI modellt, és teljesen nulláról tanít egy újat?\n\n"
+               "Az arckeretek és a személy-hozzárendelések megmaradnak; csak a "
+               "neurális modell épül újra, és az ismeretlen arcokat újra felismeri."},
 
     # ── Automatic groupings (deep recognition review) ─────────────────────
     "auto_assignments_found_title":
@@ -2609,73 +2598,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         {"en": "Start Scan",
          "hu": "Beolvasás indítása"},
 
-    # full rescan
-    "scanModes.fullRescan.title":
-        {"en": "Force Full Rescan",
-         "hu": "Teljes újrabeolvasás"},
-    "scanModes.fullRescan.description":
-        {"en": "Deletes ALL automatically detected faces — including those already assigned to "
-               "a person — and re-runs fast face detection on every image from scratch. "
-               "Only manually drawn faces are preserved. "
-               "Use this when the detector has changed significantly or the entire face "
-               "database needs to be rebuilt. "
-               "⚠ Warning: all person assignments based on auto-detected faces will be lost.",
-         "hu": "Törli az ÖSSZES automatikusan felismert arcot — beleértve a személyekhez már "
-               "hozzárendelteket is —, majd újra futtatja a gyors arcdetektálást minden képen. "
-               "Csak a kézzel rajzolt arcok maradnak meg. "
-               "Akkor érdemes használni, ha a detektor alapvetően megváltozott, vagy "
-               "az egész arcadatbázist újra kell építeni. "
-               "⚠ Figyelem: az automatikusan felismert arcokhoz tartozó személyesítések elvesznek."},
-    "scanModes.fullRescan.startButton":
-        {"en": "Start Full Rescan",
-         "hu": "Teljes újrabeolvasás indítása"},
-    "scanModes.fullRescan.warning":
-        {"en": "Destructive — named face assignments will be lost",
-         "hu": "Romboló — az elnevezett arc-hozzárendelések elvesznek"},
-
-    # face rescan (fast)
-    "scanModes.faceRescan.title":
-        {"en": "Re-detect Faces (Fast)",
-         "hu": "Arcok újrakeresése (gyors)"},
-    "scanModes.faceRescan.description":
-        {"en": "Removes unnamed, unassigned auto-detected faces and resets all images for "
-               "re-detection. Faces that are already assigned to a named person are kept as "
-               "training examples. Re-runs fast face detection on all images. "
-               "Use this to find faces the detector previously missed while keeping your "
-               "manual person assignments intact.",
-         "hu": "Törli a névtelen, hozzá nem rendelt automatikus arcokat, és minden képet "
-               "újra feldolgozásra jelöl. A már személyhez rendelt arcok megmaradnak "
-               "tanítási példaként. Gyors módban újra futtatja az arcdetektálást minden képen. "
-               "Akkor hasznos, ha a detektor korábban hiányos volt, de a kézi "
-               "személyesítéseket meg akarod tartani."},
-    "scanModes.faceRescan.startButton":
-        {"en": "Start Re-detection (Fast)",
-         "hu": "Újrakeresés indítása (gyors)"},
-
-    # face rescan (accurate)
-    "scanModes.preciseRescan.title":
-        {"en": "Re-detect Faces (Accurate)",
-         "hu": "Arcok újrakeresése (pontos)"},
-    "scanModes.preciseRescan.description":
-        {"en": "Same as fast re-detection but uses high-accuracy mode: runs multiple "
-               "preprocessing variants per image (CLAHE contrast, gamma brightening, "
-               "histogram equalisation, bilateral filtering) with a lower confidence "
-               "threshold, then merges duplicate bounding boxes. "
-               "Finds significantly more faces, especially in dark or low-contrast photos. "
-               "⚠ Considerably slower and more resource-intensive than fast mode.",
-         "hu": "Ugyanaz mint a gyors újrakeresés, de pontos módban: képenként több "
-               "képfeldolgozási variációt futtat (CLAHE kontraszt, gamma-fényesítés, "
-               "hisztogram-kiegyenlítés, bilaterális szűrés), alacsonyabb konfidencia-küszöbbel, "
-               "majd összevonja az átfedő bounding box-okat. "
-               "Lényegesen több arcot talál, különösen sötét vagy gyenge kontrasztú fotókon. "
-               "⚠ Jelentősen lassabb és erőforrásigényesebb a gyors módnál."},
-    "scanModes.preciseRescan.startButton":
-        {"en": "Start Re-detection (Accurate)",
-         "hu": "Újrakeresés indítása (pontos)"},
-    "scanModes.preciseRescan.warning":
-        {"en": "Slow — may take several minutes on large libraries",
-         "hu": "Lassú — nagy képkönyvtárnál több percig tarthat"},
-
     # reset automatically created Unknown identities
     "scanModes.resetUnknowns.title":
         {"en": "Rebuild Unknown Identities",
@@ -2869,6 +2791,60 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "cleanup_empty_unknowns_none":
         {"en": "No empty Unknown persons were found.",
          "hu": "Nem található üres Unknown személy."},
+
+    # ── Re-validate stored faces against landmark geometry ────────────────
+    "scanModes.geomCleanup.title":
+        {"en": "Remove False Faces (Geometry Re-check)",
+         "hu": "Hamis arcok eltávolítása (geometria-ellenőrzés)"},
+    "scanModes.geomCleanup.description":
+        {"en": "Re-checks the stored facial landmarks of already-detected faces and "
+               "removes the geometrically impossible ones — cards, hands, feet and tree "
+               "knots that were detected before the landmark-geometry filter existed. No "
+               "image is re-scanned; it only re-reads the saved landmarks. Faces you "
+               "assigned by hand (and manually drawn boxes) are never deleted — they are "
+               "only listed for review. You get a preview with exact counts before "
+               "anything is removed.",
+         "hu": "Újra ellenőrzi a már detektált arcok elmentett arc-pontjait, és eltávolítja "
+               "a geometriailag lehetetleneket — a kártyákat, kezeket, lábakat és "
+               "fa-göcsörtöket, amelyeket még a landmark-geometria szűrő előtt rögzített a "
+               "rendszer. Nem szkennel újra képet, csak az elmentett pontokat olvassa "
+               "vissza. A kézzel hozzárendelt arcokat (és a kézzel rajzolt kereteket) "
+               "soha nem törli — azokat csak felülvizsgálatra listázza. A törlés előtt "
+               "pontos darabszámot mutató előnézetet kapsz."},
+    "scanModes.geomCleanup.startButton":
+        {"en": "Re-check & Remove False Faces",
+         "hu": "Ellenőrzés és hamis arcok törlése"},
+    "scanModes.geomCleanup.warning":
+        {"en": "Deletes faces — but only impossible-geometry, non-manual ones, after a "
+               "confirmation preview",
+         "hu": "Arcokat töröl — de csak a geometriailag lehetetlen, nem kézi arcokat, "
+               "megerősítő előnézet után"},
+    "geom_cleanup_title":
+        {"en": "Remove False Faces",
+         "hu": "Hamis arcok eltávolítása"},
+    "geom_cleanup_confirm":
+        {"en": "Re-checked {scanned} stored face(s) with landmarks.\n\n"
+               "{n} face(s) have impossible geometry and can be removed "
+               "(unassigned or automatically assigned).\n"
+               "{flagged} manually/confirmed face(s) also look impossible — these are "
+               "kept for your review and NOT deleted.\n\n"
+               "Delete the {n} false face(s) now? This cannot be undone.",
+         "hu": "{scanned} elmentett, arc-pontokkal rendelkező arc ellenőrizve.\n\n"
+               "{n} arc geometriája lehetetlen és eltávolítható "
+               "(hozzárendeletlen vagy automatikusan hozzárendelt).\n"
+               "{flagged} kézi/megerősített arc szintén lehetetlennek tűnik — ezeket "
+               "felülvizsgálatra megtartjuk, és NEM töröljük.\n\n"
+               "Törölhető most a {n} hamis arc? Ez nem vonható vissza."},
+    "geom_cleanup_none":
+        {"en": "Re-checked {scanned} stored face(s) — no removable false faces found.\n"
+               "({flagged} manual/confirmed face(s) look impossible but are kept for "
+               "review.)",
+         "hu": "{scanned} elmentett arc ellenőrizve — nincs eltávolítható hamis arc.\n"
+               "({flagged} kézi/megerősített arc lehetetlennek tűnik, de "
+               "felülvizsgálatra megmarad.)"},
+    "geom_cleanup_status":
+        {"en": "Removed {deleted} false face(s)",
+         "hu": "{deleted} hamis arc eltávolítva"},
 
     # Identity repair results dialog
     "repair_title":      {"en": "Identity Repair — Merge Fragmented Unknowns",
@@ -3443,8 +3419,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "task_pkg_import":      {"en": "Project package import", "hu": "Projektcsomag importálása"},
     "task_quality_reanalyze": {"en": "Face quality re-analysis",
                              "hu": "Arcminőség újraelemzése"},
-    "task_recluster":       {"en": "Re-clustering / recognition",
-                             "hu": "Újraklaszterezés / felismerés"},
     "task_json_export":     {"en": "JSON export",            "hu": "JSON export"},
     "task_csv_export":      {"en": "CSV export",             "hu": "CSV export"},
     "task_image_export":    {"en": "Image export",           "hu": "Képek exportálása"},
@@ -3468,9 +3442,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "Minden befejezett feladat eltávolítása a listából",
     },
     # Background task names migrated from blocking workers
-    "task_scan":            {"en": "Scan & recognition",      "hu": "Beolvasás és felismerés"},
     "task_deep_rescan":     {"en": "AI re-recognition",       "hu": "AI újra-felismerés"},
     "task_deep_rebuild":    {"en": "AI model rebuild",        "hu": "AI modell újraépítés"},
+    "task_deep_rebuild_model": {"en": "AI model rebuild (from scratch)", "hu": "AI modell újraépítése nulláról"},
     "task_deep_train":      {"en": "AI training",             "hu": "AI tanítás"},
     "task_deep_detect":     {"en": "AI face detection",       "hu": "AI arc-detektálás"},
     "task_astro_export":    {"en": "Website export",          "hu": "Weboldal export"},
@@ -3483,6 +3457,10 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "tasks_tab_perf":       {"en": "Performance",             "hu": "Teljesítmény"},
     "perf_app_only":        {"en": "App only",                "hu": "Csak az alkalmazás"},
     "perf_scope_machine":   {"en": "Whole machine",           "hu": "Teljes gép"},
+    "perf_scope_app_short": {"en": "(app)",                   "hu": "(alk.)"},
+    "perf_scope_sys_short": {"en": "(sys)",                   "hu": "(gép)"},
+    "perf_ram_app":         {"en": "App RAM",                 "hu": "Alk. RAM"},
+    "perf_io_app":          {"en": "App I/O",                 "hu": "Alk. I/O"},
     "perf_app_only_tip":    {"en": "Show only this app's usage; click for the whole machine",
                              "hu": "Csak az alkalmazás erőforrásai; kattints az egész géphez"},
     "perf_cpu":             {"en": "CPU",                     "hu": "CPU"},
@@ -3490,21 +3468,23 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "perf_ram":             {"en": "Memory",                  "hu": "Memória"},
     "perf_core":            {"en": "Core {n}",                "hu": "Mag {n}"},
     "perf_app_cpu":         {"en": "App CPU",                 "hu": "Alkalmazás CPU"},
-    "perf_cpu_section":     {"en": "CPU (per core)",          "hu": "CPU (magonként)"},
-    "perf_cpu_section_app": {"en": "CPU (this app)",          "hu": "CPU (az alkalmazás)"},
-    "perf_cpu_total":       {"en": "CPU total",               "hu": "CPU összesen"},
-    "perf_view_combined":   {"en": "Combined",                "hu": "Összevont"},
-    "perf_view_percore":    {"en": "Per core",                "hu": "Magonként"},
+    "perf_cpu_section":     {"en": "CPU per core — whole machine", "hu": "CPU magonként — egész gép"},
+    "perf_cpu_section_app": {"en": "CPU — this app only",         "hu": "CPU — csak az alkalmazás"},
+    "perf_cpu_total":       {"en": "CPU total — whole machine",   "hu": "CPU összesen — egész gép"},
+    "perf_view_combined":   {"en": "Combined",                    "hu": "Összevont"},
+    "perf_view_percore":    {"en": "Per core",                    "hu": "Magonként"},
     "perf_view_combined_tip": {
         "en": "Combined graph vs. one graph per logical core",
         "hu": "Összevont grafikon vs. logikai magonként egy grafikon",
     },
-    "perf_io_section":      {"en": "Disk I/O",                "hu": "Lemez I/O"},
-    "perf_io_read":         {"en": "Read",                    "hu": "Olvasás"},
-    "perf_io_write":        {"en": "Write",                   "hu": "Írás"},
-    "perf_io":              {"en": "I/O",                     "hu": "I/O"},
-    "perf_io_rate":         {"en": "{mb:.1f} MB/s",           "hu": "{mb:.1f} MB/s"},
-    "perf_ram_section":     {"en": "Memory over time",        "hu": "Memória időben"},
+    "perf_io_section_app":  {"en": "Disk I/O — this app only",   "hu": "Lemez I/O — csak az alkalmazás"},
+    "perf_io_section_machine": {"en": "Disk I/O — whole machine","hu": "Lemez I/O — egész gép"},
+    "perf_io_read":         {"en": "Read",                        "hu": "Olvasás"},
+    "perf_io_write":        {"en": "Write",                       "hu": "Írás"},
+    "perf_io":              {"en": "I/O",                         "hu": "I/O"},
+    "perf_io_rate":         {"en": "{mb:.1f} MB/s",               "hu": "{mb:.1f} MB/s"},
+    "perf_ram_section_app":     {"en": "Memory over time — this app only", "hu": "Memória időben — csak az alkalmazás"},
+    "perf_ram_section_machine": {"en": "Memory over time — whole machine", "hu": "Memória időben — egész gép"},
     "perf_na":              {"en": "n/a",                     "hu": "n/a"},
     "perf_psutil_missing":  {"en": "psutil is not installed — performance monitoring is unavailable.",
                               "hu": "A psutil nincs telepítve — a teljesítményfigyelés nem elérhető."},

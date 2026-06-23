@@ -191,3 +191,27 @@ class TestAiFaceDetection:
             w._run_ai_face_detection(result)
         assert result.ai_images_scanned == 2
         assert result.ai_faces_found == 5
+
+    def test_detection_config_is_threaded_to_service(self, monkeypatch):
+        """The verification/geometry gate needs the DetectionConfig — assert the
+        worker forwards it so the AI pass is not the unprotected legacy path."""
+        cfg = AppConfig()
+        cfg.ai_face_detection.enabled = True
+        cfg.ai_face_detection.run_on_rerecognition = True
+        w = ReRecognitionWorker([1], cfg)
+        svc = MagicMock()
+        svc.detect_images.return_value = MagicMock(
+            available=True, images_processed=1, faces_found=0, error=None
+        )
+        monkeypatch.setattr(
+            "app.workers.rerecognition_worker.session_scope",
+            lambda: MagicMock(__enter__=lambda s: svc, __exit__=MagicMock()),
+        )
+        with patch(
+            "app.services.ai_face_detection_service.AiFaceDetectionService",
+            return_value=svc,
+        ) as mock_cls:
+            w._run_ai_face_detection(ReRecognitionResult())
+
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["detection_config"] is cfg.detection

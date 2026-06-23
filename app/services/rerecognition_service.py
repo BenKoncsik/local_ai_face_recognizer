@@ -3,8 +3,8 @@
 Given a set of images, this service re-examines the faces that are still
 *unresolved* (assigned to an auto-named "Unknown N" cluster, to the protected
 catch-all, or to no person) and tries to match each one against the embedding
-profiles of the **named** people — exactly the same profiles and scoring the
-automatic recognizer uses (:class:`app.services.recognition_service.RecognitionService`).
+profiles of the **named** people — using the same embedding profiles and
+scoring the app uses everywhere (:class:`app.services.vector_scoring.FaceVectorScorer`).
 
 Nothing new is ever created: a face can only be merged into an *existing* named
 person.  Matches are classified by score:
@@ -35,9 +35,9 @@ from sqlalchemy.orm import Session
 from app.config import RecognitionConfig
 from app.db.models import Face, RecognitionMergeLog
 from app.services.identity_service import FaceAssignmentSnapshot, IdentityService
-from app.services.recognition_service import (
+from app.services.vector_scoring import (
+    FaceVectorScorer,
     PersonRecognitionProfile,
-    RecognitionService,
 )
 
 log = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ class ReRecognitionService:
         self.max_candidates = max(1, max_candidates)
         # Scorer reused across all faces in a run; rank_persons only reads the
         # profiles passed to it, so a single instance is fine for the whole batch.
-        self._rec = RecognitionService(session, self._rec_cfg)
+        self._rec = FaceVectorScorer(session, self._rec_cfg)
 
     # ------------------------------------------------------------------
     # Loading (require a session)
@@ -172,8 +172,7 @@ class ReRecognitionService:
     def extract_candidates(self, image_ids: Sequence[int]) -> List[FaceData]:
         """Snapshot the unresolved, embedded faces on *image_ids*.
 
-        "Unresolved" mirrors the automatic recognizer's candidate rule
-        (:meth:`RecognitionService._load_candidate_faces`): a face is eligible
+        "Unresolved" mirrors the shared candidate rule: a face is eligible
         when it is not excluded, has an embedding, and is either unassigned or
         belongs to an auto-named / protected person.  Faces already on a named
         person are never touched.

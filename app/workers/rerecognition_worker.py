@@ -122,7 +122,11 @@ class ReRecognitionWorker(QThread):
             )
 
             with session_scope() as session:
-                svc = AiFaceDetectionService(session, cfg)
+                svc = AiFaceDetectionService(
+                    session,
+                    cfg,
+                    detection_config=getattr(self._config, "detection", None),
+                )
                 stats = svc.detect_images(
                     self._image_ids,
                     source=SOURCE_RERECOGNITION,

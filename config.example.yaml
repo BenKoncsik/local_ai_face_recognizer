@@ -47,6 +47,25 @@ detection:
   # use_yunet: true              # set false to force the Caffe/Haar path
   # yunet_model_path: models/face_detection_yunet_2023mar.onnx
 
+  # Validate YuNet's 5 facial landmarks (eyes above nose above mouth, sane
+  # inter-ocular distance, eye-line tilt <= 45°) to reject pareidolia such as
+  # tree knots, hands, feet and card textures. Fails open and is a no-op for
+  # landmark-less detectors (Coral / Caffe / Haar). Set false to disable.
+  landmark_geometry_enabled: true
+
+  # Crop-level re-detection gate (shared by the classic and AI paths). Each
+  # uncertain detection is re-detected inside its own enlarged crop; a box that
+  # cannot be re-confirmed there is dropped as a false positive.
+  verification_enabled: true
+  # confidence >= this trusts the detection and skips the gate (0..1).
+  # verification_confidence_exempt: 0.80
+  # Minimum re-detection score (inside the crop) required to keep a box.
+  # verification_threshold: 0.55
+  # Crop margin added on every side, as a fraction of the box (0.45 ≈ 1.9x).
+  # verification_margin: 0.45
+  # Upscale crops smaller than this many pixels before re-detecting.
+  # verification_min_crop: 160
+
   # IoU threshold for "Find overlapping ? boxes" cleanup candidates.
   # A question-mark box is listed when it overlaps a real named face by at
   # least this much. Typical range: 0.30 - 0.40.
@@ -100,10 +119,12 @@ clustering:
   metric: cosine
 
 recognition:
-  # Learned recognition compares unresolved faces against profiles built from
-  # already labeled people. Existing manually categorized people are preserved.
+  # Embedding (vector) scoring settings shared across the app: the person-selector
+  # match ordering, the reviewable Unknown auto-merge, the image-browser
+  # "re-recognize faces" action and the face diagnostics view. Identity is
+  # actually assigned by the AI (deep) engine; these only score/rank candidates.
 
-  # Minimum combined cosine similarity [0.0 – 1.0] for automatic assignment.
+  # Minimum combined cosine similarity [0.0 – 1.0] used as the scoring base.
   auto_assign_threshold: 0.72
 
   # Required gap between the best and second-best person match.
@@ -128,18 +149,6 @@ recognition:
   adaptive_threshold_enabled: true
   # Absolute floor — the threshold never drops below this value.
   adaptive_min_threshold: 0.55
-
-  # --- Pass 2: Same-image context assist ---
-  # Faces that survive pass 1 unresolved are retried on images where at least
-  # one face has already been manually confirmed. Matching is restricted to
-  # those confirmed persons only, so the candidate pool stays small.
-  same_image_assist_enabled: true
-  # Threshold for the assisted second pass (lower than auto_assign_threshold).
-  same_image_assist_threshold: 0.62
-  # Minimum distinct confirmed persons required on the image to activate assist.
-  same_image_assist_min_confirmed: 1
-  # Margin for the assisted pass (looser — candidate pool is already restricted).
-  same_image_assist_margin: 0.05
 
   # --- Image-browser "re-recognize faces" workflow ---
   # Master switch for the user-triggered re-recognition of Unknown faces from
@@ -224,16 +233,23 @@ ai_face_detection:
   # modifies the classic detection/recognition results; if the model is
   # missing the rest of the app keeps working unaffected.
   enabled: true
-  # Minimum detector confidence for a detection to be recorded.
-  confidence_threshold: 0.60
-  # Minimum face bounding-box width AND height in pixels.
-  min_face_size: 20
+  # Minimum detector confidence for a detection to be recorded. Matches the
+  # classic path (0.65) so the AI pass is not more permissive — a lower value
+  # is the single biggest driver of false positives (cards, hands, knots).
+  confidence_threshold: 0.65
+  # Minimum face bounding-box width AND height in pixels. 36 is a floor for
+  # trustworthy landmark geometry while still surfacing genuinely small faces.
+  min_face_size: 36
   # Optional explicit path to the YuNet .onnx model; null → the bundled
   # default (models/face_detection_yunet_2023mar.onnx).
   model_path: null
   # Also run this pass when the image browser's "re-recognize faces" action
   # is used (best-effort: an AI failure never breaks re-recognition).
   run_on_rerecognition: true
+  # Re-run the crop-level YuNet verification gate (reusing the
+  # detection.verification_* settings) to reject false positives that fire once
+  # on the full image but cannot be re-confirmed in their own enlarged crop.
+  verification_enabled: true
 
 overlap_resolution:
   # Same-image overlapping-box cleanup in the AI pipeline. When the same

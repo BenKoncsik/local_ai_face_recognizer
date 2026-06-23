@@ -87,7 +87,7 @@ def test_embed_face_single(tmp_path):
 def test_embed_manual_face_makes_face_comparable(tmp_path):
     """embed_manual_face() gives a manual face a usable embedding so it can be
     scored for face-match ordering in the person-assign UI."""
-    from app.services.recognition_service import RecognitionService
+    from app.services.vector_scoring import FaceVectorScorer
 
     db_path = tmp_path / "faces.db"
     init_db(db_path)
@@ -104,7 +104,7 @@ def test_embed_manual_face_makes_face_comparable(tmp_path):
         embedding = face.get_embedding()
         assert embedding is not None
         # score_persons must accept the manual face's embedding without error.
-        scores = RecognitionService(session, None).score_persons(embedding)
+        scores = FaceVectorScorer(session, None).score_persons(embedding)
         assert isinstance(scores, dict)
 
 

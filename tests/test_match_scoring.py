@@ -127,7 +127,7 @@ def test_fallback_scores_ranks_similar_people(db):
     assert scores[anna.id] == pytest.approx(1.0, abs=1e-5)
 
 
-@patch("app.services.match_scoring.RecognitionService")
+@patch("app.services.match_scoring.FaceVectorScorer")
 def test_match_scores_for_embedding_uses_recognition_service(mock_cls, db):
     mock_svc = MagicMock()
     mock_svc.score_persons.return_value = {1: 0.9, 2: 0.1}
@@ -142,7 +142,7 @@ def test_match_scores_for_embedding_uses_recognition_service(mock_cls, db):
     mock_svc.score_persons.assert_called_once()
 
 
-@patch("app.services.match_scoring.RecognitionService")
+@patch("app.services.match_scoring.FaceVectorScorer")
 def test_match_scores_for_embedding_falls_back_to_centroids(mock_cls, db):
     mock_svc = MagicMock()
     mock_svc.score_persons.return_value = {}
@@ -201,7 +201,7 @@ def test_match_scores_for_faces_averages_selected_faces(db):
     mock_embed.assert_called_once()
 
 
-@patch("app.services.match_scoring.RecognitionService")
+@patch("app.services.match_scoring.FaceVectorScorer")
 def test_match_scores_for_person_uses_profile_centroid(mock_cls, db):
     profile = MagicMock()
     profile.centroid = _vec(0)

@@ -565,3 +565,78 @@ class TestReviewActions:
 
         with session_scope() as s:
             assert DeepRecognitionService(s, cfg).list_auto_assignments() == []
+
+
+class TestStaleModelGuards:
+    """A model trained on a previous DB must never assign to vanished people."""
+
+    def _train_two(self, tmp_path):
+        from app.deep.classifier import DeepFaceClassifier
+
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            anna, bela = _seed_two_persons(s, img)
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train()
+        return cfg, anna, bela
+
+    def test_delete_model_removes_file(self, tmp_db, tmp_path):
+        cfg, _, _ = self._train_two(tmp_path)
+        with session_scope() as s:
+            svc = DeepRecognitionService(s, cfg)
+            assert svc.model_path.exists()
+            assert svc.delete_model() is True
+            assert not svc.model_path.exists()
+            # Idempotent: a second delete is a no-op, not an error.
+            assert svc.delete_model() is False
+
+    def test_recognition_skipped_when_all_people_vanished(self, tmp_db, tmp_path):
+        """Fresh DB + old model: every trained person is gone → skip entirely."""
+        from app.deep.classifier import DeepFaceClassifier
+
+        cfg, anna, bela = self._train_two(tmp_path)
+
+        with session_scope() as s:
+            # Simulate a reset DB: drop both people and their faces, keep model.
+            s.query(Face).delete()
+            s.query(Person).filter(Person.id.in_([anna, bela])).delete()
+
+        with session_scope() as s:
+            img = _add_image(s, "/fresh.jpg")
+            candidate = _add_face(s, img, None, _vec(0, seed=7), source=None)
+
+        with session_scope() as s:
+            clf = DeepFaceClassifier(cfg)
+            assert clf.load(DeepRecognitionService(s, cfg).model_path)
+            run = TrainingRun(mode="rescan")
+            s.add(run)
+            s.flush()
+            stats = DeepRecognitionService(s, cfg).recognize(clf, run)
+            assert stats.n_assigned == 0
+            assert s.get(Face, candidate).person_id is None
+
+    def test_face_skipped_when_predicted_person_deleted(self, tmp_db, tmp_path):
+        """Model still has a valid person, but predicts a since-deleted one."""
+        from app.deep.classifier import DeepFaceClassifier
+
+        cfg, anna, bela = self._train_two(tmp_path)
+
+        with session_scope() as s:
+            # Only Béla is removed; Anna still exists so the model isn't fully
+            # stale — but a face matching Béla must not become a ghost link.
+            s.query(Face).filter(Face.person_id == bela).delete()
+            s.query(Person).filter(Person.id == bela).delete()
+            img = _add_image(s, "/fresh2.jpg")
+            candidate = _add_face(s, img, None, _vec(30, seed=7), source=None)
+
+        with session_scope() as s:
+            clf = DeepFaceClassifier(cfg)
+            assert clf.load(DeepRecognitionService(s, cfg).model_path)
+            run = TrainingRun(mode="rescan")
+            s.add(run)
+            s.flush()
+            stats = DeepRecognitionService(s, cfg).recognize(clf, run)
+            assert stats.n_skipped_unknown_person >= 1
+            face = s.get(Face, candidate)
+            assert face.person_id != bela

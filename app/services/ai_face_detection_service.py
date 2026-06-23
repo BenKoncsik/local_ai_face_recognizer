@@ -23,9 +23,10 @@ from typing import Callable, List, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
-from app.config import AiFaceDetectionConfig
+from app.config import AiFaceDetectionConfig, DetectionConfig
 from app.db.models import AiFaceDetection, Image
-from app.detectors.base import FaceDetector
+from app.detectors.base import Detection, FaceDetector
+from app.services.face_verification_service import FaceVerifier
 from app.services.image_library_service import resolve_image_path
 from app.utils.image_utils import load_image_bgr_normalized
 
@@ -45,6 +46,11 @@ class AiFaceDetectionStats:
     images_processed: int = 0
     images_failed: int = 0
     faces_found: int = 0
+    # Detections discarded by the crop-level verification gate (false positives
+    # YuNet fired once on the full image but could not re-confirm in their own
+    # crop).  Geometry rejects happen inside the detector and are not counted
+    # here; this is the visible signal that the false-positive gate is working.
+    faces_dropped_verification: int = 0
     # Set when the detector could not be created (missing model etc.); the
     # run is then a no-op and the caller should treat it as "AI unavailable".
     error: Optional[str] = None
@@ -58,11 +64,19 @@ class AiFaceDetectionService:
     """Runs the pretrained deep-learning face detector and stores its findings.
 
     Args:
-        session:  SQLAlchemy session.
-        config:   :class:`~app.config.AiFaceDetectionConfig`.
-        detector: Optional pre-built detector (tests / reuse).  ``None`` →
-                  a YuNet detector is created lazily on the first run; a
-                  creation failure is reported on the stats, never raised.
+        session:          SQLAlchemy session.
+        config:           :class:`~app.config.AiFaceDetectionConfig`.
+        detector:         Optional pre-built detector (tests / reuse).  ``None``
+                          → a YuNet detector is created lazily on the first run;
+                          a creation failure is reported on the stats, never
+                          raised.
+        detection_config: Optional :class:`~app.config.DetectionConfig` — when
+                          provided (and ``config.verification_enabled``), each
+                          uncertain detection is re-checked by the crop-level
+                          :class:`~app.services.face_verification_service.FaceVerifier`
+                          using the tuned ``verification_*`` settings.  ``None``
+                          keeps the legacy raw-detector behaviour.
+        verifier:         Optional pre-built verifier (tests / reuse).
     """
 
     def __init__(
@@ -70,11 +84,16 @@ class AiFaceDetectionService:
         session: Session,
         config: AiFaceDetectionConfig,
         detector: Optional[FaceDetector] = None,
+        detection_config: Optional[DetectionConfig] = None,
+        verifier: Optional[FaceVerifier] = None,
     ) -> None:
         self._session = session
         self._config = config
         self._detector = detector
         self._detector_error: Optional[str] = None
+        self._detection_config = detection_config
+        self._verifier = verifier
+        self._verifier_built = verifier is not None
 
     # ------------------------------------------------------------------
     # Detector handling
@@ -89,12 +108,80 @@ class AiFaceDetectionService:
         try:
             from app.detectors.yunet_detector import YuNetDetector
 
-            self._detector = YuNetDetector(model_path=self._config.model_path)
+            # Honour detection.landmark_geometry_enabled here too — without it
+            # the AI path would always validate geometry regardless of config,
+            # diverging from the classic factory-built detector.  Falls back to
+            # the constructor default (True) on the legacy no-detection_config
+            # path.
+            validate_geometry = (
+                self._detection_config.landmark_geometry_enabled
+                if self._detection_config is not None
+                else True
+            )
+            self._detector = YuNetDetector(
+                model_path=self._config.model_path,
+                validate_geometry=validate_geometry,
+            )
         except Exception as exc:  # noqa: BLE001 — missing model, broken cv2…
             self._detector_error = str(exc)
             log.error("AI face detector unavailable: %s", exc)
             return None
         return self._detector
+
+    def _get_verifier(self) -> Optional[FaceVerifier]:
+        """Lazily build the crop-level false-positive gate, or None.
+
+        Reuses the already-built AI YuNet as the verifier's detector (no second
+        ONNX load) and the tuned ``detection.verification_*`` settings.  Never
+        raises — an unavailable verifier just means the gate is skipped.
+        """
+        if not self._config.verification_enabled or self._detection_config is None:
+            return None
+        if not self._verifier_built:
+            self._verifier_built = True
+            try:
+                from app.detectors.yunet_detector import YuNetDetector
+
+                detector = self._get_detector()
+                primary = detector if isinstance(detector, YuNetDetector) else None
+                self._verifier = FaceVerifier(
+                    self._detection_config, detector=primary
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("AI verification gate unavailable: %s", exc)
+                self._verifier = None
+        if self._verifier is None or not self._verifier.available:
+            return None
+        return self._verifier
+
+    def _filter_verified(
+        self, image_bgr, detections: List[Detection]
+    ) -> List[Detection]:
+        """Drop detections that fail the crop-level verification gate.
+
+        Detections at/above ``verification_confidence_exempt`` are trusted
+        as-is; the rest must be re-found (and refined) by the verifier inside
+        their own enlarged crop.  A no-op when the gate is unavailable.
+        """
+        verifier = self._get_verifier()
+        if verifier is None:
+            return detections
+
+        exempt = self._detection_config.verification_confidence_exempt
+        kept: List[Detection] = []
+        for det in detections:
+            if det.confidence >= exempt:
+                kept.append(det)
+                continue
+            refined = verifier.verify(image_bgr, det)
+            if refined is not None:
+                kept.append(refined)
+        if len(kept) != len(detections):
+            log.debug(
+                "AI verify: %d detection(s) → %d after crop-level gate",
+                len(detections), len(kept),
+            )
+        return kept
 
     # ------------------------------------------------------------------
     # Detection
@@ -153,7 +240,7 @@ class AiFaceDetectionService:
 
             try:
                 stats.faces_found += self._process_image(
-                    image, detector, stats.run_id, source
+                    image, detector, stats.run_id, source, stats
                 )
                 stats.images_processed += 1
             except Exception as exc:  # noqa: BLE001
@@ -163,10 +250,11 @@ class AiFaceDetectionService:
                 self._session.commit()
 
         log.info(
-            "AI face detection (%s): %d face(s) on %d image(s), %d failed "
-            "[detector=%s run=%s]",
+            "AI face detection (%s): %d face(s) on %d image(s), %d dropped by "
+            "verification gate, %d failed [detector=%s run=%s]",
             source, stats.faces_found, stats.images_processed,
-            stats.images_failed, stats.detector_name, stats.run_id,
+            stats.faces_dropped_verification, stats.images_failed,
+            stats.detector_name, stats.run_id,
         )
         return stats
 
@@ -176,6 +264,7 @@ class AiFaceDetectionService:
         detector: FaceDetector,
         run_id: str,
         source: str,
+        stats: Optional[AiFaceDetectionStats] = None,
     ) -> int:
         """Detect faces on one image and replace its stored AI results."""
         path = resolve_image_path(image)
@@ -193,6 +282,10 @@ class AiFaceDetectionService:
             confidence_threshold=self._config.confidence_threshold,
             min_face_size=self._config.min_face_size,
         )
+        before_gate = len(detections)
+        detections = self._filter_verified(img_bgr, detections)
+        if stats is not None:
+            stats.faces_dropped_verification += before_gate - len(detections)
 
         self._session.query(AiFaceDetection).filter(
             AiFaceDetection.image_id == image.id

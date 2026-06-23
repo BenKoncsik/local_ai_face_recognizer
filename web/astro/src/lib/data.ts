@@ -182,7 +182,7 @@ export interface FamilyTreePerson {
   parents: number[];
   children: number[];
   spouses: number[];
-  spouseMarriageDates: Record<string, string>;
+  spouseMarriageDates: Record<string, { date: string; place: string }>;
 }
 
 export interface FamilyTree {

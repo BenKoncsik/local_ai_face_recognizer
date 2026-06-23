@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from app.config import AiFaceDetectionConfig
+from app.config import AiFaceDetectionConfig, DetectionConfig
 from app.db.database import init_db, session_scope
 from app.db.models import AiFaceDetection, Face, Image
 from app.detectors.base import Detection, FaceDetector
@@ -135,7 +135,7 @@ def test_missing_model_reports_error_without_raising(tmp_path, monkeypatch):
     image_id = _seed_image(tmp_path)
 
     class _BrokenYuNet:
-        def __init__(self, model_path=None):
+        def __init__(self, model_path=None, validate_geometry=True):
             raise FileNotFoundError("YuNet model not found")
 
     monkeypatch.setattr(
@@ -183,6 +183,163 @@ def test_disabled_config_is_a_noop(tmp_path):
     assert not stats.available
     with session_scope() as session:
         assert session.query(AiFaceDetection).count() == 0
+
+
+class _FakeVerifier:
+    """Crop-level gate stand-in: confirms or rejects every uncertain box."""
+
+    available = True
+
+    def __init__(self, find: bool) -> None:
+        self._find = find
+
+    def verify(self, image_bgr, det):
+        return det if self._find else None
+
+
+def test_verifier_drops_unconfirmed_low_confidence(tmp_path):
+    """Below the exempt confidence, a box that the verifier cannot confirm dies."""
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+
+    # _FakeAiDetector yields conf 0.91 (>= 0.80 exempt → kept) and 0.74
+    # (< exempt → must be re-confirmed; the verifier rejects it).
+    with session_scope() as session:
+        stats = AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(),
+            detector=_FakeAiDetector(),
+            detection_config=DetectionConfig(),
+            verifier=_FakeVerifier(find=False),
+        ).detect_images([image_id])
+
+    assert stats.faces_found == 1
+    with session_scope() as session:
+        rows = session.query(AiFaceDetection).filter_by(image_id=image_id).all()
+        assert len(rows) == 1
+        assert rows[0].confidence == 0.91  # the exempt box survived
+
+
+def test_verification_disabled_keeps_all(tmp_path):
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+
+    with session_scope() as session:
+        stats = AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(verification_enabled=False),
+            detector=_FakeAiDetector(),
+            detection_config=DetectionConfig(),
+            verifier=_FakeVerifier(find=False),
+        ).detect_images([image_id])
+
+    assert stats.faces_found == 2
+    with session_scope() as session:
+        assert session.query(AiFaceDetection).count() == 2
+
+
+def test_without_detection_config_gate_is_skipped(tmp_path):
+    """Back-compat: no DetectionConfig → no verification, all boxes persisted."""
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+
+    with session_scope() as session:
+        stats = AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(),
+            detector=_FakeAiDetector(),
+            verifier=_FakeVerifier(find=False),  # present but never reached
+        ).detect_images([image_id])
+
+    assert stats.faces_found == 2
+    with session_scope() as session:
+        assert session.query(AiFaceDetection).count() == 2
+
+
+def test_verifier_keeps_confirmed_low_confidence(tmp_path):
+    """Non-exempt boxes the verifier CONFIRMS are kept (the positive branch)."""
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+
+    # Both boxes are below the 0.80 exempt threshold, so both must pass through
+    # the verifier; with find=True both are confirmed and persisted.
+    detector = _FakeAiDetector(detections=[
+        Detection(x=10, y=12, w=64, h=64, confidence=0.74),
+        Detection(x=120, y=20, w=58, h=60, confidence=0.70),
+    ])
+    with session_scope() as session:
+        stats = AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(),
+            detector=detector,
+            detection_config=DetectionConfig(),
+            verifier=_FakeVerifier(find=True),
+        ).detect_images([image_id])
+
+    assert stats.faces_found == 2
+    assert stats.faces_dropped_verification == 0
+    with session_scope() as session:
+        assert session.query(AiFaceDetection).filter_by(image_id=image_id).count() == 2
+
+
+def test_dropped_count_is_recorded_on_stats(tmp_path):
+    """The verification-gate drop is surfaced on stats (observability)."""
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+
+    # 0.91 is exempt (kept), 0.74 is re-checked and rejected → one drop.
+    with session_scope() as session:
+        stats = AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(),
+            detector=_FakeAiDetector(),
+            detection_config=DetectionConfig(),
+            verifier=_FakeVerifier(find=False),
+        ).detect_images([image_id])
+
+    assert stats.faces_found == 1
+    assert stats.faces_dropped_verification == 1
+
+
+class _RecordingYuNet(FaceDetector):
+    """Records constructor kwargs so we can assert config propagation."""
+
+    instances: list["_RecordingYuNet"] = []
+
+    def __init__(self, model_path=None, validate_geometry=True):
+        self.model_path = model_path
+        self.validate_geometry = validate_geometry
+        _RecordingYuNet.instances.append(self)
+
+    @property
+    def backend_name(self) -> str:
+        return "yunet-rec"
+
+    def detect(self, image_bgr, confidence_threshold=0.5, min_face_size=50):
+        return [Detection(x=10, y=12, w=64, h=64, confidence=0.95)]
+
+
+def test_landmark_geometry_flag_reaches_lazy_detector(tmp_path, monkeypatch):
+    """detection.landmark_geometry_enabled must reach the AI path's own YuNet,
+    and the verifier must REUSE that detector (no second ONNX load)."""
+    init_db(tmp_path / "faces.db")
+    image_id = _seed_image(tmp_path)
+    _RecordingYuNet.instances = []
+    monkeypatch.setattr(
+        "app.detectors.yunet_detector.YuNetDetector", _RecordingYuNet
+    )
+
+    with session_scope() as session:
+        AiFaceDetectionService(
+            session,
+            AiFaceDetectionConfig(),
+            detection_config=DetectionConfig(landmark_geometry_enabled=False),
+        ).detect_images([image_id])
+
+    # Exactly one YuNet was built (reused as the verifier's primary detector)…
+    assert len(_RecordingYuNet.instances) == 1
+    # …and the kill-switch was honoured (previously hard-wired to True).
+    assert _RecordingYuNet.instances[0].validate_geometry is False
 
 
 def test_classic_face_rows_and_flags_stay_untouched(tmp_path):

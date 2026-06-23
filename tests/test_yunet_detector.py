@@ -112,6 +112,37 @@ class TestYuNetParsing:
         assert det.detect(np.zeros((50, 50, 3), np.uint8), min_face_size=50) == []
 
 
+# A geometrically valid frontal-face landmark constellation in an 80×80 box.
+_VALID_LMS = [[26, 32], [54, 32], [40, 46], [30, 60], [50, 60]]
+# A scrambled (vertically collinear) constellation — what a tree knot / hand
+# produces; passes the size+aspect window but not the geometry gate.
+_SCRAMBLED_LMS = [[40, 10], [40, 20], [40, 30], [40, 40], [40, 50]]
+
+
+class TestYuNetGeometry:
+    def _detector(self, monkeypatch, faces, *, validate_geometry=True):
+        monkeypatch.setattr(
+            YuNetDetector, "_resolve_model_path", staticmethod(lambda *_: Path("fake.onnx"))
+        )
+        monkeypatch.setattr("cv2.FaceDetectorYN.create", lambda *a, **k: _FakeNet(faces))
+        return YuNetDetector(validate_geometry=validate_geometry)
+
+    def test_geometry_keeps_valid_landmarks(self, monkeypatch):
+        faces = np.stack([_fake_row(0, 0, 80, 80, _VALID_LMS, 0.9)])
+        det = self._detector(monkeypatch, faces)
+        assert len(det.detect(np.zeros((200, 200, 3), np.uint8), min_face_size=10)) == 1
+
+    def test_geometry_rejects_scrambled_landmarks(self, monkeypatch):
+        faces = np.stack([_fake_row(0, 0, 80, 80, _SCRAMBLED_LMS, 0.9)])
+        det = self._detector(monkeypatch, faces)
+        assert det.detect(np.zeros((200, 200, 3), np.uint8), min_face_size=10) == []
+
+    def test_geometry_disabled_keeps_scrambled(self, monkeypatch):
+        faces = np.stack([_fake_row(0, 0, 80, 80, _SCRAMBLED_LMS, 0.9)])
+        det = self._detector(monkeypatch, faces, validate_geometry=False)
+        assert len(det.detect(np.zeros((200, 200, 3), np.uint8), min_face_size=10)) == 1
+
+
 @pytest.mark.skipif(
     not resource_path(_DEFAULT_MODEL).exists(),
     reason="YuNet ONNX model not present in models/",

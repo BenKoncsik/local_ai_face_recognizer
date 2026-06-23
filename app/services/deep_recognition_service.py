@@ -89,6 +89,9 @@ class DeepRecognitionStats:
     n_rejected_correction: int = 0    # vetoed by a user "different" judgement
     n_skipped_low_confidence: int = 0  # detector confidence too low to trust
     n_no_embedding: int = 0
+    # Predicted a person that no longer exists in the DB — a stale model trained
+    # on a previous database. Skipped instead of creating a ghost assignment.
+    n_skipped_unknown_person: int = 0
 
 
 @dataclass
@@ -153,6 +156,24 @@ class DeepRecognitionService:
     @property
     def model_path(self) -> Path:
         return self._model_dir / _MODEL_FILENAME
+
+    def delete_model(self) -> bool:
+        """Delete the persisted model file so the next train starts from scratch.
+
+        Returns True when a file was removed.  Used by the "rebuild from scratch"
+        flow: without this, an empty/unlabeled DB would leave the previous
+        model on disk, and any disk-loading path would still trust its stale,
+        now-deleted people.  Never raises.
+        """
+        path = self.model_path
+        try:
+            if path.exists():
+                path.unlink()
+                log.info("Deep model deleted (rebuild from scratch): %s", path)
+                return True
+        except OSError as exc:
+            log.warning("Could not delete deep model %s: %s", path, exc)
+        return False
 
     def decision_for_face(self, face_id: int) -> Optional[Dict]:
         """Recompute the deep decision graph for *face_id* from the saved model.
@@ -287,6 +308,7 @@ class DeepRecognitionService:
             and classifier.load(self.model_path)
             and classifier.fingerprint == fingerprint
             and self._architecture_unchanged(classifier)
+            and self._model_persons_exist(classifier)
         ):
             stats.reused_existing_model = True
             report = classifier.report
@@ -315,6 +337,18 @@ class DeepRecognitionService:
         self._session.commit()
         return run, stats, classifier
 
+    def _model_persons_exist(self, classifier: DeepFaceClassifier) -> bool:
+        """False when none of the model's people still exist in the database.
+
+        Prevents reusing a stale on-disk model (trained on a previous DB) after
+        the database was reset — such a model must be retrained from scratch.
+        """
+        ids = set(classifier.person_ids)
+        if not ids:
+            return True  # empty model carries no stale people
+        existing = {pid for (pid,) in self._session.query(Person.id).all()}
+        return bool(ids & existing)
+
     def _architecture_unchanged(self, classifier: DeepFaceClassifier) -> bool:
         """False when the saved ensemble was trained with a different layer
         layout than the current config — the model must then be rebuilt even
@@ -341,6 +375,22 @@ class DeepRecognitionService:
         stats = DeepRecognitionStats()
         if not classifier.is_trained:
             log.info("Deep recognition skipped: no trained model")
+            return stats
+
+        # Guard against a stale model: one trained on a previous database whose
+        # people no longer exist (e.g. the DB was reset but the model kept).
+        # Assigning to those vanished person IDs would create ghost links.
+        valid_person_ids = {
+            pid for (pid,) in self._session.query(Person.id).all()
+        }
+        model_person_ids = set(classifier.person_ids)
+        if model_person_ids and not (model_person_ids & valid_person_ids):
+            log.warning(
+                "Deep recognition skipped: the model was trained on people that "
+                "no longer exist in this database (model persons=%s). Rebuild the "
+                "AI model from scratch.",
+                sorted(model_person_ids),
+            )
             return stats
 
         candidates = self._load_candidate_faces()
@@ -389,6 +439,10 @@ class DeepRecognitionService:
             if prediction.person_id in vetoes.get(face.id, set()):
                 stats.n_rejected_correction += 1
                 continue
+            # Never attach a face to a person that no longer exists (stale model).
+            if prediction.person_id not in valid_person_ids:
+                stats.n_skipped_unknown_person += 1
+                continue
 
             previous_person_id = face.person_id
             previous_person_name = (
@@ -426,12 +480,13 @@ class DeepRecognitionService:
         self._session.commit()
         log.info(
             "Deep recognition: %d/%d assigned (outlier=%d, threshold=%d, margin=%d, "
-            "prototype=%d, correction-veto=%d, low-conf=%d, no-emb=%d)",
+            "prototype=%d, correction-veto=%d, low-conf=%d, no-emb=%d, "
+            "unknown-person=%d)",
             stats.n_assigned, stats.n_candidates,
             stats.n_rejected_outlier, stats.n_rejected_threshold,
             stats.n_rejected_margin, stats.n_rejected_prototype,
             stats.n_rejected_correction, stats.n_skipped_low_confidence,
-            stats.n_no_embedding,
+            stats.n_no_embedding, stats.n_skipped_unknown_person,
         )
         return stats
 
@@ -465,10 +520,16 @@ class DeepRecognitionService:
         recognize_progress_cb=None,
         debug_cb=None,
     ) -> TrainAndRecognizeResult:
-        """Convenience wrapper: one full continual-learning cycle."""
+        """Convenience wrapper: one full continual-learning cycle.
+
+        A *rebuild* always retrains from scratch (``force``), never reusing the
+        previous on-disk model — the rebuild flow has already deleted it.
+        """
         result = TrainAndRecognizeResult()
         run, train_stats, classifier = self.train(
-            mode=mode, progress_cb=train_progress_cb
+            mode=mode,
+            progress_cb=train_progress_cb,
+            force=(mode in ("rebuild", "rebuild_model")),
         )
         result.training_run_id = run.id
         result.train = train_stats

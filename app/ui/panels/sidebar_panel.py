@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import cv2
 from PySide6.QtCore import Qt, Signal
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -342,10 +341,6 @@ class SidebarPanel(QWidget):
 
         layout.addWidget(search_box, stretch=1)
 
-        self._recluster_btn = QPushButton(t("recluster_all"))
-        self._recluster_btn.setToolTip(t("recluster_tip"))
-        layout.addWidget(self._recluster_btn)
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -364,9 +359,6 @@ class SidebarPanel(QWidget):
         ]
         self._person_select.set_entries(entries)
         self._count_label.setText(t("n_persons", n=len(persons)))
-
-    def set_recluster_callback(self, cb: Callable) -> None:
-        self._recluster_btn.clicked.connect(cb)
 
     def current_person_id(self) -> Optional[int]:
         return self._person_select.current_person_id()

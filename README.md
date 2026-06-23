@@ -322,7 +322,11 @@ Key thresholds:
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `detection.confidence_threshold` | `0.5` | Lower → more detections, more false positives |
+| `detection.confidence_threshold` | `0.65` | Lower → more detections, more false positives |
+| `detection.landmark_geometry_enabled` | `true` | Reject non-faces (cards, hands, tree knots) via landmark geometry |
+| `ai_face_detection.confidence_threshold` | `0.65` | AI pass detector confidence floor |
+| `ai_face_detection.min_face_size` | `36` | AI pass minimum face box width/height (px) |
+| `ai_face_detection.verification_enabled` | `true` | Re-confirm AI detections in their own crop to drop false positives |
 | `clustering.epsilon` | `0.4` | Lower → stricter matching, more clusters |
 | `clustering.min_samples` | `2` | Higher → singletons become noise |
 | `scan.thumbnail_size` | `[128, 128]` | Larger → better visual quality, more disk space |
@@ -653,7 +657,11 @@ Fontos küszöbértékek:
 
 | Paraméter | Alapértelmezett | Hatás |
 |-----------|------------------|-------|
-| `detection.confidence_threshold` | `0.5` | Alacsonyabb érték → több találat, több hamis pozitív |
+| `detection.confidence_threshold` | `0.65` | Alacsonyabb érték → több találat, több hamis pozitív |
+| `detection.landmark_geometry_enabled` | `true` | Nem-arcok (kártya, kéz, fa-göcsört) kiszűrése a landmark-geometria alapján |
+| `ai_face_detection.confidence_threshold` | `0.65` | Az AI-menet detektor-konfidencia küszöbe |
+| `ai_face_detection.min_face_size` | `36` | Az AI-menet minimális arc-méret (px) |
+| `ai_face_detection.verification_enabled` | `true` | Az AI-találatok újra-ellenőrzése saját kivágásban a hamis pozitívok ellen |
 | `clustering.epsilon` | `0.4` | Alacsonyabb érték → szigorúbb egyezés, több klaszter |
 | `clustering.min_samples` | `2` | Magasabb érték → az egyedülálló elemek zajnak számítanak |
 | `scan.thumbnail_size` | `[128, 128]` | Nagyobb érték → jobb vizuális minőség, több lemezhasználat |
