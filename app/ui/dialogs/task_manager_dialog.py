@@ -238,16 +238,30 @@ class PerformancePanel(QWidget):
         self._io_last: Optional[tuple] = None       # (read_bytes, write_bytes)
         self._io_last_wall: Optional[float] = None
 
+        self._psutil = None
         try:
             import psutil
+        except ImportError:
+            try:
+                import subprocess, sys  # noqa: E401
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "psutil>=5.9"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                import psutil  # type: ignore[no-redef]
+            except Exception:  # noqa: BLE001
+                psutil = None  # type: ignore[assignment]
 
-            self._psutil = psutil
-            self._proc = psutil.Process()
-            self._proc.cpu_percent(None)            # prime per-process sampler
-            psutil.cpu_percent(percpu=True)         # prime per-core sampler
-            self._ncores = psutil.cpu_count(logical=True) or 1
-        except Exception:  # noqa: BLE001 — psutil optional
-            self._psutil = None
+        if psutil is not None:
+            try:
+                self._psutil = psutil
+                self._proc = psutil.Process()
+                self._proc.cpu_percent(None)            # prime per-process sampler
+                psutil.cpu_percent(percpu=True)         # prime per-core sampler
+                self._ncores = psutil.cpu_count(logical=True) or 1
+            except Exception:  # noqa: BLE001
+                self._psutil = None
 
         layout = QVBoxLayout(self)
 
