@@ -2409,12 +2409,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
          "hu": "Az AI ebben a futásban {n} arcot rendelt ismert személyekhez.\n\n"
                "Átnézed most? Mindegyik csoportosítást megerősítheted, javíthatod "
                "vagy visszavonhatod — az AI tanul a javításaidból."},
-    "suggestions_tab_matches":
-        {"en": "Name Suggestions (classic)",
-         "hu": "Névjavaslatok (klasszikus)"},
-    "suggestions_tab_auto":
-        {"en": "Automatic groupings (AI)",
-         "hu": "Automatikus csoportosítás (AI)"},
     "autoAssign.intro":
         {"en": "Faces the last AI run placed with known people. Confirm the good "
                "ones, fix the wrong ones — the network learns from every decision "
@@ -2550,25 +2544,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                "meg és tanul belőlük. A már megerősített vagy javított "
                "arcokhoz nem nyúl."},
 
-    # ── "Already decided" history lists ───────────────────────────────────
-    "suggestions_decided_header":
-        {"en": "Already decided ({n})",
-         "hu": "Már eldöntött ({n})"},
-    "suggestions_decided_empty":
-        {"en": "No decided suggestions yet.",
-         "hu": "Még nincs eldöntött javaslat."},
-    "suggestions_decision_accepted":
-        {"en": "Accepted",
-         "hu": "Elfogadva"},
-    "suggestions_decision_rejected":
-        {"en": "Rejected",
-         "hu": "Elutasítva"},
-    "suggestions_decision_dismissed":
-        {"en": "Dismissed",
-         "hu": "Véglegesen elvetve"},
-    "suggestions_decision_auto":
-        {"en": "auto",
-         "hu": "automatikus"},
+    # ── "Already reviewed" history lists ──────────────────────────────────
     "autoAssign.decided_header":
         {"en": "Already reviewed ({n})",
          "hu": "Már átnézett ({n})"},
@@ -3011,35 +2987,7 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "suggestions_btn":   {"en": "Name Suggestions", "hu": "Névajánlatok"},
     "suggestions_title": {"en": "Name Suggestions — Unknown → Known",
                           "hu": "Névajánlatok — Ismeretlen → Ismert"},
-    "suggestions_intro": {"en": "Unknown people whose faces resemble an already-named "
-                                "person. Approve to merge, or reject to never suggest "
-                                "the pair again. Nothing is merged without your approval.",
-                          "hu": "Ismeretlen személyek, akiknek arca egy már elnevezett "
-                                "személyre hasonlít. Jóváhagyással összevonod, "
-                                "elutasítással többé nem ajánlja a párost. Összevonás "
-                                "csak a te jóváhagyásoddal történik."},
-    "suggestions_threshold": {"en": "Similarity threshold:", "hu": "Hasonlósági küszöb:"},
-    "suggestions_count":     {"en": "{n} suggestion(s)", "hu": "{n} ajánlat"},
-    "suggestions_empty":     {"en": "No suggestions above the current threshold.",
-                              "hu": "Nincs a jelenlegi küszöb feletti ajánlat."},
-    "suggestions_approve":   {"en": "Approve", "hu": "Jóváhagyás"},
-    "suggestions_reject":    {"en": "Reject", "hu": "Elutasítás"},
     "suggestions_similarity": {"en": "{pct}% match", "hu": "{pct}% egyezés"},
-    "suggestions_faces":     {"en": "{n} face(s)", "hu": "{n} arc"},
-    "suggestions_approve_confirm": {
-        "en": "Merge '{cand}' into '{target}'?\n"
-              "All faces of '{cand}' will be reassigned to '{target}'.",
-        "hu": "Összevonod '{cand}' személyt ezzel: '{target}'?\n"
-              "'{cand}' összes arca átkerül ide: '{target}'.",
-    },
-    "suggestions_found_title": {"en": "Name Suggestions", "hu": "Névajánlatok"},
-    "suggestions_found_msg":   {"en": "Found {n} possible name match(es) for unknown "
-                                      "people.\nReview them now?",
-                                "hu": "{n} lehetséges névegyezés található ismeretlen "
-                                      "személyekhez.\nÁtnézed őket most?"},
-    "suggestions_full_image":       {"en": "Full Image", "hu": "Teljes kép"},
-    "suggestions_all_images":       {"en": "All Images", "hu": "Összes kép"},
-    "suggestions_compare":          {"en": "Compare", "hu": "Összehasonlítás"},
     "suggestions_gallery_title":    {"en": "{name} — All Faces", "hu": "{name} — Összes arc"},
     "suggestions_compare_title":    {"en": "Compare: {cand} vs {target}",
                                      "hu": "Összehasonlítás: {cand} vs {target}"},
@@ -3063,37 +3011,6 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                            "nincs mit összevonni."},
     "suggestions_click_full_image": {"en": "Click to open full image",
                                      "hu": "Kattints a teljes kép megnyitásához"},
-    "suggestions_keyboard_hint":    {"en": "↑↓ navigate · Enter approve · Del reject · L later · Space compare",
-                                     "hu": "↑↓ navigálás · Enter jóváhagyás · Del elutasítás · L később · Szóköz összehasonlítás"},
-
-    # ── Background merge-matching ──────────────────────────────────────────
-    "suggestions_defer":   {"en": "Later", "hu": "Később"},
-    "suggestions_confidence": {"en": "{pct}% confidence", "hu": "{pct}% bizonyosság"},
-    "suggestions_show_deferred": {"en": "Show postponed",
-                                  "hu": "Halasztottak mutatása"},
-    "suggestions_auto_merge": {"en": "Auto-Merge", "hu": "Automatikus összevonás"},
-    "suggestions_auto_merge_max_faces": {"en": "Max unknown faces:",
-                                         "hu": "Max. ismeretlen arcok:"},
-    "suggestions_auto_merge_min_confidence": {"en": "Min confidence:",
-                                              "hu": "Min. bizonyosság:"},
-    "suggestions_auto_merge_result": {"en": "Automatically merged {n} suggestion(s).",
-                                      "hu": "{n} ajánlat automatikusan összevonva."},
-    "suggestions_auto_merge_none": {"en": "No suggestions matched the auto-merge criteria.",
-                                    "hu": "Nincs olyan ajánlat, amely az automatikus összevonás feltételeit teljesítené."},
-    "match_chip_idle":    {"en": "Matching: idle", "hu": "Egyeztetés: tétlen"},
-    "match_chip_running": {"en": "Matching {label}: {processed}/{total} ({pct}%) · {found} found",
-                          "hu": "Egyeztetés {label}: {processed}/{total} ({pct}%) · {found} találat"},
-    "match_chip_paused":  {"en": "Matching paused", "hu": "Egyeztetés szüneteltetve"},
-    "match_menu_pause":   {"en": "Pause matching", "hu": "Egyeztetés szüneteltetése"},
-    "match_menu_resume":  {"en": "Resume matching", "hu": "Egyeztetés folytatása"},
-    "match_menu_cancel":  {"en": "Cancel matching", "hu": "Egyeztetés megszakítása"},
-    "match_menu_review":  {"en": "Review suggestions …", "hu": "Ajánlatok áttekintése …"},
-    "match_chip_done":    {"en": "Matching: {n} suggestion(s)",
-                          "hu": "Egyeztetés: {n} ajánlat"},
-    "match_chip_failed":  {"en": "Matching failed", "hu": "Egyeztetés hibás"},
-    "match_chip_cancelled": {"en": "Matching cancelled", "hu": "Egyeztetés megszakítva"},
-    "match_chip_tip":     {"en": "Background name-matching status — click to review suggestions",
-                          "hu": "Háttér névegyeztetés állapota — kattints az ajánlatokhoz"},
 
     # ── Google Drive cache (settings read-only display) ────────────────────
     "gdrive_cache_group":      {"en": "Google Drive Cache",

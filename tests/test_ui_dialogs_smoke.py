@@ -7,7 +7,6 @@ exercised without manual clicking.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Callable
 
 import pytest
@@ -450,20 +449,3 @@ def test_overlapping_match_dataclass_importable():
         known_bbox=(0, 0, 20, 20),
     )
     assert match.display_path == "/tmp/a.jpg"
-
-
-def test_merge_decision_dto_importable():
-    from app.services.merge_suggestion_service import MergeDecisionDTO
-
-    dto = MergeDecisionDTO(
-        decision_id=1,
-        candidate_name="Unknown 1",
-        target_name="Anna",
-        candidate_crop_path=None,
-        target_crop_path=None,
-        confidence=0.9,
-        decision="accepted",
-        source="manual",
-        decided_at=datetime.now(UTC).replace(tzinfo=None),
-    )
-    assert dto.decision == "accepted"

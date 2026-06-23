@@ -292,29 +292,6 @@ suggestions:
   # Maximum number of ranked target candidates proposed per unknown person.
   max_suggestions_per_person: 3
 
-matching:
-  # Background merge-suggestion engine. Heavy name/face matching runs in a
-  # worker pool off the UI thread; results are persisted and reviewed in the
-  # Name Suggestions dialog. Nothing is ever merged automatically.
-
-  # Minimum centroid cosine similarity for a face-driven suggestion.
-  face_threshold: 0.5
-  # Minimum fuzzy name similarity for a name to count as supporting evidence.
-  name_threshold: 0.85
-  # A name match only contributes when face similarity is at least this high
-  # (a matching name alone must never produce a confident suggestion).
-  name_supported_face_floor: 0.35
-  # Minimum combined confidence required to persist a suggestion.
-  min_confidence: 0.45
-  # Maximum ranked target suggestions kept per candidate person.
-  max_suggestions_per_person: 3
-
-  # --- Worker tuning ---
-  chunk_size: 64          # persons scored per parallel chunk
-  reserved_cpus: 1        # CPUs left free for the UI
-  max_workers: null       # hard cap on worker threads (null → derive from CPUs)
-  progress_throttle_ms: 250
-
 storage:
   # SQLite database file path
   db_path: data/faces.db

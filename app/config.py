@@ -559,44 +559,6 @@ class SuggestionConfig:
 
 
 @dataclass
-class MatchingConfig:
-    """Parameters for the background person merge-suggestion engine.
-
-    The engine compares persons in a background worker pool and persists
-    *suggestions* (never automatic merges).  Confidence combines face
-    similarity (dominant) with fuzzy name similarity.
-    """
-
-    # Minimum centroid cosine similarity for a face-driven suggestion.
-    face_threshold: float = 0.5
-    # Minimum fuzzy name similarity for a name to count as supporting evidence.
-    name_threshold: float = 0.85
-    # A name match only contributes when face similarity is at least this high
-    # (a name alone must never be enough to suggest a confident merge).
-    name_supported_face_floor: float = 0.35
-    # Minimum combined confidence required to persist a suggestion.
-    min_confidence: float = 0.45
-    # Maximum ranked target suggestions kept per candidate person.
-    max_suggestions_per_person: int = 3
-
-    # --- Auto-merge settings ---
-    # Minimum confidence threshold for automatic merging of unknown persons.
-    auto_merge_min_confidence: float = 0.60
-    # Maximum number of faces in an unknown person to allow automatic merging.
-    auto_merge_max_unknown_faces: int = 5
-
-    # --- Background worker tuning ---
-    # Persons scored per chunk handed to the thread pool.
-    chunk_size: int = 64
-    # CPUs left free for the UI; worker pool size = max(1, cpu_count - reserved).
-    reserved_cpus: int = 1
-    # Hard cap on worker threads (None → derive from CPU count).
-    max_workers: Optional[int] = None
-    # Minimum interval between progress signals to the UI (milliseconds).
-    progress_throttle_ms: int = 250
-
-
-@dataclass
 class StorageConfig:
     """Paths for persistent data."""
 
@@ -698,7 +660,6 @@ class AppConfig:
     )
     ignored_faces: IgnoredFaceConfig = field(default_factory=IgnoredFaceConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
-    matching: MatchingConfig = field(default_factory=MatchingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
@@ -1120,24 +1081,6 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             ),
         )
 
-        mat = raw.get("matching", {})
-        cfg.matching = MatchingConfig(
-            face_threshold=mat.get("face_threshold", cfg.matching.face_threshold),
-            name_threshold=mat.get("name_threshold", cfg.matching.name_threshold),
-            name_supported_face_floor=mat.get(
-                "name_supported_face_floor", cfg.matching.name_supported_face_floor
-            ),
-            min_confidence=mat.get("min_confidence", cfg.matching.min_confidence),
-            max_suggestions_per_person=mat.get(
-                "max_suggestions_per_person", cfg.matching.max_suggestions_per_person
-            ),
-            chunk_size=mat.get("chunk_size", cfg.matching.chunk_size),
-            reserved_cpus=mat.get("reserved_cpus", cfg.matching.reserved_cpus),
-            max_workers=mat.get("max_workers", cfg.matching.max_workers),
-            progress_throttle_ms=mat.get(
-                "progress_throttle_ms", cfg.matching.progress_throttle_ms
-            ),
-        )
 
         sto = raw.get("storage", {})
         cfg.storage = StorageConfig(

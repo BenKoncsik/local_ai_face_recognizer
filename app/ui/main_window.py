@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
 from app.config import AppConfig, save_db_path
 from app.db.database import ensure_unknown_person, init_db, session_scope
 from app.db.models import Face, Image, Person
-from app.jobs.job_types import JobState
 from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
@@ -81,7 +80,6 @@ from app.workers.deep_pipeline_worker import (
     MODE_TRAIN,
     DeepPipelineWorker,
 )
-from app.workers.match_job_worker import MatchJobWorker
 
 log = logging.getLogger(__name__)
 
@@ -113,7 +111,6 @@ class MainWindow(QMainWindow):
         # live task handle and its worker (kept alive while it runs).
         self._active_pipeline_task = None
         self._active_pipeline_worker = None
-        self._match_worker: Optional[MatchJobWorker] = None
         self._current_person_id: Optional[int] = None
         self._current_face_id: Optional[int] = None
         self._recorder = None  # ScreenRecorderService, lazily created on start
@@ -126,11 +123,7 @@ class MainWindow(QMainWindow):
         self._browser_person_name: Optional[str] = None
         self._load_recording_prefs()
         self._connect_display_events()
-        self._pending_suggestion_count: int = 0
         self._pending_auto_assignment_count: int = 0
-        self._open_suggestion_count: int = 0
-        self._match_active: bool = False
-        self._match_paused: bool = False
         self._db_path: str = str(config.db_path_resolved)
         self._pending_release = None
 
@@ -160,7 +153,6 @@ class MainWindow(QMainWindow):
         self._update_ready.connect(self._on_update_found)
         self._start_update_check()
         self._setup_shortcuts()
-        self._start_match_worker()
         self._task_manager_dialog = None
         self._start_crop_repair_task()
 
@@ -599,19 +591,6 @@ class MainWindow(QMainWindow):
         get_task_manager().counts_changed.connect(self._on_task_counts_changed)
         status.addPermanentWidget(self._gdrive_chip_btn)
 
-        # Background name-matching status chip (left of the message label).
-        self._match_chip_btn = QPushButton()
-        self._match_chip_btn.setFlat(True)
-        self._match_chip_btn.setVisible(False)
-        self._match_chip_btn.setStyleSheet(
-            "QPushButton { color: #A6E3A1; font-size: 11px; padding: 1px 6px; "
-            "border: 1px solid #313244; border-radius: 3px; background: #1E1E2E; }"
-            "QPushButton:hover { background: #313244; }"
-        )
-        self._match_chip_btn.setToolTip(t("match_chip_tip"))
-        self._match_chip_btn.clicked.connect(self._on_match_chip_clicked)
-        status.addPermanentWidget(self._match_chip_btn)
-
         # Always-visible Task Manager button anchored at the bottom-left of the
         # status bar (addWidget → left side). Unlike the right-side chip, which
         # only appears while tasks run, this is always available.
@@ -628,137 +607,6 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel()
         status.addWidget(self._status_label)
 
-    # ------------------------------------------------------------------
-    # Background name-matching worker
-    # ------------------------------------------------------------------
-
-    def _start_match_worker(self) -> None:
-        """Create and start the background merge-suggestion worker."""
-        self._match_worker = MatchJobWorker(self._config, parent=self)
-        self._match_worker.status_changed.connect(self._on_match_status)
-        self._match_worker.suggestions_found.connect(self._on_match_suggestions_found)
-        self._match_worker.idle.connect(self._on_match_idle)
-        self._match_worker.start()
-        # Prime the badge with whatever is already persisted from a prior run.
-        try:
-            with session_scope() as session:
-                from app.services.merge_suggestion_service import MergeSuggestionService
-                self._open_suggestion_count = MergeSuggestionService(
-                    session, self._config.matching
-                ).count_open()
-        except Exception:  # noqa: BLE001
-            self._open_suggestion_count = 0
-        self._refresh_match_chip()
-
-    def _enqueue_full_match(self) -> None:
-        if self._match_worker is not None:
-            self._match_worker.enqueue_full_scan()
-
-    def _enqueue_scoped_match(self, person_ids) -> None:
-        """High-priority match for the persons in the current view."""
-        if self._match_worker is None:
-            return
-        auto_ids = []
-        try:
-            with session_scope() as session:
-                for pid in person_ids:
-                    p = session.get(Person, pid)
-                    if p is not None and p.is_auto_named:
-                        auto_ids.append(pid)
-        except Exception:  # noqa: BLE001
-            return
-        if auto_ids:
-            self._match_worker.enqueue_scoped(auto_ids, label=t("suggestions_candidate"))
-
-    @Slot(object)
-    def _on_match_status(self, status) -> None:
-        self._match_chip_btn.setVisible(True)
-        if status.state == JobState.RUNNING:
-            self._match_active = True
-            # A fresh RUNNING update means the worker is making progress, so it
-            # is no longer paused even if the user toggled pause earlier.
-            self._match_paused = False
-            self._match_chip_btn.setText(
-                t("match_chip_running", label=status.label,
-                  processed=status.processed, total=status.total,
-                  pct=status.percent(), found=status.found)
-            )
-        elif status.state == JobState.PAUSED:
-            self._match_paused = True
-            self._match_chip_btn.setText(t("match_chip_paused"))
-        elif status.state == JobState.FAILED:
-            self._match_active = False
-            self._match_paused = False
-            self._match_chip_btn.setText(t("match_chip_failed"))
-        elif status.state == JobState.CANCELLED:
-            self._match_active = False
-            self._match_paused = False
-            self._match_chip_btn.setText(t("match_chip_cancelled"))
-        elif status.state == JobState.DONE:
-            self._match_active = False
-            self._match_paused = False
-            self._refresh_match_chip()
-
-    @Slot()
-    def _on_match_chip_clicked(self) -> None:
-        """When a job is active show pause/resume/cancel; else open suggestions."""
-        if not self._match_active:
-            self._on_show_suggestions()
-            return
-        from PySide6.QtWidgets import QMenu
-        menu = QMenu(self)
-        if self._match_paused:
-            menu.addAction(t("match_menu_resume"), self._on_match_resume)
-        else:
-            menu.addAction(t("match_menu_pause"), self._on_match_pause)
-        menu.addAction(t("match_menu_cancel"), self._on_match_cancel)
-        menu.addSeparator()
-        menu.addAction(t("match_menu_review"), self._on_show_suggestions)
-        menu.exec(self._match_chip_btn.mapToGlobal(
-            self._match_chip_btn.rect().topLeft()
-        ))
-
-    def _on_match_pause(self) -> None:
-        if self._match_worker is not None:
-            self._match_worker.pause()
-            self._match_paused = True
-            self._match_chip_btn.setText(t("match_chip_paused"))
-
-    def _on_match_resume(self) -> None:
-        if self._match_worker is not None:
-            self._match_worker.resume()
-            self._match_paused = False
-
-    def _on_match_cancel(self) -> None:
-        if self._match_worker is not None:
-            self._match_worker.cancel_current()
-            self._match_active = False
-            self._match_paused = False
-
-    @Slot(int)
-    def _on_match_suggestions_found(self, open_count: int) -> None:
-        self._open_suggestion_count = open_count
-        self._refresh_match_chip()
-
-    @Slot()
-    def _on_match_idle(self) -> None:
-        self._refresh_match_chip()
-
-    def _refresh_match_chip(self) -> None:
-        self._match_chip_btn.setVisible(self._open_suggestion_count > 0)
-        self._match_chip_btn.setText(
-            t("match_chip_done", n=self._open_suggestion_count)
-        )
-
-    def _shutdown_match_worker(self) -> None:
-        """Graceful stop of the background worker (no half-written state)."""
-        if self._match_worker is not None:
-            self._match_worker.shutdown()
-            if not self._match_worker.wait(10_000):
-                log.warning("MatchJobWorker did not stop within 10 s — terminating")
-                self._match_worker.terminate()
-                self._match_worker.wait(3_000)
-            self._match_worker = None
 
     # ------------------------------------------------------------------
     # Retranslate — call after language change
@@ -1065,7 +913,6 @@ class MainWindow(QMainWindow):
         """
         from app.tasks import TaskPriority, get_task_manager
 
-        self._pending_suggestion_count = 0
         self._pending_auto_assignment_count = 0
         self._set_scanning_state(True)
         self._active_pipeline_worker = worker
@@ -1100,7 +947,6 @@ class MainWindow(QMainWindow):
     def _on_pipeline_task_done(self, result: object) -> None:
         self._active_pipeline_task = None
         self._active_pipeline_worker = None
-        self._pending_suggestion_count = getattr(result, "n_suggestions", 0)
         self._pending_auto_assignment_count = getattr(result, "n_auto_assignments", 0)
         self._on_pipeline_finished(
             getattr(result, "success", True), getattr(result, "summary", "")
@@ -1152,16 +998,10 @@ class MainWindow(QMainWindow):
 
         options = options_dialog.get_options()
 
-        # Stop matching first: its queued jobs may still hold snapshots of the
-        # Unknown persons that are about to be deleted.
-        self._shutdown_match_worker()
-        try:
-            with session_scope() as session:
-                from app.services.unknown_person_reset_service import UnknownPersonResetService
+        with session_scope() as session:
+            from app.services.unknown_person_reset_service import UnknownPersonResetService
 
-                result = UnknownPersonResetService(session).reset(options)
-        finally:
-            self._start_match_worker()
+            result = UnknownPersonResetService(session).reset(options)
 
         self._current_person_id = None
         self._current_face_id = None
@@ -1438,16 +1278,29 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self._refresh_persons()
         self._image_browser._reload_current_face_data()
-        # The user may have resolved suggestions — refresh the status badge.
-        try:
-            with session_scope() as session:
-                from app.services.merge_suggestion_service import MergeSuggestionService
-                self._open_suggestion_count = MergeSuggestionService(
-                    session, self._config.matching
-                ).count_open()
-        except Exception:  # noqa: BLE001
-            pass
-        self._refresh_match_chip()
+        # The user's confirm/correct/revert decisions are positive/negative
+        # training signals — retrain the neural network in the background so it
+        # actually learns from this review session.
+        if dlg.made_decisions:
+            self._retrain_after_review()
+
+    def _retrain_after_review(self) -> None:
+        """Kick off a background model retrain after a name-suggestion review.
+
+        Silent (no folder/Drive prompts): only the deep model is retrained from
+        the now-updated trusted training data, no scan or detection runs.  If a
+        pipeline is already busy we skip — the next manual train will pick the
+        decisions up anyway.
+        """
+        if self._pipeline_busy():
+            log.info("Skipping post-review retrain: a pipeline is already running")
+            return
+        drive_active = self._gdrive_session is not None
+        if not drive_active and not getattr(self, "_root_folders", None):
+            # No corpus configured — nothing to train against yet.
+            return
+        log.info("Name-suggestion review changed data — retraining the model")
+        self._start_deep_pipeline(MODE_TRAIN)
 
     def _refresh_amerge_btn(self) -> None:
         """Label the auto-merge review action with the pending count."""
@@ -2568,10 +2421,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("warning"), summary)
             return
 
-        # Kick off a background full archive match so suggestions appear
-        # incrementally without blocking the UI.
-        self._enqueue_full_match()
-
         if self._pending_auto_assignment_count > 0:
             reply = QMessageBox.question(
                 self,
@@ -2584,16 +2433,6 @@ class MainWindow(QMainWindow):
             )
             if reply == QMessageBox.Yes:
                 self._on_show_suggestions(open_auto_tab=True)
-        elif self._pending_suggestion_count > 0:
-            reply = QMessageBox.question(
-                self,
-                t("suggestions_found_title"),
-                t("suggestions_found_msg", n=self._pending_suggestion_count),
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                self._on_show_suggestions()
-        self._pending_suggestion_count = 0
         self._pending_auto_assignment_count = 0
 
     @Slot(str)
@@ -2644,8 +2483,6 @@ class MainWindow(QMainWindow):
         self._reassign_btn.setEnabled(False)
         self._person_info_btn.setEnabled(not is_protected)
 
-        # Prioritise matching the currently viewed (unknown) person.
-        self._enqueue_scoped_match([person_id])
         self._notify_recording_context()
 
     @Slot(int)
@@ -4290,5 +4127,4 @@ class MainWindow(QMainWindow):
             self._status_label.setText(t("gdrive_closing_wait"))
             self._start_drive_close(after_quit=True)
             return
-        self._shutdown_match_worker()
         event.accept()
