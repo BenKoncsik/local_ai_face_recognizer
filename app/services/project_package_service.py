@@ -331,36 +331,44 @@ class ProjectPackageService:
         finally:
             tmp_db.unlink(missing_ok=True)
 
-    def _archive_image_path(self, image) -> str:
+    def _archive_image_path(
+        self, image, resolved_source: Optional[Path] = None
+    ) -> str:
         """Return the portable archive path for *image* (POSIX separators)."""
         rel = getattr(image, "relative_path", None)
         if rel:
             return f"{ARCHIVE_IMAGES_DIR}/{_normalize_posix(rel)}"
 
         # No stored relative path — try to derive one from the library root.
+        # Check both the stored file_path and the actually resolved source so
+        # a stale file_path doesn't block us from computing a portable path.
         file_path = getattr(image, "file_path", None)
-        if file_path and self._library_root is not None:
-            try:
-                rel2 = Path(file_path).resolve().relative_to(
-                    self._library_root.resolve()
-                )
-                return f"{ARCHIVE_IMAGES_DIR}/{rel2.as_posix()}"
-            except (ValueError, OSError):
-                pass
+        if self._library_root is not None:
+            lib_resolved = self._library_root.resolve()
+            for candidate in filter(None, [
+                file_path,
+                str(resolved_source) if resolved_source else None,
+            ]):
+                try:
+                    rel2 = Path(candidate).resolve().relative_to(lib_resolved)
+                    return f"{ARCHIVE_IMAGES_DIR}/{rel2.as_posix()}"
+                except (ValueError, OSError):
+                    pass
 
-        # Fall back to an id-keyed external bucket so the file is still bundled.
-        # The id prefix keeps names unique, so a too-long basename can be safely
-        # truncated.  Use a cross-platform basename: a Windows ``D:\a\b.jpg``
-        # path must not become one giant filename component when extracted on a
-        # POSIX host (that triggers ENAMETOOLONG).
-        if file_path:
-            name = _safe_component(_basename_any(file_path))
-        else:
-            name = f"image_{image.id}"
-        return (
-            f"{ARCHIVE_IMAGES_DIR}/{_EXTERNAL_IMAGE_PREFIX}/"
-            f"{image.id}/{name}"
-        )
+        # Fall back: preserve the original directory structure by stripping
+        # the drive letter / leading slash from the absolute path.  This keeps
+        # images that lived in the same folder together in the archive instead
+        # of scattering each one into its own numbered sub-folder.
+        path_str = file_path or (str(resolved_source) if resolved_source else None)
+        if path_str:
+            arc_rel = _abs_path_to_archive_rel(path_str)
+            if arc_rel:
+                return f"{ARCHIVE_IMAGES_DIR}/{_EXTERNAL_IMAGE_PREFIX}/{arc_rel}"
+
+        # Last resort: id-keyed bucket (guarantees uniqueness when the path
+        # cannot be sanitised to a usable relative form).
+        name = _safe_component(_basename_any(file_path)) if file_path else f"image_{image.id}"
+        return f"{ARCHIVE_IMAGES_DIR}/{_EXTERNAL_IMAGE_PREFIX}/{image.id}/{name}"
 
     def _resolve_image_source(self, image) -> Optional[Path]:
         """Resolve the on-disk source path for *image*, if any."""
@@ -376,8 +384,10 @@ class ProjectPackageService:
         return Path(fp) if fp else None
 
     def _add_image(self, zf: zipfile.ZipFile, image, result: ExportResult) -> dict:
-        archive_path = self._archive_image_path(image)
+        # Resolve the source first so the path computation can use it as a
+        # fallback when image.file_path is stale or missing.
         source = self._resolve_image_source(image)
+        archive_path = self._archive_image_path(image, source)
         src_str = str(source) if source else ""
         entry: dict = {
             "id": image.id,
@@ -713,11 +723,14 @@ class ProjectPackageService:
 
         Returns the number of rewritten rows.
         """
-        from app.db.models import Image
+        from app.db.models import Image, Place, PlaceAlias
 
         images_dir = Path(images_dir)
         entries = (manifest.get("images") or {}).get("entries") or []
         remapped = 0
+        # Build old → new file_path mapping so Place/PlaceAlias thumbnail_path
+        # (which stores image.file_path verbatim) can also be rewritten in one pass.
+        old_to_new: dict[str, str] = {}
         # Disable autoflush so the per-row writes are committed in one batch at
         # the end: ``file_path`` is UNIQUE, and a mid-loop flush could transiently
         # collide a freshly-rewritten path with an as-yet-unremapped original.
@@ -750,42 +763,83 @@ class ProjectPackageService:
                     image.relative_path = rel
                     changed = True
                 if image.file_path != new_file_path:
+                    old_to_new[image.file_path] = new_file_path
                     image.file_path = new_file_path
                     changed = True
                 if changed:
                     remapped += 1
+
+            # Place.thumbnail_path and PlaceAlias.thumbnail_path store a raw
+            # image.file_path value; remap them to match the new on-disk location.
+            if old_to_new:
+                for place in session.query(Place).filter(
+                    Place.thumbnail_path.isnot(None)
+                ).all():
+                    new = old_to_new.get(place.thumbnail_path)
+                    if new:
+                        place.thumbnail_path = new
+                        remapped += 1
+                for alias in session.query(PlaceAlias).filter(
+                    PlaceAlias.thumbnail_path.isnot(None)
+                ).all():
+                    new = old_to_new.get(alias.thumbnail_path)
+                    if new:
+                        alias.thumbnail_path = new
+                        remapped += 1
+
         if remapped:
             session.flush()
-            log.info("Remapped %d image path(s) to %s", remapped, images_dir)
+            log.info("Remapped %d image/thumbnail path(s) to %s", remapped, images_dir)
         return remapped
 
     @staticmethod
     def remap_crop_paths(session, crops_dir: Path | str) -> int:
-        """Repoint every ``Face.crop_path`` at the imported crops directory.
+        """Repoint every crop/thumbnail path at the imported crops directory.
 
         Crop files are bundled by their canonical basename
         (``imgNNNNNN_faceNNNNNN.jpg``); after import the database still holds the
         *original machine's* absolute crop paths.  This rewrites each path by
         basename to the new location so previews resolve without a re-crop.
 
+        Covers: ``Face.crop_path``, ``Person.thumbnail_path``,
+        ``IgnoredFace.thumbnail_path`` — all of which store absolute paths to
+        files in the crops directory.
+
         Returns the number of rewritten rows.
         """
-        from app.db.models import Face
+        from app.db.models import Face, IgnoredFace, Person
 
         crops_dir = Path(crops_dir)
         remapped = 0
-        faces = session.query(Face).filter(Face.crop_path.isnot(None)).all()
-        for face in faces:
-            name = Path(face.crop_path).name
-            candidate = crops_dir / name
+
+        def _remap_path(old_path: str) -> Optional[str]:
+            candidate = crops_dir / Path(old_path).name
             if candidate.exists():
-                new_path = str(candidate)
-                if face.crop_path != new_path:
-                    face.crop_path = new_path
-                    remapped += 1
+                new = str(candidate)
+                return new if new != old_path else None
+            return None
+
+        for face in session.query(Face).filter(Face.crop_path.isnot(None)).all():
+            new = _remap_path(face.crop_path)
+            if new:
+                face.crop_path = new
+                remapped += 1
+
+        for person in session.query(Person).filter(Person.thumbnail_path.isnot(None)).all():
+            new = _remap_path(person.thumbnail_path)
+            if new:
+                person.thumbnail_path = new
+                remapped += 1
+
+        for iface in session.query(IgnoredFace).filter(IgnoredFace.thumbnail_path.isnot(None)).all():
+            new = _remap_path(iface.thumbnail_path)
+            if new:
+                iface.thumbnail_path = new
+                remapped += 1
+
         if remapped:
             session.flush()
-            log.info("Remapped %d crop path(s) to %s", remapped, crops_dir)
+            log.info("Remapped %d crop/thumbnail path(s) to %s", remapped, crops_dir)
         return remapped
 
 
@@ -805,6 +859,28 @@ def _normalize_posix(rel: str) -> str:
     """Normalize a stored relative path to forward slashes, no leading slash."""
     parts = [p for p in rel.replace("\\", "/").split("/") if p and p != "."]
     return "/".join(parts)
+
+
+def _abs_path_to_archive_rel(path_str: str) -> str:
+    """Strip the drive / absolute root from *path_str* → sanitised POSIX rel.
+
+    Preserves the full directory structure so images that were originally in the
+    same folder stay together in the archive's ``_external/`` bucket rather than
+    each landing in its own numbered sub-folder.
+
+    ``/Users/alice/Photos/vacation/img.jpg``  →  ``Users/alice/Photos/vacation/img.jpg``
+    ``D:\\Photos\\vacation\\img.jpg``          →  ``Photos/vacation/img.jpg``
+    """
+    norm = path_str.replace("\\", "/")
+    # Strip Windows drive letter (e.g. "C:/")
+    if len(norm) >= 2 and norm[1] == ":":
+        norm = norm[2:]
+    norm = norm.lstrip("/")
+    parts = [p for p in norm.split("/") if p]
+    if not parts:
+        return ""
+    safe = [_sanitize_component(p) for p in parts]
+    return "/".join(p for p in safe if p)
 
 
 def _archive_path_to_image_rel(archive_path: str) -> Optional[str]:

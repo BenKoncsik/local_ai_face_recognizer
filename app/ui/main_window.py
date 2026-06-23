@@ -3610,6 +3610,14 @@ class MainWindow(QMainWindow):
                     log.exception("Relative-path migration after import failed")
             missing_originals = self._count_unresolved_images(session)
 
+        # Update the scan source folders to point at the extracted images dir so
+        # re-scanning works out of the box without manual reconfiguration.
+        images_dir_str = str(result.images_dir.resolve())
+        self._root_folders = [images_dir_str]
+        self._save_folders([images_dir_str])
+        self._set_folder_label([images_dir_str])
+        self._scan_modes_btn.setEnabled(True)
+
         self._current_person_id = None
         self._current_face_id = None
         self._cluster_panel.clear()
