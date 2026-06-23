@@ -488,6 +488,8 @@ class ExportDialog(QDialog):
         app_password = dlg.gmail_app_password
         allowed_csv  = dlg.allowed_emails_csv
         port         = dlg.port
+        domain       = dlg.domain
+        https_mode   = dlg.https_mode
 
         def work(ctx):
             from app.services.local_server_export_service import LocalServerExportService
@@ -507,6 +509,8 @@ class ExportDialog(QDialog):
                         gmail_app_password=app_password,
                         allowed_emails_csv=allowed_csv,
                         port=port,
+                        domain=domain,
+                        https_mode=https_mode,
                         progress_callback=progress,
                     )
                 )

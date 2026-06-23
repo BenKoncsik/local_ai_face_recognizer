@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -22,12 +23,18 @@ from PySide6.QtWidgets import (
 from app.services.gmail_check import check_credentials, send_test_email
 from app.ui.i18n import t
 
+_HTTPS_MODES = [
+    ("none",   t("local_server_https_none")),
+    ("apache", t("local_server_https_apache")),
+    ("caddy",  t("local_server_https_caddy")),
+]
+
 
 class LocalServerExportDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("local_server_export_title"))
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(480)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -63,7 +70,27 @@ class LocalServerExportDialog(QDialog):
         self._port.setValue(3000)
         form.addRow(t("docker_export_port"), self._port)
 
+        # HTTPS / domain section
+        self._https_mode = QComboBox()
+        for key, label in _HTTPS_MODES:
+            self._https_mode.addItem(label, key)
+        self._https_mode.currentIndexChanged.connect(self._on_https_mode_changed)
+        form.addRow(t("local_server_https_mode"), self._https_mode)
+
+        self._domain = QLineEdit()
+        self._domain.setPlaceholderText("csaladfa.pelda.hu")
+        self._domain_label = QLabel(t("local_server_domain"))
+        form.addRow(self._domain_label, self._domain)
+        self._domain_label.setVisible(False)
+        self._domain.setVisible(False)
+
         layout.addLayout(form)
+
+        self._https_info = QLabel()
+        self._https_info.setWordWrap(True)
+        self._https_info.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(self._https_info)
+        self._on_https_mode_changed()
 
         info = QLabel(t("docker_export_info"))
         info.setWordWrap(True)
@@ -76,6 +103,18 @@ class LocalServerExportDialog(QDialog):
         buttons.accepted.connect(self._validate)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _on_https_mode_changed(self) -> None:
+        mode = self._https_mode.currentData()
+        has_domain = mode != "none"
+        self._domain_label.setVisible(has_domain)
+        self._domain.setVisible(has_domain)
+        if mode == "apache":
+            self._https_info.setText(t("local_server_https_info_apache"))
+        elif mode == "caddy":
+            self._https_info.setText(t("local_server_https_info_caddy"))
+        else:
+            self._https_info.setText("")
 
     def showEvent(self, event) -> None:  # noqa: N802 — Qt override
         # Opened nested inside the modal ExportDialog's exec() loop. On macOS a
@@ -122,6 +161,8 @@ class LocalServerExportDialog(QDialog):
             errors.append(t("docker_export_err_password"))
         if not self._csv_path.text() or not Path(self._csv_path.text()).is_file():
             errors.append(t("docker_export_err_csv"))
+        if self._https_mode.currentData() != "none" and not self._domain.text().strip():
+            errors.append(t("local_server_err_domain"))
         if errors:
             QMessageBox.warning(self, t("local_server_export_title"), "\n".join(errors))
             return
@@ -165,3 +206,11 @@ class LocalServerExportDialog(QDialog):
     @property
     def port(self) -> int:
         return self._port.value()
+
+    @property
+    def domain(self) -> str:
+        return self._domain.text().strip().lower()
+
+    @property
+    def https_mode(self) -> str:
+        return self._https_mode.currentData() or "none"

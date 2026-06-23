@@ -77,6 +77,10 @@ class DockerExportService:
 
         # 3. Write config.json (baked secrets)
         _p(72, "Konfig írása…")
+        try:
+            from app import __version__ as _app_version
+        except Exception:
+            _app_version = ""
         config = {
             "adminEmail": admin_email,
             "gmailAppPassword": gmail_app_password,
@@ -84,6 +88,9 @@ class DockerExportService:
             "sessionTimeoutMinutes": 30,
             "otpExpiryMinutes": 10,
             "port": port,
+            "domain": domain,
+            "httpsEnabled": True,
+            "appVersion": _app_version,
         }
         (out / "config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
 
@@ -238,6 +245,11 @@ const DIST = path.join(__dirname, '..', 'dist');
 const VIEWS = path.join(__dirname, 'views');
 
 const app = express();
+
+// When behind a reverse proxy (Caddy / Apache / nginx) trust forwarded headers
+// so req.ip and req.protocol reflect the real client connection.
+if (store.config.httpsEnabled) app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -247,7 +259,12 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   rolling: true,          // refresh on every request
-  cookie: { maxAge: SESSION_MS, httpOnly: true, sameSite: 'lax' },
+  cookie: {
+    maxAge: SESSION_MS,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: !!store.config.httpsEnabled,  // HTTPS-only cookie when behind TLS proxy
+  },
 }));
 
 // ---- Auth guard ----
@@ -270,9 +287,15 @@ app.post('/api/request-code', async (req, res) => {
 
   if (store.isAllowed(email)) {
     const code = auth.generateOtp();
+    const magicToken = auth.generateMagicToken();
     store.setOtp(email, code);
+    store.setMagicToken(email, magicToken);
+    const baseUrl = store.config.httpsEnabled && store.config.domain
+      ? `https://${store.config.domain}`
+      : `http://localhost:${PORT}`;
+    const magicLink = `${baseUrl}/api/magic-login?email=${encodeURIComponent(email)}&token=${magicToken}`;
     try {
-      await mailer.sendOtp(email, code);
+      await mailer.sendOtp(email, code, magicLink);
     } catch (e) {
       console.error('OTP send failed:', e.message);
     }
@@ -295,6 +318,16 @@ app.post('/api/verify-code', (req, res) => {
 
 app.post('/api/logout', (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/magic-login', (req, res) => {
+  const email = (req.query.email || '').trim().toLowerCase();
+  const token = (req.query.token || '').trim();
+  if (!email || !token) return res.redirect('/login?error=invalid');
+  if (!store.verifyMagicToken(email, token)) return res.redirect('/login?error=expired');
+  req.session.email = email;
+  req.session.isAdmin = store.isAdmin(email);
+  res.redirect(req.session.isAdmin ? '/admin' : '/');
 });
 
 // ---- Admin routes ----
@@ -365,6 +398,8 @@ _loadDisk();
 
 // In-memory OTP store: email -> { code, expiresAt }
 const _otps = new Map();
+// In-memory magic-link tokens: email -> { token, expiresAt }
+const _magicTokens = new Map();
 
 module.exports = {
   config,
@@ -386,15 +421,32 @@ module.exports = {
     _otps.delete(email.toLowerCase());
     return true;
   },
+
+  setMagicToken(email, token) {
+    const exp = Date.now() + config.otpExpiryMinutes * 60 * 1000;
+    _magicTokens.set(email.toLowerCase(), { token, expiresAt: exp });
+  },
+  verifyMagicToken(email, token) {
+    const entry = _magicTokens.get(email.toLowerCase());
+    if (!entry) return false;
+    if (Date.now() > entry.expiresAt) { _magicTokens.delete(email.toLowerCase()); return false; }
+    if (entry.token !== token) return false;
+    _magicTokens.delete(email.toLowerCase());
+    return true;
+  },
 };
 """
 
 _SERVER_AUTH_JS = r"""'use strict';
+const crypto = require('crypto');
 function generateOtp() {
   // 6-digit zero-padded
   return String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
 }
-module.exports = { generateOtp };
+function generateMagicToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+module.exports = { generateOtp, generateMagicToken };
 """
 
 _SERVER_MAILER_JS = r"""'use strict';
@@ -408,14 +460,104 @@ function _transporter() {
   });
 }
 
-async function sendOtp(to, code) {
+function _buildEmailHtml(code, magicLink, otpMinutes, appVersion) {
+  const versionBadge = appVersion
+    ? `<span style="background:#1d2b45;color:#88aaff;border:1px solid #3e5f9c;border-radius:3px;padding:1px 5px;font-family:Courier New,monospace;font-size:10px;vertical-align:middle;">v${appVersion}</span>`
+    : '';
+  const magicBtn = magicLink ? `
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 0;">
+        <tr><td align="center">
+          <a href="${magicLink}"
+             style="display:inline-block;background:#3a7bfd;color:#ffffff;text-decoration:none;padding:13px 36px;border-radius:8px;font-size:15px;font-weight:600;letter-spacing:0.01em;">
+            Bel&#233;p&#233;s egy kattint&#225;ssal &rarr;
+          </a>
+        </td></tr>
+      </table>
+      <p style="color:#666666;font-size:12px;text-align:center;margin:10px 0 0;">Vagy add meg a k&#243;dot k&#233;zzel a bel&#233;p&#233;si oldalon.</p>` : '';
+  return `<!DOCTYPE html>
+<html lang="hu">
+<head><meta charset="UTF-8"><title>Bel&#233;p&#233;si k&#243;d &#8212; Gal&#233;ria</title></head>
+<body style="margin:0;padding:0;background:#111111;font-family:system-ui,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#111111;padding:24px 12px;">
+  <tr><td align="center">
+    <table width="480" cellpadding="0" cellspacing="0"
+           style="background:#1e1e1e;border-radius:12px;overflow:hidden;max-width:480px;width:100%;border:1px solid #2a2a2a;">
+      <tr>
+        <td style="background:#1a2a4a;padding:18px 28px;border-bottom:1px solid #2a3a5a;">
+          <span style="color:#88aaff;font-size:18px;font-weight:700;">&#128247; Gal&#233;ria</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px 28px 24px;">
+          <p style="color:#cccccc;margin:0 0 14px;font-size:15px;">A bel&#233;p&#233;si k&#243;dod:</p>
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td align="center"
+                  style="background:#0d1929;border:2px solid #3a7bfd;border-radius:10px;padding:18px;">
+                <span style="font-size:38px;font-weight:700;letter-spacing:0.22em;color:#88aaff;font-family:Courier New,monospace;">${code}</span>
+              </td>
+            </tr>
+          </table>
+          <p style="color:#888888;margin:10px 0 0;font-size:12px;">&#128336; &#201;rv&#233;nyes ${otpMinutes} percig.</p>
+          ${magicBtn}
+        </td>
+      </tr>
+      <tr>
+        <td style="border-top:1px solid #2a2a2a;padding:13px 28px;background:#161616;">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="color:#555555;font-size:11px;line-height:1.8;vertical-align:middle;">
+                K&#233;sz&#237;tette:&nbsp;<strong style="color:#888888;">Koncsik Benedek</strong>&nbsp;${versionBadge}
+              </td>
+              <td align="right" style="font-size:11px;white-space:nowrap;vertical-align:middle;line-height:2;">
+                <a href="https://x.com/BenedekKoncsik"
+                   style="color:#6688aa;text-decoration:none;margin-left:6px;"
+                   title="X (Twitter)">&#120143;</a>
+                <a href="https://github.com/BenKoncsik"
+                   style="color:#6688aa;text-decoration:none;margin-left:8px;"
+                   title="GitHub profil">&#128025;&nbsp;GitHub</a>
+                <a href="https://github.com/HunKonTech"
+                   style="color:#6688aa;text-decoration:none;margin-left:8px;"
+                   title="GitHub szervezet">&#127970;&nbsp;HunKonTech</a>
+                <a href="https://github.com/HunKonTech/local_ai_face_recognizer"
+                   style="color:#6688aa;text-decoration:none;margin-left:8px;"
+                   title="Projekt">&#128230;&nbsp;Repo</a>
+                <a href="https://github.com/HunKonTech/local_ai_face_recognizer/releases"
+                   style="color:#6688aa;text-decoration:none;margin-left:8px;"
+                   title="Kiad&#225;sok">&#127991;&nbsp;Releases</a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>`;
+}
+
+async function sendOtp(to, code, magicLink) {
+  const version    = store.config.appVersion || '';
+  const otpMinutes = store.config.otpExpiryMinutes;
+  const textLines  = [
+    `A belépési kódod: ${code}`,
+    `Érvényes ${otpMinutes} percig.`,
+    magicLink ? `\nBelépés egy kattintással: ${magicLink}` : '',
+    '',
+    `Készítette: Koncsik Benedek${version ? ' v' + version : ''}`,
+    'X: https://x.com/BenedekKoncsik',
+    'GitHub: https://github.com/BenKoncsik',
+    'HunKonTech: https://github.com/HunKonTech',
+    'Repo: https://github.com/HunKonTech/local_ai_face_recognizer',
+    'Releases: https://github.com/HunKonTech/local_ai_face_recognizer/releases',
+  ].filter(Boolean).join('\n');
   await _transporter().sendMail({
     from: `"Galéria" <${store.config.adminEmail}>`,
     to,
-    subject: 'Belépési kód',
-    text: `A belépési kódod: ${code}\n\nÉrvényes ${store.config.otpExpiryMinutes} percig.`,
-    html: `<p>A belépési kódod: <strong style="font-size:1.5em">${code}</strong></p>
-           <p>Érvényes ${store.config.otpExpiryMinutes} percig.</p>`,
+    subject: 'Belépési kód — Galéria',
+    text: textLines,
+    html: _buildEmailHtml(code, magicLink || '', otpMinutes, version),
   });
 }
 
@@ -423,7 +565,7 @@ async function sendAdminAlert(attemptedEmail) {
   await _transporter().sendMail({
     from: `"Galéria" <${store.config.adminEmail}>`,
     to: store.config.adminEmail,
-    subject: 'Ismeretlen belépési kísérlet',
+    subject: 'Ismeretlen belépési kísérlet — Galéria',
     text: `Nem engedélyezett email cím próbált belépni: ${attemptedEmail}`,
     html: `<p>Nem engedélyezett email cím próbált belépni:</p>
            <p><strong>${attemptedEmail}</strong></p>`,
@@ -532,6 +674,10 @@ document.getElementById('verBtn').onclick = async () => {
 
 email$.addEventListener('keydown', e => e.key==='Enter' && document.getElementById('reqBtn').click());
 code$.addEventListener('keydown',  e => e.key==='Enter' && document.getElementById('verBtn').click());
+
+const _urlP = new URLSearchParams(window.location.search);
+if (_urlP.get('error') === 'expired') showMsg('A belépési link lejárt vagy már felhasználták. Kérj új kódot.', 'err');
+else if (_urlP.get('error') === 'invalid') showMsg('Érvénytelen belépési link.', 'err');
 </script>
 </body>
 </html>
