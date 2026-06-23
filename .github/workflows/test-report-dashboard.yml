@@ -1,11 +1,17 @@
 name: Test Report Dashboard
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  schedule:
+    # Éjfél (UTC) - GitHub Actions szabadon futtat
+    - cron: '0 0 * * *'
+    # Reggel 8 (UTC) - opcionális, ha napi 2x szeretnél
+    # - cron: '0 8 * * *'
   workflow_dispatch:
+  # Összevetés: push + pull_request letiltva, hogy ne terheljen
+  # pull_request:
+  # push:
+  #   branches:
+  #     - main
 
 permissions:
   contents: write
