@@ -228,6 +228,9 @@ class PersonsPanel(QWidget):
         self._schemes_btn = QPushButton()
         self._schemes_btn.clicked.connect(self._on_edit_schemes)
         filters.addWidget(self._schemes_btn)
+        self._add_person_btn = QPushButton()
+        self._add_person_btn.clicked.connect(self._on_add_person)
+        filters.addWidget(self._add_person_btn)
         root.addLayout(filters)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -359,6 +362,7 @@ class PersonsPanel(QWidget):
         self._code_filter.setPlaceholderText(t("persons_filter_code"))
         self._filter_btn.setText(t("persons_filter_apply"))
         self._schemes_btn.setText(t("persons_schemes_btn"))
+        self._add_person_btn.setText(t("persons_add_btn"))
         self._table.setHorizontalHeaderLabels([
             t("persons_col_id"),
             t("persons_col_thumbnail"),
@@ -661,6 +665,34 @@ class PersonsPanel(QWidget):
     def _on_edit(self) -> None:
         if self._current_person_id is not None:
             self._open_edit_dialog(self._current_person_id)
+
+    def _on_add_person(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, t("persons_add_title"), t("persons_add_prompt")
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, t("persons_add_title"), t("persons_add_empty"))
+            return
+        try:
+            with session_scope() as session:
+                person = Person(name=name, is_auto_named=False)
+                session.add(person)
+                session.flush()
+                new_id = person.id
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self, t("persons_add_title"), t("persons_save_error", error=str(exc))
+            )
+            return
+        self.person_data_changed.emit()
+        self.refresh()
+        # Select the newly created person so the detail pane opens immediately.
+        if not self._select_person_row(new_id):
+            return
+        self._on_selection_changed()
 
     def _on_edit_schemes(self) -> None:
         from app.ui.dialogs.family_code_scheme_dialog import FamilyCodeSchemeDialog

@@ -1571,6 +1571,9 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     # --- Reviewable auto-merge from Unknown ---
     "amerge_accept":          {"en": "Accept", "hu": "Elfogadás"},
     "amerge_move":            {"en": "Move to another person", "hu": "Áthelyezés más személyhez"},
+    "amerge_create_new":      {"en": "Create new person", "hu": "Létrehozás új személyként"},
+    "amerge_create_title":    {"en": "Create new person", "hu": "Új személy létrehozása"},
+    "amerge_create_prompt":   {"en": "Name for the new person:", "hu": "Az új személy neve:"},
     "amerge_delete":          {"en": "Delete face", "hu": "Arc törlése"},
     "amerge_pending_badge":   {"en": "Auto-merged — needs review",
                                "hu": "Automatikus összevonás — ellenőrizendő"},
@@ -1993,6 +1996,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                    "hu": "Ennek a személynek nincs használható kivágott arca."},
     "persons_thumb_set_ok":   {"en": "Thumbnail updated.", "hu": "Bélyegkép frissítve."},
     "persons_name_edit_tip":  {"en": "Double-click to rename", "hu": "Dupla kattintás az átnevezéshez"},
+    "persons_add_btn":        {"en": "New person", "hu": "Új személy"},
+    "persons_add_title":      {"en": "Create new person", "hu": "Új személy létrehozása"},
+    "persons_add_prompt":     {"en": "Name:", "hu": "Név:"},
+    "persons_add_empty":      {"en": "Name cannot be empty.", "hu": "A név nem lehet üres."},
+    "persons_add_ok":         {"en": "Person '{name}' created.", "hu": "'{name}' személy létrehozva."},
 
     # ── Batch face move (move selected faces to another person) ────────────
     "persons_faces_hint":     {"en": "Click faces to select them for moving.",

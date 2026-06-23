@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -211,11 +212,13 @@ class AutoMergeReviewDialog(QDialog):
         accept_btn.clicked.connect(lambda: self._on_accept(row.face_id))
         move_btn = QPushButton("⤴ " + t("amerge_move"))
         move_btn.clicked.connect(lambda: self._on_move(row.face_id))
+        create_btn = QPushButton("✨ " + t("amerge_create_new"))
+        create_btn.clicked.connect(lambda: self._on_create_new(row.face_id))
         del_btn = QPushButton("🗑 " + t("amerge_delete"))
         del_btn.clicked.connect(lambda: self._on_delete(row.face_id))
         graph_btn = QPushButton("📊 " + t("amerge_graph_btn"))
         graph_btn.clicked.connect(lambda: self._open_graph(row))
-        for b in (accept_btn, move_btn, del_btn, graph_btn):
+        for b in (accept_btn, move_btn, create_btn, del_btn, graph_btn):
             b.setFixedWidth(190)
             actions.addWidget(b)
         actions.addStretch()
@@ -267,6 +270,24 @@ class AutoMergeReviewDialog(QDialog):
             return
         with session_scope() as session:
             UnknownMergeService(session).move_auto_merge(face_id, picker.selected_id)
+        self._after_change()
+
+    def _on_create_new(self, face_id: int) -> None:
+        name, ok = QInputDialog.getText(
+            self, t("amerge_create_title"), t("amerge_create_prompt")
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        with session_scope() as session:
+            person = Person(name=name, is_auto_named=False)
+            session.add(person)
+            session.flush()
+            new_person_id = person.id
+        with session_scope() as session:
+            UnknownMergeService(session).move_auto_merge(face_id, new_person_id)
         self._after_change()
 
     def _on_delete(self, face_id: int) -> None:
