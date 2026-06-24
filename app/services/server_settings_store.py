@@ -146,6 +146,7 @@ class ServerProfile:
     port: int = 3000
     domain: str = ""
     https_mode: str = "none"
+    smtp_allow_self_signed: bool = False
     has_pin: bool = False
 
     def to_dict(self) -> dict:

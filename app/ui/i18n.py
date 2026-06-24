@@ -1008,6 +1008,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "local_server_https_caddy":  {"en": "Caddy + Let's Encrypt (Caddy manages ports 80/443)", "hu": "Caddy + Let's Encrypt (Caddy kezeli a 80/443-as portokat)"},
     "local_server_https_cloudflare": {"en": "Cloudflare Tunnel (no open ports — works behind CGNAT / mobile)", "hu": "Cloudflare Tunnel (nincs nyitott port — CGNAT / mobilnet mögött is megy)"},
     "local_server_err_domain":   {"en": "Domain name is required when HTTPS is enabled.", "hu": "HTTPS módhoz domain megadása kötelező."},
+    "local_server_smtp_insecure": {"en": "Accept self-signed SMTP certificate (antivirus / proxy)", "hu": "Önaláírt SMTP tanúsítvány elfogadása (vírusirtó / proxy)"},
+    "local_server_smtp_insecure_info": {
+        "en": "Enable only if email sending fails with 'self signed certificate in certificate chain' — typically when antivirus/firewall inspects TLS. Relaxes certificate checks for the Gmail connection.",
+        "hu": "Csak akkor kapcsold be, ha a levélküldés 'self signed certificate in certificate chain' hibával bukik — jellemzően vírusirtó/tűzfal TLS-vizsgálatakor. Lazítja a Gmail-kapcsolat tanúsítvány-ellenőrzését.",
+    },
     "local_server_https_info_apache": {
         "en": "Generates apache-vhost.conf + setup-https.sh (Linux) + setup-https.ps1 (Windows). Runs alongside XAMPP: Apache proxies the gallery subdomain to Node.js, certbot/win-acme handles Let's Encrypt. No port conflict.",
         "hu": "apache-vhost.conf + setup-https.sh (Linux) + setup-https.ps1 (Windows) generálódik. XAMPP mellé illeszkedik: Apache proxyzza a galéria aldomént a Node.js-re, a certbot/win-acme kezeli a Let's Encryptet. Nincs port-ütközés.",

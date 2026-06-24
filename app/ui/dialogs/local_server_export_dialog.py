@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -85,6 +86,10 @@ class LocalServerExportDialog(QDialog):
         form.addRow(self._domain_label, self._domain)
         self._domain_label.setVisible(False)
         self._domain.setVisible(False)
+
+        self._smtp_insecure = QCheckBox(t("local_server_smtp_insecure"))
+        self._smtp_insecure.setToolTip(t("local_server_smtp_insecure_info"))
+        form.addRow("", self._smtp_insecure)
 
         layout.addLayout(form)
 
@@ -230,6 +235,10 @@ class LocalServerExportDialog(QDialog):
     def https_mode(self) -> str:
         return self._https_mode.currentData() or "none"
 
+    @property
+    def smtp_allow_self_signed(self) -> bool:
+        return self._smtp_insecure.isChecked()
+
     # ------------------------------------------------------------------
     # Profile save / load
     # ------------------------------------------------------------------
@@ -247,6 +256,7 @@ class LocalServerExportDialog(QDialog):
             port=self._port.value(),
             domain=self._domain.text().strip().lower(),
             https_mode=self._https_mode.currentData() or "none",
+            smtp_allow_self_signed=self._smtp_insecure.isChecked(),
         )
         get_server_settings_store().save_profile(profile, pin=dlg.pin)
         QMessageBox.information(
@@ -265,6 +275,7 @@ class LocalServerExportDialog(QDialog):
         self._csv_path.setText(profile.allowed_emails_csv)
         self._port.setValue(profile.port)
         self._domain.setText(profile.domain)
+        self._smtp_insecure.setChecked(getattr(profile, "smtp_allow_self_signed", False))
         idx = next(
             (i for i, (k, _) in enumerate(_HTTPS_MODES) if k == profile.https_mode),
             0,

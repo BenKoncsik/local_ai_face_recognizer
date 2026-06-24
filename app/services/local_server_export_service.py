@@ -46,6 +46,7 @@ class LocalServerExportService(DockerExportService):
         port: int = 3000,
         domain: str = "",
         https_mode: str = "none",
+        smtp_allow_self_signed: bool = False,
         progress_callback: Optional[_ProgressCb] = None,
     ) -> Path:
         """Export to *target_dir* and return the path.
@@ -93,6 +94,7 @@ class LocalServerExportService(DockerExportService):
             "otpExpiryMinutes": 10,
             "port": port,
             "appVersion": _app_version,
+            "smtpAllowSelfSigned": bool(smtp_allow_self_signed),
         }
         if https_enabled:
             config["domain"] = domain
@@ -636,15 +638,21 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Write-Error "Adminisztrátori PowerShell szükséges."; exit 1 }
 
-# ── Caddy service leállítása ──────────────────────────────────────────────
-$svc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
-if ($svc) {
-    Log "Caddy service leállítása..."
-    Stop-Service caddy -Force -ErrorAction SilentlyContinue
-    $caddy = (Get-Command caddy -ErrorAction SilentlyContinue)?.Source
-    if ($caddy) { & $caddy service uninstall 2>$null }
-    Ok "Caddy service eltávolítva"
+# ── Caddy ütemezett feladat leállítása ────────────────────────────────────
+$TaskName = "CaddyGallery"
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($task) {
+    Log "Caddy ütemezett feladat leállítása és törlése..."
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Ok "Ütemezett feladat törölve: $TaskName"
 }
+# Régi (hibás) "caddy" Windows service maradék takarítása
+$svc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
+if ($svc) { Stop-Service caddy -Force -ErrorAction SilentlyContinue; & sc.exe delete caddy | Out-Null }
+# Háttérben futó Caddy leállítása
+$caddy = (Get-Command caddy -ErrorAction SilentlyContinue)?.Source
+if ($caddy) { & $caddy stop 2>$null | Out-Null }
 
 # ── Caddyfile törlése ─────────────────────────────────────────────────────
 foreach ($p in @("C:\caddy\Caddyfile", "$env:ProgramData\caddy\Caddyfile")) {
@@ -1238,12 +1246,28 @@ if (-not $isAdmin) { Err "Futtasd PowerShell adminisztrátorként (jobb klikk �
 $CaddyDir = "C:\caddy"
 $CaddyExe = "$CaddyDir\caddy.exe"
 
+# A winget frissíti a PATH-t, de a futó munkamenet még a régit látja → frissítjük,
+# majd ha az alias még így sem elérhető, megkeressük a winget shim/csomag helyén.
+function Resolve-Caddy {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path","User")
+    $cmd = Get-Command caddy -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $shim = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\caddy.exe"
+    if (Test-Path $shim) { return $shim }
+    $pkg = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter caddy.exe `
+           -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pkg) { return $pkg.FullName }
+    return $null
+}
+
 if (-not (Get-Command caddy -ErrorAction SilentlyContinue)) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Log "Caddy telepítése (winget)..."
         winget install --id Caddyserver.Caddy --accept-package-agreements --accept-source-agreements
-        $CaddyExe = (Get-Command caddy).Source
-        Ok "Caddy telepítve (winget)"
+        $CaddyExe = Resolve-Caddy
+        if (-not $CaddyExe) { Err "Caddy telepítve, de nem található. Indítsd újra a PowerShell-t (rendszergazdaként) és futtasd újra a szkriptet." }
+        Ok "Caddy telepítve (winget): $CaddyExe"
     } else {
         Log "Caddy letöltése (közvetlen)..."
         New-Item -ItemType Directory -Force -Path $CaddyDir | Out-Null
@@ -1283,21 +1307,32 @@ New-Item -ItemType Directory -Force -Path $CaddyDir | Out-Null
 Copy-Item "$ScriptDir\Caddyfile" "$CaddyDir\Caddyfile" -Force
 Ok "Caddyfile → $CaddyDir\Caddyfile"
 
-# ── Caddy Windows Service regisztrálása ───────────────────────────────────
-$svcName = "caddy"
-$existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+# ── Caddy indítása ütemezett feladatként ──────────────────────────────────
+# A Caddy-nak nincs natív Windows "service" parancsa, ezért egy Scheduled Task
+# futtatja SYSTEM-ként, induláskor (így a 80/443 portokat is tudja kötni, és
+# újraindítás után magától feljön). A 'caddy run' a feladaton belül fut.
+$TaskName = "CaddyGallery"
+$CaddyfilePath = "$CaddyDir\Caddyfile"
 
-if ($existingSvc) {
-    Log "Caddy service újraindítása..."
-    Restart-Service $svcName
-} else {
-    Log "Caddy service regisztrálása..."
-    Push-Location $CaddyDir
-    & $CaddyExe service install
-    Pop-Location
-    Start-Service $svcName
-}
-Ok "Caddy service fut"
+# Korábbi (hibás) próbálkozások takarítása: régi "caddy" Windows service törlése
+$oldSvc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
+if ($oldSvc) { Stop-Service caddy -Force -ErrorAction SilentlyContinue; & sc.exe delete caddy | Out-Null }
+# Ha már fut egy Caddy a háttérben (pl. 'caddy start'), állítsuk le, hogy ne ütközzön
+& $CaddyExe stop 2>$null | Out-Null
+
+$action    = New-ScheduledTaskAction -Execute $CaddyExe `
+             -Argument "run --config `"$CaddyfilePath`"" -WorkingDirectory $CaddyDir
+$trigger   = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+             -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+Log "Caddy ütemezett feladat regisztrálása ($TaskName)..."
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    -Principal $principal -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Start-Sleep 2
+Ok "Caddy fut (ütemezett feladat, induláskor automatikusan)"
 
 Write-Host ""
 Write-Host ("=" * 65) -ForegroundColor Green

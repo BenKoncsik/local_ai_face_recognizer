@@ -471,10 +471,20 @@ const nodemailer = require('nodemailer');
 const store = require('./store');
 
 function _transporter() {
-  return nodemailer.createTransport({
+  const opts = {
     service: 'gmail',
     auth: { user: store.config.adminEmail, pass: store.config.gmailAppPassword },
-  });
+  };
+  // Vírusirtó / céges proxy SSL-vizsgálata esetén a Gmail TLS-lánca
+  // "self signed certificate in certificate chain" hibát adhat. Ekkor a
+  // config.json-ban állítsd:  "smtpAllowSelfSigned": true
+  // (Gyengébb tanúsítvány-ellenőrzés, de a kapcsolatot amúgy is a helyi
+  // vírusirtó terminálja. Biztonságosabb alternatíva: a NODE_EXTRA_CA_CERTS
+  // környezeti változóval add meg a vírusirtó gyökértanúsítványát.)
+  if (store.config.smtpAllowSelfSigned) {
+    opts.tls = { rejectUnauthorized: false };
+  }
+  return nodemailer.createTransport(opts);
 }
 
 function _buildEmailHtml(code, magicLink, otpMinutes, appVersion) {

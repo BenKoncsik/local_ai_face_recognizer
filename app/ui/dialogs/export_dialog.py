@@ -490,6 +490,7 @@ class ExportDialog(QDialog):
         port         = dlg.port
         domain       = dlg.domain
         https_mode   = dlg.https_mode
+        smtp_allow_self_signed = dlg.smtp_allow_self_signed
 
         def work(ctx):
             from app.services.local_server_export_service import LocalServerExportService
@@ -511,6 +512,7 @@ class ExportDialog(QDialog):
                         port=port,
                         domain=domain,
                         https_mode=https_mode,
+                        smtp_allow_self_signed=smtp_allow_self_signed,
                         progress_callback=progress,
                     )
                 )
