@@ -19,6 +19,7 @@ import base64
 import csv
 import json
 import os
+import re
 import shutil
 import textwrap
 from pathlib import Path
@@ -141,16 +142,39 @@ class DockerExportService:
             progress_callback=_fwd,
         )
 
-    @staticmethod
-    def _parse_csv(csv_path: str) -> List[str]:
+    # Matches an email-looking token; the surrounding class excludes the
+    # separators we split on so multiple addresses in one cell are caught.
+    _EMAIL_RE = re.compile(r"[^\s,;/]+@[^\s,;/]+\.[^\s,;/]+")
+
+    @classmethod
+    def _parse_csv(cls, csv_path: str) -> List[str]:
+        """Read an allow-list CSV and return a de-duplicated list of emails.
+
+        Robust to real-world spreadsheet exports:
+          * the email column not being the first one,
+          * several addresses packed into a single cell, separated by
+            ``;``, ``,`` or whitespace
+            (e.g. ``jerne9@freemail.hu; jerne9@gmail.com``),
+          * comma-, semicolon- or tab-delimited files (Hungarian Excel
+            commonly writes ``;``-separated CSVs).
+        """
         emails: List[str] = []
+        seen: set[str] = set()
         with open(csv_path, newline="", encoding="utf-8-sig") as f:
-            reader = csv.reader(f)
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+            except csv.Error:
+                dialect = csv.excel
+            reader = csv.reader(f, dialect)
             for row in reader:
-                if row:
-                    email = row[0].strip().lower()
-                    if "@" in email:
-                        emails.append(email)
+                for cell in row:
+                    for match in cls._EMAIL_RE.findall(cell):
+                        email = match.strip().strip(".,;").lower()
+                        if "@" in email and email not in seen:
+                            seen.add(email)
+                            emails.append(email)
         return emails
 
     # ------------------------------------------------------------------
@@ -608,6 +632,8 @@ _LOGIN_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Belépés — Galéria</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: flex; align-items: center;
@@ -716,6 +742,8 @@ _ADMIN_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin — Galéria</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; background: #111; color: #eee;
