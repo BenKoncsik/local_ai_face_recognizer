@@ -68,6 +68,11 @@ class LocalServerExportDialog(QDialog):
         csv_row.addWidget(csv_browse)
         form.addRow(t("docker_export_allowed_csv"), csv_row)
 
+        self._extra_admins = QLineEdit()
+        self._extra_admins.setPlaceholderText(t("local_server_extra_admins_ph"))
+        self._extra_admins.setToolTip(t("local_server_extra_admins_info"))
+        form.addRow(t("local_server_extra_admins"), self._extra_admins)
+
         self._port = QSpinBox()
         self._port.setRange(1024, 65535)
         self._port.setValue(3000)
@@ -238,6 +243,10 @@ class LocalServerExportDialog(QDialog):
     @property
     def smtp_allow_self_signed(self) -> bool:
         return self._smtp_insecure.isChecked()
+
+    @property
+    def extra_admins_csv(self) -> str:
+        return self._extra_admins.text().strip()
 
     # ------------------------------------------------------------------
     # Profile save / load

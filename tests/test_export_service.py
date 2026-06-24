@@ -566,3 +566,56 @@ def test_export_astro_multiple_occurrences_same_object(db, tmp_path):
     assert len(objects) == 2
     points = sorted((o["point"]["left"], o["point"]["top"]) for o in objects)
     assert points == [(25.0, 25.0), (75.0, 75.0)]
+
+
+# ---------------------------------------------------------------------------
+# Update package (uploadable to a running local server)
+# ---------------------------------------------------------------------------
+
+def _make_fake_dist(tmp_path: Path) -> Path:
+    """A minimal built site — enough for the package assembler (no npm needed)."""
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html><body>hi</body></html>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    return dist
+
+
+def test_assemble_update_package_without_csv(tmp_path):
+    import zipfile
+
+    from app.services.local_server_export_service import LocalServerExportService
+
+    dist = _make_fake_dist(tmp_path)
+    out = tmp_path / "frissites.zip"
+    LocalServerExportService._assemble_update_package(dist, out, None, version=12345)
+
+    assert out.is_file()
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+        assert "manifest.json" in names
+        assert "dist/index.html" in names
+        assert "dist/assets/app.js" in names
+        assert "allowlist.csv" not in names
+        manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["version"] == 12345
+    assert manifest["hasAllowlist"] is False
+    assert "createdAt" in manifest
+
+
+def test_assemble_update_package_with_allowlist(tmp_path):
+    import zipfile
+
+    from app.services.local_server_export_service import LocalServerExportService
+
+    dist = _make_fake_dist(tmp_path)
+    out = tmp_path / "frissites.zip"
+    emails = ["a@gmail.com", "b@gmail.com"]
+    LocalServerExportService._assemble_update_package(dist, out, emails, version=999)
+
+    with zipfile.ZipFile(out) as zf:
+        assert "allowlist.csv" in zf.namelist()
+        csv_lines = zf.read("allowlist.csv").decode().split()
+        manifest = json.loads(zf.read("manifest.json"))
+    assert csv_lines == emails
+    assert manifest["hasAllowlist"] is True

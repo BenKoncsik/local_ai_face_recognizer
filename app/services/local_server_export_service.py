@@ -47,6 +47,7 @@ class LocalServerExportService(DockerExportService):
         domain: str = "",
         https_mode: str = "none",
         smtp_allow_self_signed: bool = False,
+        extra_admins_csv: str = "",
         progress_callback: Optional[_ProgressCb] = None,
     ) -> Path:
         """Export to *target_dir* and return the path.
@@ -80,6 +81,13 @@ class LocalServerExportService(DockerExportService):
         _p(70, "Email-lista olvasása…")
         allowed = self._parse_csv(allowed_emails_csv)
 
+        # Extra admins: equal-rights admins beyond the primary (email-sending) one.
+        primary = admin_email.strip().lower()
+        admins = [
+            e for e in self._parse_emails(extra_admins_csv)
+            if e and e != primary
+        ]
+
         # 3. config.json
         _p(72, "Konfig írása…")
         try:
@@ -88,6 +96,7 @@ class LocalServerExportService(DockerExportService):
             _app_version = ""
         config: dict = {
             "adminEmail": admin_email,
+            "admins": admins,
             "gmailAppPassword": gmail_app_password,
             "allowedEmails": allowed,
             "sessionTimeoutMinutes": 30,
@@ -149,6 +158,98 @@ class LocalServerExportService(DockerExportService):
 
         _p(100, "Kész.")
         return out
+
+    # ------------------------------------------------------------------
+    # Update package (uploadable to a running server)
+    # ------------------------------------------------------------------
+
+    def export_update_package(
+        self,
+        target_file: str,
+        *,
+        allowed_emails_csv: str = "",
+        progress_callback: Optional[_ProgressCb] = None,
+    ) -> Path:
+        """Build a single ``.zip`` update package for a running local server.
+
+        The package mirrors what a fresh "Helyi webszerver" export would serve:
+        the *already-built* static site (the server can't build) plus an optional
+        allowlist CSV and a versioned ``manifest.json``. An admin uploads it on
+        the ``/admin`` page; the server unpacks it and atomically swaps ``dist/``.
+
+        Args:
+            target_file:        Destination ``.zip`` path.
+            allowed_emails_csv: Optional allow-list CSV path; when given, the
+                                package carries the new email list so the server
+                                can refresh it on apply.
+            progress_callback:  Optional (pct, message) callback.
+
+        Returns:
+            Path to the written ``.zip``.
+        """
+        import tempfile
+        import time
+
+        out_file = Path(target_file)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+
+        def _p(pct: Optional[int], msg: str) -> None:
+            if progress_callback:
+                progress_callback(pct, msg)
+
+        with tempfile.TemporaryDirectory(prefix="gallery-pkg-") as tmp:
+            tmpdir = Path(tmp)
+            # _build_astro builds into <tmp>/dist and forwards scaled 0-65 progress
+            _p(0, "Astro oldal generálása…")
+            self._build_astro(tmpdir, progress_callback)
+            dist_dir = tmpdir / "dist"
+
+            allowlist = self._parse_csv(allowed_emails_csv) if allowed_emails_csv else None
+            _p(70, "Csomag összeállítása…")
+            self._assemble_update_package(dist_dir, out_file, allowlist, int(time.time()))
+            _p(100, "Kész.")
+
+        return out_file
+
+    @staticmethod
+    def _assemble_update_package(
+        dist_dir: Path,
+        target_file: Path,
+        allowlist_emails: Optional[list],
+        version: int,
+    ) -> Path:
+        """Zip a built ``dist/`` + manifest (+ optional allowlist.csv) into a
+        single update package. Kept separate from the build so it is unit-testable
+        without Node/npm."""
+        import json
+        import zipfile
+        from datetime import datetime
+
+        dist_dir = Path(dist_dir)
+        target_file = Path(target_file)
+        has_allowlist = bool(allowlist_emails)
+
+        try:
+            from app import __version__ as _app_version
+        except Exception:
+            _app_version = ""
+
+        manifest = {
+            "version": int(version),
+            "createdAt": datetime.now().isoformat(timespec="seconds"),
+            "appVersion": _app_version,
+            "hasAllowlist": has_allowlist,
+        }
+
+        with zipfile.ZipFile(target_file, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+            if has_allowlist:
+                zf.writestr("allowlist.csv", "\n".join(allowlist_emails) + "\n")
+            for path in sorted(dist_dir.rglob("*")):
+                if path.is_file():
+                    zf.write(path, str(Path("dist") / path.relative_to(dist_dir)))
+
+        return target_file
 
     # ------------------------------------------------------------------
     # HTTPS helpers
@@ -1839,9 +1940,16 @@ python start.py --no-browser      # ne nyissa meg a böngészőt
 
 ## Admin felület
 
-Elérhető: `http://localhost:__PORT__/admin`
-Csak az admin email cím tud belépni (az export-kor megadott Gmail cím).
-Az adminon email címeket adhatsz hozzá / törölhetsz futás közben.
+Elérhető: `http://localhost:__PORT__/admin` (admin belépés után lebegő ⚙️ gomb is
+mutatja a galériában). Három fül:
+
+- **Email címek** — engedélyezett címek hozzáadása / törlése futás közben.
+- **Adminok** — több admin is lehet, mind egyenrangú (email-, admin- és
+  frissítéskezelés). Csak a kezdeti, email-küldő admin nem törölhető.
+- **Frissítés** — töltsd fel az asztali appban készített **frissítő csomagot**
+  (`.zip`, lásd Export → Weboldal → „Frissítő csomag"). A szerver kicsomagolja és
+  újratelepítés nélkül lecseréli az oldalt; ha a csomag tartalmaz email-listát,
+  azt is frissíti.
 
 ## Követelmények
 

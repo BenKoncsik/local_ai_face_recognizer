@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -78,18 +79,7 @@ class ExportDialog(QDialog):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        # ── Scroll area ───────────────────────────────────────────────────
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setSpacing(12)
-        layout.setContentsMargins(2, 2, 2, 2)
-
-        # --- Scope ---
+        # --- Scope (shared across all tabs) ---
         scope_box = QGroupBox(t("export_scope"))
         scope_layout = QVBoxLayout(scope_box)
         self._all_radio = QRadioButton(t("export_all_persons"))
@@ -100,7 +90,29 @@ class ExportDialog(QDialog):
         self._all_radio.setChecked(True)
         scope_layout.addWidget(self._all_radio)
         scope_layout.addWidget(self._cur_radio)
-        layout.addWidget(scope_box)
+        outer.addWidget(scope_box)
+
+        # ── Tabs: General + Web ───────────────────────────────────────────
+        tabs = QTabWidget()
+
+        def _scrolled_tab():
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            inner = QWidget()
+            lay = QVBoxLayout(inner)
+            lay.setSpacing(12)
+            lay.setContentsMargins(2, 2, 2, 2)
+            scroll.setWidget(inner)
+            return scroll, lay
+
+        # ``layout`` targets the General tab so the existing box code is unchanged;
+        # web-export boxes are routed to ``web_layout`` instead.
+        gen_scroll, layout = _scrolled_tab()
+        web_scroll, web_layout = _scrolled_tab()
+        tabs.addTab(gen_scroll, t("export_tab_general"))
+        tabs.addTab(web_scroll, t("export_tab_web"))
 
         # --- Full project package (.facepack) ---
         pkg_box = QGroupBox(t("pkg_group"))
@@ -197,7 +209,7 @@ class ExportDialog(QDialog):
         self._astro_btn = QPushButton(f"⚡  {t('export_generate_astro')}")
         self._astro_btn.clicked.connect(self._on_export_astro)
         astro_layout.addWidget(self._astro_btn)
-        layout.addWidget(astro_box)
+        web_layout.addWidget(astro_box)
 
         # --- Local web server (Python + Node, no Docker) ---
         local_box = QGroupBox(t("export_local_server_group"))
@@ -209,7 +221,21 @@ class ExportDialog(QDialog):
         self._local_server_btn = QPushButton(f"🖥️  {t('export_generate_local_server')}")
         self._local_server_btn.clicked.connect(self._on_export_local_server)
         local_layout.addWidget(self._local_server_btn)
-        layout.addWidget(local_box)
+        web_layout.addWidget(local_box)
+
+        # --- Update package (uploadable to a running local server) ---
+        update_box = QGroupBox(t("export_update_pkg_group"))
+        update_layout = QVBoxLayout(update_box)
+        update_desc = QLabel(t("export_update_pkg_desc"))
+        update_desc.setWordWrap(True)
+        update_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        update_layout.addWidget(update_desc)
+        self._update_pkg_csv_chk = QCheckBox(t("export_update_pkg_include_csv"))
+        update_layout.addWidget(self._update_pkg_csv_chk)
+        self._update_pkg_btn = QPushButton(f"📦  {t('export_generate_update_pkg')}")
+        self._update_pkg_btn.clicked.connect(self._on_export_update_package)
+        update_layout.addWidget(self._update_pkg_btn)
+        web_layout.addWidget(update_box)
 
         # --- Docker / Kubernetes web server ---
         docker_box = QGroupBox(t("export_docker_group"))
@@ -221,7 +247,7 @@ class ExportDialog(QDialog):
         self._docker_btn = QPushButton(f"🐳  {t('export_generate_docker')}")
         self._docker_btn.clicked.connect(self._on_export_docker)
         docker_layout.addWidget(self._docker_btn)
-        layout.addWidget(docker_box)
+        web_layout.addWidget(docker_box)
 
         # --- Collage Import ---
         col_import_box = QGroupBox(t("export_collage_import_group"))
@@ -234,7 +260,7 @@ class ExportDialog(QDialog):
         self._collage_import_btn.setEnabled(self._on_collage_import_cb is not None)
         self._collage_import_btn.clicked.connect(self._on_collage_import_clicked)
         col_import_layout.addWidget(self._collage_import_btn)
-        layout.addWidget(col_import_box)
+        web_layout.addWidget(col_import_box)
 
         # --- Collage HTML Gallery ---
         col_html_box = QGroupBox(t("export_collage_html_group"))
@@ -247,7 +273,7 @@ class ExportDialog(QDialog):
         self._collage_html_export_btn.setEnabled(self._on_collage_html_export_cb is not None)
         self._collage_html_export_btn.clicked.connect(self._on_collage_html_clicked)
         col_html_layout.addWidget(self._collage_html_export_btn)
-        layout.addWidget(col_html_box)
+        web_layout.addWidget(col_html_box)
 
         # --- Image Metadata Export ---
         meta_box = QGroupBox(t("export_metadata_group"))
@@ -366,8 +392,8 @@ class ExportDialog(QDialog):
         layout.addWidget(fmeta_box)
 
         layout.addStretch()
-        scroll.setWidget(inner)
-        outer.addWidget(scroll, stretch=1)
+        web_layout.addStretch()
+        outer.addWidget(tabs, stretch=1)
 
         # --- Close — always visible outside the scroll area ---
         close_btn = QPushButton(t("close"))
@@ -487,6 +513,7 @@ class ExportDialog(QDialog):
         admin_email  = dlg.admin_email
         app_password = dlg.gmail_app_password
         allowed_csv  = dlg.allowed_emails_csv
+        extra_admins = dlg.extra_admins_csv
         port         = dlg.port
         domain       = dlg.domain
         https_mode   = dlg.https_mode
@@ -513,6 +540,7 @@ class ExportDialog(QDialog):
                         domain=domain,
                         https_mode=https_mode,
                         smtp_allow_self_signed=smtp_allow_self_signed,
+                        extra_admins_csv=extra_admins,
                         progress_callback=progress,
                     )
                 )
@@ -530,6 +558,62 @@ class ExportDialog(QDialog):
             ),
             on_error=lambda msg: QMessageBox.critical(
                 self, t("local_server_export_done_title"), msg
+            ),
+        )
+
+    def _on_export_update_package(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            t("export_generate_update_pkg"),
+            str(Path.home() / "frissites.zip"),
+            "ZIP (*.zip)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+
+        allowed_csv = ""
+        if self._update_pkg_csv_chk.isChecked():
+            allowed_csv, _ = QFileDialog.getOpenFileName(
+                self, t("docker_export_allowed_csv"), str(Path.home()),
+                "CSV (*.csv);;All files (*)",
+            )
+            if not allowed_csv:
+                return  # user cancelled the CSV pick
+
+        def work(ctx):
+            from app.services.local_server_export_service import LocalServerExportService
+
+            def progress(pct, msg):
+                if pct is not None and pct >= 0:
+                    ctx.report(min(int(pct), 100), str(msg))
+                    ctx.checkpoint()
+                else:
+                    ctx.report(99, str(msg))
+
+            with session_scope() as session:
+                return str(
+                    LocalServerExportService(session).export_update_package(
+                        target_file=path,
+                        allowed_emails_csv=allowed_csv,
+                        progress_callback=progress,
+                    )
+                )
+
+        from app.tasks import TaskPriority, get_task_manager
+        get_task_manager().submit(
+            t("task_update_pkg_export"),
+            work,
+            supports_pause=True,
+            priority=TaskPriority.LOW,
+            on_done=lambda out: QMessageBox.information(
+                self,
+                t("export_update_pkg_done_title"),
+                t("export_update_pkg_done_msg", path=out),
+            ),
+            on_error=lambda msg: QMessageBox.critical(
+                self, t("export_update_pkg_done_title"), msg
             ),
         )
 

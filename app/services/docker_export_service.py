@@ -177,6 +177,20 @@ class DockerExportService:
                             emails.append(email)
         return emails
 
+    @classmethod
+    def _parse_emails(cls, text: str) -> List[str]:
+        """Parse free-text email input (comma / semicolon / whitespace / newline
+        separated) into a de-duplicated, lower-cased list. Used for fields like
+        the extra-admins box where the user types addresses directly."""
+        emails: List[str] = []
+        seen: set[str] = set()
+        for match in cls._EMAIL_RE.findall(text or ""):
+            email = match.strip().strip(".,;").lower()
+            if "@" in email and email not in seen:
+                seen.add(email)
+                emails.append(email)
+        return emails
+
     # ------------------------------------------------------------------
     # File writers
     # ------------------------------------------------------------------
@@ -250,7 +264,9 @@ _SERVER_PACKAGE_JSON = """{
     "express": "^4.18.2",
     "express-session": "^1.17.3",
     "nodemailer": "^6.9.9",
-    "cookie-parser": "^1.4.6"
+    "cookie-parser": "^1.4.6",
+    "multer": "^1.4.5-lts.1",
+    "adm-zip": "^0.5.10"
   }
 }
 """
@@ -260,13 +276,26 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const multer = require('multer');
+const AdmZip = require('adm-zip');
 const store = require('./store');
 const auth = require('./auth');
 const mailer = require('./mailer');
 
 const PORT = process.env.PORT || __PORT__;
-const DIST = path.join(__dirname, '..', 'dist');
+const ROOT = path.join(__dirname, '..');
+const DIST = path.join(ROOT, 'dist');
 const VIEWS = path.join(__dirname, 'views');
+const DATA = path.join(ROOT, 'data');
+
+// Update-package uploads land in a temp dir, then get extracted + swapped in.
+const UPLOAD_TMP = path.join(os.tmpdir(), 'gallery-update');
+try { fs.mkdirSync(UPLOAD_TMP, { recursive: true }); } catch { /* ignore */ }
+const upload = multer({
+  dest: UPLOAD_TMP,
+  limits: { fileSize: 8 * 1024 * 1024 * 1024 },  // 8 GB — full sites with originals
+});
 
 const app = express();
 
@@ -371,6 +400,13 @@ app.get('/api/magic-login', (req, res) => {
   });
 });
 
+// Identity of the current session (used by the floating admin button + admin UI)
+app.get('/api/me', requireAuth, (req, res) => res.json({
+  email: req.session.email,
+  isAdmin: !!req.session.isAdmin,
+  isPrimaryAdmin: store.isPrimaryAdmin(req.session.email),
+}));
+
 // ---- Admin routes ----
 app.get('/admin', requireAuth, requireAdmin, (_req, res) =>
   res.sendFile(path.join(VIEWS, 'admin.html')));
@@ -390,7 +426,112 @@ app.delete('/api/admin/emails/:email', requireAuth, requireAdmin, (req, res) => 
   res.json({ ok: true });
 });
 
+// ---- Admin management (all admins are equal; only the primary can't be removed) ----
+app.get('/api/admin/admins', requireAuth, requireAdmin, (_req, res) =>
+  res.json({ admins: store.listAdmins() }));
+
+app.post('/api/admin/admins', requireAuth, requireAdmin, (req, res) => {
+  const email = (req.body.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'invalid' });
+  store.addAdmin(email);
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/admins/:email', requireAuth, requireAdmin, (req, res) => {
+  const ok = store.removeAdmin(decodeURIComponent(req.params.email).toLowerCase());
+  if (!ok) return res.status(400).json({ error: 'cannot remove primary admin' });
+  res.json({ ok: true });
+});
+
+// ---- Site update: upload + atomic swap of the static site ----
+app.get('/api/admin/site-version', requireAuth, requireAdmin, (_req, res) =>
+  res.json(store.getSiteVersion()));
+
+app.post('/api/admin/update', requireAuth, requireAdmin, upload.single('package'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const tmpZip = req.file.path;
+  const staging = path.join(DATA, 'staging');
+  const distNew = path.join(staging, 'dist-new');
+  const distOld = path.join(ROOT, 'dist.old');
+  const cleanup = () => {
+    try { fs.rmSync(tmpZip, { force: true }); } catch {}
+    try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
+  };
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    new AdmZip(tmpZip).extractAllTo(staging, /*overwrite*/ true);
+
+    // Validate the package
+    const manifestPath = path.join(staging, 'manifest.json');
+    const newDist = path.join(staging, 'dist');
+    if (!fs.existsSync(manifestPath) || !fs.existsSync(path.join(newDist, 'index.html'))) {
+      cleanup();
+      return res.status(400).json({ error: 'Érvénytelen csomag (hiányzik a manifest.json vagy a dist/index.html).' });
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const current = store.getSiteVersion();
+    const older = manifest.version && current.version && manifest.version < current.version;
+
+    // Move validated dist into place so the atomic swap is a rename on the same FS
+    fs.renameSync(newDist, distNew);
+
+    // Atomic-ish swap: dist -> dist.old, dist-new -> dist, drop dist.old
+    fs.rmSync(distOld, { recursive: true, force: true });
+    if (fs.existsSync(DIST)) fs.renameSync(DIST, distOld);
+    fs.renameSync(distNew, DIST);
+    fs.rmSync(distOld, { recursive: true, force: true });
+
+    // Optional allowlist refresh
+    let allowlistUpdated = false;
+    const csvPath = path.join(staging, 'allowlist.csv');
+    if (manifest.hasAllowlist && fs.existsSync(csvPath)) {
+      const emails = fs.readFileSync(csvPath, 'utf8')
+        .split(/\r?\n/).map(l => l.trim().toLowerCase())
+        .filter(e => e.includes('@'));
+      store.replaceAllowlistSeed(emails);
+      allowlistUpdated = true;
+    }
+
+    const saved = store.setSiteVersion(manifest.version || (current.version + 1));
+    cleanup();
+    res.json({ ok: true, version: saved.version, updatedAt: saved.updatedAt, allowlistUpdated, older: !!older });
+  } catch (e) {
+    console.error('[update] failed:', e);
+    cleanup();
+    res.status(500).json({ error: 'A frissítés alkalmazása nem sikerült: ' + e.message });
+  }
+});
+
 // ---- Protected static site ----
+// For admin sessions, inject a floating "Admin" button into HTML pages so the
+// gallery itself offers a way into /admin. Normal users (and all non-HTML
+// requests) fall straight through to express.static — no extra work for them.
+const ADMIN_WIDGET = '<a href="/admin" title="Admin" style="position:fixed;right:18px;bottom:18px;z-index:99999;'
+  + 'width:48px;height:48px;border-radius:50%;background:#3a7bfd;color:#fff;display:flex;'
+  + 'align-items:center;justify-content:center;font-size:22px;text-decoration:none;'
+  + 'box-shadow:0 4px 14px #0007;">&#9881;</a>';
+
+function _htmlFileFor(reqPath) {
+  if (reqPath.endsWith('.html')) return path.join(DIST, reqPath);
+  // Astro directory routing: "/" or "/foo/" -> .../index.html
+  return path.join(DIST, reqPath, 'index.html');
+}
+
+app.get(/.*/, requireAuth, (req, res, next) => {
+  if (!req.session.isAdmin) return next();          // only admins get the button
+  let file;
+  try { file = _htmlFileFor(req.path); } catch { return next(); }
+  if (!file.startsWith(DIST) || !fs.existsSync(file)) return next();
+  fs.readFile(file, 'utf8', (err, html) => {
+    if (err) return next();
+    const out = html.includes('</body>')
+      ? html.replace('</body>', ADMIN_WIDGET + '</body>')
+      : html + ADMIN_WIDGET;
+    res.type('html').send(out);
+  });
+});
+
 app.use(requireAuth, express.static(DIST));
 
 // Catch-all: serve index of dist (Astro uses directory-based routing)
@@ -407,13 +548,25 @@ _SERVER_STORE_JS = r"""'use strict';
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_PATH = path.join(__dirname, '..', 'config.json');
-const DATA_PATH   = path.join(__dirname, '..', 'data', 'allowlist.json');
+const CONFIG_PATH  = path.join(__dirname, '..', 'config.json');
+const DATA_PATH    = path.join(__dirname, '..', 'data', 'allowlist.json');
+const ADMINS_PATH  = path.join(__dirname, '..', 'data', 'admins.json');
+const VERSION_PATH = path.join(__dirname, '..', 'data', 'site-version.json');
 
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
-// Runtime allowlist: seed from config, then overlay persistent additions
-const _allowset = new Set(config.allowedEmails.map(e => e.toLowerCase()));
+// The primary admin is the one whose Gmail sends OTPs — it can never be removed.
+const PRIMARY = (config.adminEmail || '').toLowerCase();
+
+// Runtime allowlist: seed from config, then overlay persistent additions.
+// _seed mirrors config.allowedEmails so a swapped-in update package can replace it.
+let _seed = new Set((config.allowedEmails || []).map(e => e.toLowerCase()));
+const _allowset = new Set(_seed);
+
+// Runtime admin set: primary + config.admins seed, overlaid with persistent delta.
+const _adminseed = new Set([PRIMARY, ...((config.admins || []).map(e => e.toLowerCase()))]);
+_adminseed.delete('');
+const _adminset = new Set(_adminseed);
 
 function _loadDisk() {
   try {
@@ -428,14 +581,33 @@ function _loadDisk() {
 function _saveDisk() {
   const dir = path.dirname(DATA_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  // Persist full current list (minus the original seed) as two delta arrays
-  const original = new Set(config.allowedEmails.map(e => e.toLowerCase()));
-  const added   = [..._allowset].filter(e => !original.has(e));
-  const removed = [...original].filter(e => !_allowset.has(e));
+  // Persist full current list (minus the current seed) as two delta arrays
+  const added   = [..._allowset].filter(e => !_seed.has(e));
+  const removed = [..._seed].filter(e => !_allowset.has(e));
   fs.writeFileSync(DATA_PATH, JSON.stringify({ added, removed }, null, 2));
 }
 
+function _loadAdmins() {
+  try {
+    if (fs.existsSync(ADMINS_PATH)) {
+      const extra = JSON.parse(fs.readFileSync(ADMINS_PATH, 'utf8'));
+      (extra.added   || []).forEach(e => _adminset.add(e.toLowerCase()));
+      (extra.removed || []).forEach(e => { if (e.toLowerCase() !== PRIMARY) _adminset.delete(e.toLowerCase()); });
+    }
+  } catch { /* corrupt file — ignore */ }
+  _adminset.add(PRIMARY);  // primary is always an admin
+}
+
+function _saveAdmins() {
+  const dir = path.dirname(ADMINS_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const added   = [..._adminset].filter(e => !_adminseed.has(e));
+  const removed = [..._adminseed].filter(e => !_adminset.has(e));
+  fs.writeFileSync(ADMINS_PATH, JSON.stringify({ added, removed }, null, 2));
+}
+
 _loadDisk();
+_loadAdmins();
 
 // In-memory OTP store: email -> { code, expiresAt }
 const _otps = new Map();
@@ -444,11 +616,55 @@ const _magicTokens = new Map();
 
 module.exports = {
   config,
-  isAllowed:  (email) => _allowset.has(email.toLowerCase()) || email.toLowerCase() === config.adminEmail.toLowerCase(),
-  isAdmin:    (email) => email.toLowerCase() === config.adminEmail.toLowerCase(),
+  isAllowed:  (email) => _allowset.has(email.toLowerCase()) || _adminset.has(email.toLowerCase()),
+  isAdmin:    (email) => _adminset.has(email.toLowerCase()),
+  isPrimaryAdmin: (email) => email.toLowerCase() === PRIMARY,
   listEmails: ()      => [..._allowset].sort(),
   addEmail(email) { _allowset.add(email.toLowerCase()); _saveDisk(); },
   removeEmail(email) { _allowset.delete(email.toLowerCase()); _saveDisk(); },
+
+  // ---- Admins ----
+  listAdmins: () => [..._adminset].sort().map(e => ({ email: e, primary: e === PRIMARY })),
+  addAdmin(email) { _adminset.add(email.toLowerCase()); _saveAdmins(); },
+  removeAdmin(email) {
+    const e = email.toLowerCase();
+    if (e === PRIMARY) return false;   // never remove the email-sending admin
+    _adminset.delete(e); _saveAdmins(); return true;
+  },
+
+  // ---- Site version (last applied update package) ----
+  getSiteVersion() {
+    try {
+      if (fs.existsSync(VERSION_PATH)) return JSON.parse(fs.readFileSync(VERSION_PATH, 'utf8'));
+    } catch { /* ignore */ }
+    return { version: 0, updatedAt: null };
+  },
+  setSiteVersion(version) {
+    const dir = path.dirname(VERSION_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const updatedAt = new Date().toISOString();
+    fs.writeFileSync(VERSION_PATH, JSON.stringify({ version, updatedAt }, null, 2));
+    return { version, updatedAt };
+  },
+
+  // ---- Allowlist seed replacement (when an update package carries a new CSV) ----
+  // Re-seeds the base list, preserving runtime add/remove deltas on top.
+  replaceAllowlistSeed(emails) {
+    const newSeed = new Set((emails || []).map(e => e.toLowerCase()));
+    // Current runtime deltas relative to the old seed
+    const added   = [..._allowset].filter(e => !_seed.has(e));
+    const removed = [..._seed].filter(e => !_allowset.has(e));
+    _seed = newSeed;
+    _allowset.clear();
+    newSeed.forEach(e => _allowset.add(e));
+    added.forEach(e => _allowset.add(e));
+    removed.forEach(e => _allowset.delete(e));
+    config.allowedEmails = [...newSeed];
+    // Persist the new seed so it survives a restart (the delta file in
+    // allowlist.json is computed relative to this seed).
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2)); } catch { /* ignore */ }
+    _saveDisk();
+  },
 
   setOtp(email, code) {
     const exp = Date.now() + config.otpExpiryMinutes * 60 * 1000;
@@ -748,11 +964,17 @@ _ADMIN_HTML = r"""<!DOCTYPE html>
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; background: #111; color: #eee;
          font-family: system-ui, sans-serif; padding: 2rem 1rem; }
-  h1 { font-size: 1.4rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 1.2rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 1rem; color: #ddd; }
   .card { background: #1e1e1e; border-radius: 12px; padding: 1.5rem;
-          max-width: 560px; margin: 0 auto; box-shadow: 0 4px 20px #0006; }
+          max-width: 620px; margin: 0 auto; box-shadow: 0 4px 20px #0006; }
+  nav { display: flex; gap: .4rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
+  nav button { padding: .5rem 1rem; border: 1px solid #333; border-radius: 8px;
+               background: #242424; color: #bbb; cursor: pointer; font-size: .9rem; }
+  nav button.active { background: #3a7bfd; color: #fff; border-color: #3a7bfd; }
   .row { display: flex; gap: .5rem; margin-bottom: 1rem; }
-  input { flex: 1; padding: .6rem .9rem; border: 1px solid #444; border-radius: 8px;
+  input[type=email], input[type=text] {
+          flex: 1; padding: .6rem .9rem; border: 1px solid #444; border-radius: 8px;
           background: #2a2a2a; color: #eee; font-size: .95rem; }
   button.add { padding: .6rem 1.2rem; border: none; border-radius: 8px;
                background: #3a7bfd; color: #fff; cursor: pointer; }
@@ -760,67 +982,181 @@ _ADMIN_HTML = r"""<!DOCTYPE html>
   li { display: flex; justify-content: space-between; align-items: center;
        padding: .55rem .5rem; border-bottom: 1px solid #2a2a2a; font-size: .9rem; }
   li:last-child { border: none; }
+  .tag { font-size:.7rem; background:#2d3b22; color:#9fd06f; border-radius:6px;
+         padding:.1rem .45rem; margin-left:.5rem; }
   .del { background: none; border: 1px solid #555; border-radius: 6px;
          color: #cf6f6f; cursor: pointer; padding: .25rem .6rem; font-size: .8rem; }
   .del:hover { background: #3a1a1a; }
+  .del:disabled { opacity:.35; cursor: default; }
   .gallery-link { display:block; text-align:center; margin-top:1.5rem;
                   color: #6c9fff; text-decoration: none; }
   .msg { margin-top:.75rem; padding:.5rem; border-radius:8px; font-size:.85rem;
          text-align:center; display:none; }
   .msg.ok  { background:#1a3a1a; color:#6fcf6f; display:block; }
   .msg.err { background:#3a1a1a; color:#cf6f6f; display:block; }
+  .hint { color:#999; font-size:.82rem; line-height:1.45; margin: .2rem 0 1rem; }
+  .ver  { font-size:.85rem; color:#9fb4d0; margin-bottom:1rem; }
+  section { display: none; }
+  section.active { display: block; }
+  progress { width: 100%; height: 10px; margin-top: .6rem; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>⚙️ Admin — engedélyezett email címek</h1>
-  <div class="row">
-    <input id="newEmail" type="email" placeholder="uj@gmail.com">
-    <button class="add" id="addBtn">Hozzáadás</button>
-  </div>
-  <div id="msg" class="msg"></div>
-  <ul id="list"></ul>
+  <h1>⚙️ Admin</h1>
+  <nav>
+    <button data-tab="emails" class="active">Email címek</button>
+    <button data-tab="admins">Adminok</button>
+    <button data-tab="update">Frissítés</button>
+  </nav>
+
+  <section id="tab-emails" class="active">
+    <h2>Engedélyezett email címek</h2>
+    <div class="row">
+      <input id="newEmail" type="email" placeholder="uj@gmail.com">
+      <button class="add" id="addBtn">Hozzáadás</button>
+    </div>
+    <div id="emailMsg" class="msg"></div>
+    <ul id="emailList"></ul>
+  </section>
+
+  <section id="tab-admins">
+    <h2>Adminok</h2>
+    <p class="hint">Minden admin egyenrangú: kezelheti az email-listát, az
+      adminokat és a frissítést. Csak a kezdeti (email-küldő) admin nem törölhető.</p>
+    <div class="row">
+      <input id="newAdmin" type="email" placeholder="masik-admin@gmail.com">
+      <button class="add" id="addAdminBtn">Hozzáadás</button>
+    </div>
+    <div id="adminMsg" class="msg"></div>
+    <ul id="adminList"></ul>
+  </section>
+
+  <section id="tab-update">
+    <h2>Oldal frissítése</h2>
+    <p class="hint">Töltsd fel az asztali appban készített frissítő-csomagot
+      (<code>.zip</code>). A szerver kicsomagolja és lecseréli az oldalt; ha a
+      csomag tartalmaz email-listát, azt is frissíti.</p>
+    <div id="ver" class="ver">Jelenlegi verzió: …</div>
+    <div class="row">
+      <input id="pkgFile" type="file" accept=".zip" style="flex:1">
+      <button class="add" id="uploadBtn">Feltöltés</button>
+    </div>
+    <progress id="prog" value="0" max="100" style="display:none"></progress>
+    <div id="updateMsg" class="msg"></div>
+  </section>
+
   <a class="gallery-link" href="/">← Vissza a galériához</a>
 </div>
 <script>
-async function load() {
-  const r = await fetch('/api/admin/emails');
-  const { emails } = await r.json();
-  const ul = document.getElementById('list');
+// ---- Tab switching ----
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById('tab-' + b.dataset.tab).classList.add('active');
+});
+
+function flash(el, ok, text) { el.className = 'msg ' + (ok ? 'ok' : 'err'); el.textContent = text; }
+
+// ---- Emails ----
+async function loadEmails() {
+  const { emails } = await (await fetch('/api/admin/emails')).json();
+  const ul = document.getElementById('emailList');
   ul.innerHTML = emails.map(e =>
     `<li><span>${e}</span><button class="del" data-email="${e}">Törlés</button></li>`
   ).join('');
-  ul.querySelectorAll('.del').forEach(b => b.onclick = () => remove(b.dataset.email));
+  ul.querySelectorAll('.del').forEach(b => b.onclick = async () => {
+    await fetch('/api/admin/emails/' + encodeURIComponent(b.dataset.email), { method: 'DELETE' });
+    loadEmails();
+  });
 }
-
-async function remove(email) {
-  await fetch('/api/admin/emails/' + encodeURIComponent(email), { method: 'DELETE' });
-  load();
-}
-
 document.getElementById('addBtn').onclick = async () => {
   const email = document.getElementById('newEmail').value.trim().toLowerCase();
-  const msg = document.getElementById('msg');
-  if (!email || !email.includes('@')) {
-    msg.className='msg err'; msg.textContent='Érvénytelen email cím.'; return;
-  }
+  const msg = document.getElementById('emailMsg');
+  if (!email || !email.includes('@')) return flash(msg, false, 'Érvénytelen email cím.');
   const r = await fetch('/api/admin/emails', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email }),
   });
-  if (r.ok) {
-    msg.className='msg ok'; msg.textContent=`${email} hozzáadva.`;
-    document.getElementById('newEmail').value = '';
-    load();
-  } else {
-    msg.className='msg err'; msg.textContent='Hiba történt.';
-  }
+  if (r.ok) { flash(msg, true, email + ' hozzáadva.'); document.getElementById('newEmail').value = ''; loadEmails(); }
+  else flash(msg, false, 'Hiba történt.');
+};
+document.getElementById('newEmail').addEventListener('keydown',
+  e => e.key === 'Enter' && document.getElementById('addBtn').click());
+
+// ---- Admins ----
+async function loadAdmins() {
+  const { admins } = await (await fetch('/api/admin/admins')).json();
+  const ul = document.getElementById('adminList');
+  ul.innerHTML = admins.map(a =>
+    `<li><span>${a.email}${a.primary ? '<span class="tag">elsődleges</span>' : ''}</span>`
+    + `<button class="del" data-email="${a.email}" ${a.primary ? 'disabled' : ''}>Törlés</button></li>`
+  ).join('');
+  ul.querySelectorAll('.del:not([disabled])').forEach(b => b.onclick = async () => {
+    await fetch('/api/admin/admins/' + encodeURIComponent(b.dataset.email), { method: 'DELETE' });
+    loadAdmins();
+  });
+}
+document.getElementById('addAdminBtn').onclick = async () => {
+  const email = document.getElementById('newAdmin').value.trim().toLowerCase();
+  const msg = document.getElementById('adminMsg');
+  if (!email || !email.includes('@')) return flash(msg, false, 'Érvénytelen email cím.');
+  const r = await fetch('/api/admin/admins', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  if (r.ok) { flash(msg, true, email + ' admin lett.'); document.getElementById('newAdmin').value = ''; loadAdmins(); }
+  else flash(msg, false, 'Hiba történt.');
+};
+document.getElementById('newAdmin').addEventListener('keydown',
+  e => e.key === 'Enter' && document.getElementById('addAdminBtn').click());
+
+// ---- Update ----
+async function loadVersion() {
+  const v = await (await fetch('/api/admin/site-version')).json();
+  const when = v.updatedAt ? new Date(v.updatedAt).toLocaleString('hu-HU') : '—';
+  document.getElementById('ver').textContent =
+    'Jelenlegi verzió: ' + (v.version || 0) + '  (utolsó frissítés: ' + when + ')';
+}
+document.getElementById('uploadBtn').onclick = () => {
+  const f = document.getElementById('pkgFile').files[0];
+  const msg = document.getElementById('updateMsg');
+  const prog = document.getElementById('prog');
+  if (!f) return flash(msg, false, 'Válassz egy .zip csomagot.');
+  const fd = new FormData();
+  fd.append('package', f);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/admin/update');
+  prog.style.display = 'block'; prog.value = 0;
+  msg.className = 'msg'; msg.textContent = '';
+  document.getElementById('uploadBtn').disabled = true;
+  xhr.upload.onprogress = e => { if (e.lengthComputable) prog.value = (e.loaded / e.total) * 100; };
+  xhr.onload = () => {
+    document.getElementById('uploadBtn').disabled = false;
+    prog.style.display = 'none';
+    let r = {}; try { r = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status === 200 && r.ok) {
+      let t = 'Kész! Az oldal frissült (verzió: ' + r.version + ').';
+      if (r.allowlistUpdated) t += ' Az email-lista is frissült.';
+      if (r.older) t += ' (Figyelem: a feltöltött csomag régebbi a korábbinál.)';
+      flash(msg, true, t);
+      loadVersion();
+    } else {
+      flash(msg, false, r.error || 'A feltöltés nem sikerült.');
+    }
+  };
+  xhr.onerror = () => {
+    document.getElementById('uploadBtn').disabled = false;
+    prog.style.display = 'none';
+    flash(msg, false, 'Hálózati hiba a feltöltés közben.');
+  };
+  xhr.send(fd);
 };
 
-document.getElementById('newEmail').addEventListener('keydown',
-  e => e.key==='Enter' && document.getElementById('addBtn').click());
-
-load();
+loadEmails();
+loadAdmins();
+loadVersion();
 </script>
 </body>
 </html>
