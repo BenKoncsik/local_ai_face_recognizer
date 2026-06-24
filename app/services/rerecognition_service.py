@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.config import RecognitionConfig
 from app.db.models import Face, RecognitionMergeLog
+from app.db.query_utils import in_chunks
 from app.services.identity_service import FaceAssignmentSnapshot, IdentityService
 from app.services.vector_scoring import (
     FaceVectorScorer,
@@ -181,13 +182,15 @@ class ReRecognitionService:
         if not ids:
             return []
 
-        faces: List[Face] = (
-            self._session.query(Face)
-            .filter(Face.image_id.in_(ids))
-            .filter(Face.embedding_exists())
-            .filter(Face.is_excluded == False)  # noqa: E712
-            .all()
-        )
+        faces: List[Face] = []
+        for chunk in in_chunks(ids):
+            faces.extend(
+                self._session.query(Face)
+                .filter(Face.image_id.in_(chunk))
+                .filter(Face.embedding_exists())
+                .filter(Face.is_excluded == False)  # noqa: E712
+                .all()
+            )
 
         out: List[FaceData] = []
         for face in faces:

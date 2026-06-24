@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__ as APP_VERSION
 from app.db.models import Face, Image, Person, Relationship
+from app.db.query_utils import in_chunks
 from app.utils.image_utils import load_image_bgr, save_image_bgr
 
 # Image variant long-edge sizes (px) and JPEG quality for the Astro export.
@@ -888,30 +889,32 @@ class ExportService:
         image_dims: dict[int, tuple] = {}
         faces_by_image: dict[int, list] = {}
         if image_ids:
-            dim_rows = (
-                self._session.query(Image.id, Image.width, Image.height)
-                .filter(Image.id.in_(image_ids))
-                .all()
-            )
-            image_dims = {iid: (w, h) for iid, w, h in dim_rows}
-            face_rows = (
-                self._session.query(
-                    Face.image_id,
-                    Face.bbox_x,
-                    Face.bbox_y,
-                    Face.bbox_w,
-                    Face.bbox_h,
-                    Person.name,
-                    Person.notes,
+            for chunk in in_chunks(image_ids):
+                dim_rows = (
+                    self._session.query(Image.id, Image.width, Image.height)
+                    .filter(Image.id.in_(chunk))
+                    .all()
                 )
-                .outerjoin(Person, Person.id == Face.person_id)
-                .filter(Face.image_id.in_(image_ids))
-                .all()
-            )
-            for iid, bx, by, bw, bh, pname, pnotes in face_rows:
-                faces_by_image.setdefault(iid, []).append(
-                    ((bx, by, bw, bh), pname or "", pnotes or "")
+                for iid, w, h in dim_rows:
+                    image_dims[iid] = (w, h)
+                face_rows = (
+                    self._session.query(
+                        Face.image_id,
+                        Face.bbox_x,
+                        Face.bbox_y,
+                        Face.bbox_w,
+                        Face.bbox_h,
+                        Person.name,
+                        Person.notes,
+                    )
+                    .outerjoin(Person, Person.id == Face.person_id)
+                    .filter(Face.image_id.in_(chunk))
+                    .all()
                 )
+                for iid, bx, by, bw, bh, pname, pnotes in face_rows:
+                    faces_by_image.setdefault(iid, []).append(
+                        ((bx, by, bw, bh), pname or "", pnotes or "")
+                    )
 
         nodes_json = []
         for node in collage.nodes:

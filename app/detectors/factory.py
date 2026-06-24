@@ -178,6 +178,29 @@ def probe_coral(model_path: str | None = None) -> bool:
     return False
 
 
+def warm_up_onnxruntime(config: DetectionConfig) -> None:
+    """Import ``onnxruntime`` once on the calling thread (best-effort).
+
+    ``onnxruntime``'s C-extension import allocates heavily and can trigger a
+    cyclic GC pass mid-import.  When that import is first hit lazily *inside a
+    background worker* (e.g. the deep pipeline loading the InsightFace
+    co-detector), the GC pass runs on the worker thread and may reclaim a Qt
+    widget there, crashing AppKit.  Calling this from the main thread at
+    startup makes the heavy import — and any GC it provokes — happen on the
+    main thread instead.
+
+    No-op when InsightFace is disabled or the optional dependency is missing.
+    """
+    if not getattr(config, "multistage_use_insightface", False):
+        return
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 — optional, never fatal
+        log.info("onnxruntime warm-up skipped (%s)", exc)
+        return
+    log.info("onnxruntime warmed up on the main thread")
+
+
 def _maybe_add_insightface(detector: FaceDetector, config: DetectionConfig) -> FaceDetector:
     """Wrap *detector* in a CompositeDetector that also runs InsightFace SCRFD.
 

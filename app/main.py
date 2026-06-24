@@ -103,6 +103,13 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Face-Local")
     app.setOrganizationName("face-local")
+
+    # Route all cyclic garbage collection onto the main thread.  PySide6 runs a
+    # collected Qt wrapper's C++ destructor on whichever thread triggered GC; if
+    # that is a background worker and the object is a QWidget/QDialog, AppKit
+    # aborts with "Must only be used from the main thread".  See app.ui.gc_guard.
+    from app.ui.gc_guard import install_main_thread_gc
+    install_main_thread_gc()
     icon_path = app_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -127,6 +134,14 @@ def main() -> None:
 
     window = MainWindow(config=config)
     window.show()
+
+    # Warm up onnxruntime on the main thread once the window is up, so its heavy
+    # C-extension import (and any GC it provokes) never first runs inside a
+    # background worker.  Deferred via the event loop so it doesn't block show().
+    from PySide6.QtCore import QTimer
+
+    from app.detectors.factory import warm_up_onnxruntime
+    QTimer.singleShot(0, lambda: warm_up_onnxruntime(config.detection))
 
     # Google Drive cache — clean up on normal exit
     app.aboutToQuit.connect(_gdrive_cache.shutdown_cleanup)

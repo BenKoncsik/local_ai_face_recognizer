@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image
+from app.db.query_utils import in_chunks
 from app.services.face_crop_service import face_debug_state
 
 log = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ class ImageBrowserService:
         )
         if place_id is not None:
             q = q.filter(Image.place_id == place_id)
+        allowed_ids: Optional[set] = None
         if person_id is not None and second_person_id is not None:
             from app.services.family_service import FamilyService
             if person_id == second_person_id:
@@ -155,7 +157,9 @@ class ImageBrowserService:
             allowed_ids = {r.image_id for r in family_results}
             if not allowed_ids:
                 return []
-            q = q.filter(Image.id.in_(allowed_ids))
+            # Membership is enforced in Python below (see post-filter) rather
+            # than via Image.id.in_(allowed_ids): the set can be large and an
+            # IN (?, …) over it would blow SQLite's parameter limit on Windows.
         elif person_id is not None:
             person_images = (
                 self._session.query(Face.image_id)
@@ -166,7 +170,11 @@ class ImageBrowserService:
             )
             q = q.join(person_images, person_images.c.image_id == Image.id)
         raw = q.order_by(Image.file_path).all()
-        images = [img for img in raw if str(Path(img.file_path).parent) == folder_path]
+        images = [
+            img for img in raw
+            if str(Path(img.file_path).parent) == folder_path
+            and (allowed_ids is None or img.id in allowed_ids)
+        ]
 
         if not images:
             return []
@@ -237,17 +245,23 @@ class ImageBrowserService:
         if not image_ids:
             return {}
 
-        rows = (
-            self._session.query(
-                Face.image_id,
-                func.count(Face.id).label("total"),
-                func.sum(
-                    case((Face.person_id.isnot(None), 1), else_=0)
-                ).label("assigned"),
+        # Chunk the IN list so we never exceed SQLite's per-statement parameter
+        # limit (999 on older/Windows builds) — each image_id is one parameter.
+        result: Dict[int, Tuple[int, int]] = {}
+        for chunk in in_chunks(image_ids):
+            rows = (
+                self._session.query(
+                    Face.image_id,
+                    func.count(Face.id).label("total"),
+                    func.sum(
+                        case((Face.person_id.isnot(None), 1), else_=0)
+                    ).label("assigned"),
+                )
+                .filter(Face.is_excluded == False)  # noqa: E712
+                .filter(Face.image_id.in_(chunk))
+                .group_by(Face.image_id)
+                .all()
             )
-            .filter(Face.is_excluded == False)  # noqa: E712
-            .filter(Face.image_id.in_(image_ids))
-            .group_by(Face.image_id)
-            .all()
-        )
-        return {row.image_id: (row.total, row.assigned or 0) for row in rows}
+            for row in rows:
+                result[row.image_id] = (row.total, row.assigned or 0)
+        return result
