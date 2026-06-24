@@ -26,10 +26,12 @@ from app.services.docker_export_service import DockerExportService
 _ProgressCb = Callable[[Optional[int], str], None]
 
 # Supported HTTPS modes:
-#   "none"   — HTTP only, no reverse-proxy config generated
-#   "caddy"  — Caddyfile + setup-https.sh (Caddy handles 80/443 + ACME)
-#   "apache" — apache-vhost.conf + setup-https.sh (XAMPP/Apache + certbot)
-HTTPS_MODES = ("none", "caddy", "apache")
+#   "none"       — HTTP only, no reverse-proxy config generated
+#   "caddy"      — Caddyfile + setup-https.sh (Caddy handles 80/443 + ACME)
+#   "apache"     — apache-vhost.conf + setup-https.sh (XAMPP/Apache + certbot)
+#   "cloudflare" — Cloudflare Tunnel (cloudflared): public HTTPS with NO open
+#                  ports, works behind CGNAT / mobile internet. No Let's Encrypt.
+HTTPS_MODES = ("none", "caddy", "apache", "cloudflare")
 
 
 class LocalServerExportService(DockerExportService):
@@ -95,6 +97,7 @@ class LocalServerExportService(DockerExportService):
         if https_enabled:
             config["domain"] = domain
             config["httpsEnabled"] = True
+            config["httpsMode"] = https_mode
         (out / "config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
 
         # 4. Server files (shared with Docker export)
@@ -132,7 +135,9 @@ class LocalServerExportService(DockerExportService):
         _p(96, "README írása…")
         readme = _README_MD.replace("__PORT__", str(port))
         if https_enabled:
-            readme = readme.replace("__HTTPS_SECTION__", _README_HTTPS_SECTION
+            section = (_README_TUNNEL_SECTION if https_mode == "cloudflare"
+                       else _README_HTTPS_SECTION)
+            readme = readme.replace("__HTTPS_SECTION__", section
                                     .replace("__DOMAIN__", domain)
                                     .replace("__PORT__", str(port))
                                     .replace("__HTTPS_MODE__", https_mode))
@@ -153,25 +158,33 @@ class LocalServerExportService(DockerExportService):
         def _sub(text: str) -> str:
             return text.replace("__DOMAIN__", domain).replace("__PORT__", str(port))
 
-        if https_mode == "caddy":
-            (out / "Caddyfile").write_text(_sub(_CADDYFILE))
-            sh = out / "setup-https.sh"
-            sh.write_text(_sub(_SETUP_HTTPS_CADDY))
+        def _sh(name: str, content: str) -> None:
+            p = out / name
+            p.write_text(_sub(content))
             try:
-                sh.chmod(sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             except Exception:
                 pass
+
+        if https_mode == "caddy":
+            (out / "Caddyfile").write_text(_sub(_CADDYFILE))
+            _sh("setup-https.sh",      _SETUP_HTTPS_CADDY)
+            _sh("uninstall-https.sh",  _UNINSTALL_HTTPS_CADDY)
             (out / "setup-https.ps1").write_text(_sub(_SETUP_HTTPS_CADDY_PS1))
+            (out / "uninstall-https.ps1").write_text(_sub(_UNINSTALL_HTTPS_CADDY_PS1))
 
         elif https_mode == "apache":
             (out / "apache-vhost.conf").write_text(_sub(_APACHE_VHOST))
-            sh = out / "setup-https.sh"
-            sh.write_text(_sub(_SETUP_HTTPS_APACHE))
-            try:
-                sh.chmod(sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            except Exception:
-                pass
+            _sh("setup-https.sh",      _SETUP_HTTPS_APACHE)
+            _sh("uninstall-https.sh",  _UNINSTALL_HTTPS_APACHE)
             (out / "setup-https.ps1").write_text(_sub(_SETUP_HTTPS_APACHE_PS1))
+            (out / "uninstall-https.ps1").write_text(_sub(_UNINSTALL_HTTPS_APACHE_PS1))
+
+        elif https_mode == "cloudflare":
+            _sh("setup-tunnel.sh",      _SETUP_TUNNEL_SH)
+            _sh("uninstall-tunnel.sh",  _UNINSTALL_TUNNEL_SH)
+            (out / "setup-tunnel.ps1").write_text(_sub(_SETUP_TUNNEL_PS1))
+            (out / "uninstall-tunnel.ps1").write_text(_sub(_UNINSTALL_TUNNEL_PS1))
 
 
 # ---------------------------------------------------------------------------
@@ -191,16 +204,17 @@ __DOMAIN__ {
 """
 
 _SETUP_HTTPS_CADDY = r"""#!/usr/bin/env bash
-# setup-https.sh — Caddy telepítése + galéria HTTPS beállítása
-# Futtatás: sudo bash setup-https.sh
-# Követelmény: Ubuntu/Debian Linux, root jogosultság,
-#              __DOMAIN__ DNS-ben már erre a szerverre mutat,
-#              80-as és 443-as port szabad (ha XAMPP fut, lásd README.md).
+# setup-https.sh — Caddy telepítése + galéria HTTPS beállítása (Linux / macOS)
+# Linux: sudo bash setup-https.sh
+# macOS: sudo bash setup-https.sh   (sudo kell a 80/443-hoz)
+# Követelmény: __DOMAIN__ DNS-ben már erre a szerverre mutat,
+#              80/443-as port szabad (ha XAMPP fut, lásd README.md).
 set -euo pipefail
 
 DOMAIN="__DOMAIN__"
 PORT="__PORT__"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OS="$(uname -s)"
 
 log() { echo -e "\033[1;34m[https-setup]\033[0m $*"; }
 ok()  { echo -e "\033[1;32m[     ok     ]\033[0m $*"; }
@@ -208,14 +222,18 @@ err() { echo -e "\033[1;31m[    hiba    ]\033[0m $*" >&2; exit 1; }
 
 [[ $EUID -ne 0 ]] && err "Root jogosultság szükséges: sudo bash setup-https.sh"
 
+# macOS: a brew install nem futhat root-ként — az eredeti felhasználó nevében futtatjuk
+REAL_USER="${SUDO_USER:-$USER}"
+
 # ── Port-ellenőrzés ───────────────────────────────────────────────────────
 for p in 80 443; do
-  if ss -tlnp 2>/dev/null | grep -q ":${p} " || netstat -tlnp 2>/dev/null | grep -q ":${p} "; then
+  if lsof -iTCP:${p} -sTCP:LISTEN -n -P 2>/dev/null | grep -q "." || \
+     ss -tlnp 2>/dev/null | grep -q ":${p} "; then
     echo ""
     echo "⚠  A ${p}-as port már foglalt."
-    echo "   Ha XAMPP/Apache fut ezen a porton, két lehetőség van:"
-    echo "   1) XAMPP-ot állíts át más portra (pl. 8080), majd futtasd újra ezt a scriptet."
-    echo "   2) Használd helyette az Apache/XAMPP módot: setup-https.sh --apache"
+    echo "   Ha XAMPP/Apache fut ezen a porton:"
+    echo "   1) XAMPP-ot állítsd át más portra (pl. 8080), majd futtasd újra."
+    echo "   2) Vagy használd az Apache/XAMPP módot (apache-vhost.conf)."
     echo ""
     read -rp "Folytatás ugyanígy? (i/n): " yn
     [[ "$yn" =~ ^[Ii] ]] || exit 0
@@ -223,56 +241,82 @@ for p in 80 443; do
 done
 
 # ── Caddy telepítése ──────────────────────────────────────────────────────
-if ! command -v caddy &>/dev/null; then
-  log "Caddy telepítése (Debian/Ubuntu)..."
-  apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-    | tee /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update
-  apt-get install -y caddy
-  ok "Caddy telepítve"
+if [[ "$OS" == "Darwin" ]]; then
+  # brew install nem futhat root-ként → felhasználó nevében
+  BREW_BIN="$(sudo -u "$REAL_USER" command -v brew 2>/dev/null || echo "")"
+  [[ -z "$BREW_BIN" ]] && err "Homebrew szükséges: https://brew.sh"
+  if ! sudo -u "$REAL_USER" "$BREW_BIN" list caddy &>/dev/null 2>&1; then
+    log "Caddy telepítése (Homebrew, felhasználó: $REAL_USER)..."
+    sudo -u "$REAL_USER" "$BREW_BIN" install caddy
+    ok "Caddy telepítve"
+  else
+    ok "Caddy már telepítve"
+  fi
+  BREW_PREFIX="$(sudo -u "$REAL_USER" "$BREW_BIN" --prefix)"
 else
-  ok "Caddy már telepítve: $(caddy version)"
+  if ! command -v caddy &>/dev/null; then
+    log "Caddy telepítése (apt)..."
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+      | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+      | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update && apt-get install -y caddy
+    ok "Caddy telepítve"
+  else
+    ok "Caddy már telepítve: $(caddy version)"
+  fi
 fi
 
 # ── Caddyfile másolása ────────────────────────────────────────────────────
-cp "$SCRIPT_DIR/Caddyfile" /etc/caddy/Caddyfile
-ok "Caddyfile másolva → /etc/caddy/Caddyfile"
+if [[ "$OS" == "Darwin" ]]; then
+  CADDY_CFG="$BREW_PREFIX/etc/caddy/Caddyfile"
+  mkdir -p "$(dirname "$CADDY_CFG")"
+else
+  CADDY_CFG="/etc/caddy/Caddyfile"
+fi
+cp "$SCRIPT_DIR/Caddyfile" "$CADDY_CFG"
+ok "Caddyfile → $CADDY_CFG"
 
 # ── Caddy (újra)indítása ──────────────────────────────────────────────────
-if systemctl is-active --quiet caddy 2>/dev/null; then
-  log "Caddy reload..."
-  systemctl reload caddy
+if [[ "$OS" == "Darwin" ]]; then
+  # sudo brew services → LaunchDaemon (root-ként fut, port 80/443 OK)
+  "$BREW_PREFIX/bin/brew" services restart caddy
+  ok "Caddy fut (launchd, LaunchDaemon)"
 else
-  log "Caddy engedélyezése és indítása..."
-  systemctl enable --now caddy
+  if systemctl is-active --quiet caddy 2>/dev/null; then
+    systemctl reload caddy
+  else
+    systemctl enable --now caddy
+  fi
+  ok "Caddy fut (systemd)"
 fi
-ok "Caddy fut"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "HTTPS beállítva!"
-echo "   URL   : https://${DOMAIN}"
-echo "   Admin : https://${DOMAIN}/admin"
-echo "   TLS   : automatikus Let's Encrypt (Caddy kezeli, auto-megújítás)"
+echo "   URL    : https://${DOMAIN}"
+echo "   Admin  : https://${DOMAIN}/admin"
+echo "   TLS    : automatikus Let's Encrypt (Caddy, auto-megújítás)"
+echo "   Eltávolítás: sudo bash uninstall-https.sh"
 echo ""
-echo "   A galériaszerverre (Node.js) külön kell elindítani:"
+echo "   Node.js szerver indítása (külön terminálban):"
 echo "     python start.py --no-browser"
-echo "   Vagy systemd service-ként (lásd README.md #systemd szekció)."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 """
 
 _APACHE_VHOST = """\
 # Galéria — Apache VirtualHost konfig (XAMPP / Apache2 mellé)
-# Másolás helye:
-#   Ubuntu/Debian Apache2: /etc/apache2/sites-available/gallery-__DOMAIN__.conf
-#   XAMPP (Linux):         /opt/lampp/etc/extra/httpd-gallery.conf
-#                          + Include-old az /opt/lampp/etc/httpd.conf végére
+# A setup-https.sh / setup-https.ps1 automatikusan a megfelelő helyre másolja.
 #
-# Let's Encrypt automatikusan hozzáadja a *:443 blokkot:
-#   sudo bash setup-https.sh
+# Kézi másolás helye (ha szükséges):
+#   Ubuntu/Debian Apache2:  /etc/apache2/sites-available/gallery-__DOMAIN__.conf
+#   XAMPP Linux:            /opt/lampp/etc/extra/httpd-gallery.conf
+#   XAMPP macOS:            /Applications/XAMPP/xamppfiles/etc/extra/httpd-gallery.conf
+#   Homebrew Apache (macOS):(brew --prefix)/etc/httpd/extra/httpd-gallery.conf
+#   XAMPP Windows:          C:\\xampp\\apache\\conf\\extra\\httpd-gallery.conf
+#
+# Let's Encrypt (certbot) a setup szkript futtatása után hozzáadja a *:443 blokkot.
 
 <VirtualHost *:80>
     ServerName __DOMAIN__
@@ -296,15 +340,16 @@ _APACHE_VHOST = """\
 """
 
 _SETUP_HTTPS_APACHE = r"""#!/usr/bin/env bash
-# setup-https.sh — Apache/XAMPP + Let's Encrypt beállítása a galériaszerverre
+# setup-https.sh — Apache/XAMPP + Let's Encrypt beállítása (Linux / macOS)
 # Futtatás: sudo bash setup-https.sh
-# Követelmény: Ubuntu/Debian Linux, Apache2 vagy XAMPP telepítve,
-#              root jogosultság, __DOMAIN__ DNS-ben erre a szerverre mutat.
+# Követelmény: Apache2 vagy XAMPP telepítve, root jogosultság,
+#              __DOMAIN__ DNS-ben már erre a szerverre mutat.
 set -euo pipefail
 
 DOMAIN="__DOMAIN__"
 PORT="__PORT__"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OS="$(uname -s)"
 
 log() { echo -e "\033[1;34m[https-setup]\033[0m $*"; }
 ok()  { echo -e "\033[1;32m[     ok     ]\033[0m $*"; }
@@ -312,122 +357,789 @@ err() { echo -e "\033[1;31m[    hiba    ]\033[0m $*" >&2; exit 1; }
 
 [[ $EUID -ne 0 ]] && err "Root jogosultság szükséges: sudo bash setup-https.sh"
 
-# ── Apache mod_proxy engedélyezése (standard Apache2) ────────────────────
-if command -v a2enmod &>/dev/null; then
-  log "Apache modulok engedélyezése..."
+# macOS: brew nem futhat root-ként → eredeti felhasználó nevében
+REAL_USER="${SUDO_USER:-$USER}"
+
+# ── Apache / XAMPP helyszín detektálása ───────────────────────────────────
+if [[ "$OS" == "Darwin" ]]; then
+  # macOS: XAMPP for Mac
+  XAMPP_MAC="/Applications/XAMPP/xamppfiles"
+  BREW_BIN="$(sudo -u "$REAL_USER" command -v brew 2>/dev/null || echo "")"
+  BREW_PREFIX="$( [[ -n "$BREW_BIN" ]] && sudo -u "$REAL_USER" "$BREW_BIN" --prefix || echo /opt/homebrew)"
+  if [[ -f "$XAMPP_MAC/etc/httpd.conf" ]]; then
+    HTTPD_CONF="$XAMPP_MAC/etc/httpd.conf"
+    EXTRA_DIR="$XAMPP_MAC/etc/extra"
+    APACHE_CTL="$XAMPP_MAC/bin/apachectl"
+    VHOST_FILE="$EXTRA_DIR/httpd-gallery.conf"
+    CERTBOT_MODE="standalone"          # XAMPP-hoz nincs apache plugin
+    CERTBOT_INSTALL="sudo -u \"$REAL_USER\" \"$BREW_BIN\" install certbot"
+    SITES_AVAILABLE=""
+  elif [[ -d "$BREW_PREFIX/etc/httpd" ]]; then
+    # Homebrew Apache
+    HTTPD_CONF="$BREW_PREFIX/etc/httpd/httpd.conf"
+    EXTRA_DIR="$BREW_PREFIX/etc/httpd/extra"
+    APACHE_CTL="$BREW_PREFIX/bin/apachectl"
+    VHOST_FILE="$EXTRA_DIR/httpd-gallery.conf"
+    CERTBOT_MODE="standalone"
+    CERTBOT_INSTALL="sudo -u \"$REAL_USER\" \"$BREW_BIN\" install certbot"
+    SITES_AVAILABLE=""
+  else
+    err "XAMPP for Mac (/Applications/XAMPP) vagy Homebrew httpd szükséges."
+  fi
+elif [[ -d "/etc/apache2/sites-available" ]]; then
+  # Ubuntu/Debian standard Apache2
+  SITES_AVAILABLE="/etc/apache2/sites-available"
+  VHOST_FILE="$SITES_AVAILABLE/gallery-${DOMAIN}.conf"
+  APACHE_CTL="apache2ctl"
+  CERTBOT_MODE="apache"
+  CERTBOT_INSTALL="apt-get install -y certbot python3-certbot-apache"
+  HTTPD_CONF=""
+  EXTRA_DIR=""
+elif [[ -f "/opt/lampp/bin/apachectl" ]]; then
+  # XAMPP Linux
+  HTTPD_CONF="/opt/lampp/etc/httpd.conf"
+  EXTRA_DIR="/opt/lampp/etc/extra"
+  APACHE_CTL="/opt/lampp/bin/apachectl"
+  VHOST_FILE="$EXTRA_DIR/httpd-gallery.conf"
+  CERTBOT_MODE="standalone"
+  CERTBOT_INSTALL="apt-get install -y certbot"
+  SITES_AVAILABLE=""
+else
+  err "Apache2 és XAMPP sem található. Telepítsd az egyiket, majd futtasd újra."
+fi
+
+# ── mod_proxy modulok engedélyezése ──────────────────────────────────────
+if [[ -n "$SITES_AVAILABLE" ]] && command -v a2enmod &>/dev/null; then
+  log "Apache modulok engedélyezése (a2enmod)..."
   a2enmod proxy proxy_http rewrite ssl headers 2>/dev/null
+  ok "Modulok engedélyezve"
+elif [[ -n "$HTTPD_CONF" ]]; then
+  log "mod_proxy modulok engedélyezése a httpd.conf-ban..."
+  SED_I="sed -i"
+  [[ "$OS" == "Darwin" ]] && SED_I="sed -i ''"
+  for mod in proxy proxy_http ssl rewrite headers; do
+    $SED_I "s|^#LoadModule ${mod}_module|LoadModule ${mod}_module|" "$HTTPD_CONF" 2>/dev/null || true
+  done
   ok "Modulok engedélyezve"
 fi
 
 # ── VirtualHost konfig másolása ───────────────────────────────────────────
-SITES_AVAILABLE="/etc/apache2/sites-available"
-if [[ -d "$SITES_AVAILABLE" ]]; then
-  # Standard Apache2 (Ubuntu/Debian)
-  CONF="$SITES_AVAILABLE/gallery-${DOMAIN}.conf"
-  cp "$SCRIPT_DIR/apache-vhost.conf" "$CONF"
+[[ -n "$EXTRA_DIR" ]] && mkdir -p "$EXTRA_DIR"
+cp "$SCRIPT_DIR/apache-vhost.conf" "$VHOST_FILE"
+ok "VirtualHost konfig → $VHOST_FILE"
+
+if [[ -n "$SITES_AVAILABLE" ]]; then
   a2ensite "gallery-${DOMAIN}.conf" 2>/dev/null || true
-  ok "VirtualHost engedélyezve: $CONF"
-  APACHE_CTL="apache2ctl"
-elif [[ -f /opt/lampp/bin/apachectl ]]; then
-  # XAMPP
-  XAMPP_EXTRA="/opt/lampp/etc/extra"
-  mkdir -p "$XAMPP_EXTRA"
-  cp "$SCRIPT_DIR/apache-vhost.conf" "$XAMPP_EXTRA/httpd-gallery.conf"
-  HTTPD_CONF="/opt/lampp/etc/httpd.conf"
-  if ! grep -q "httpd-gallery.conf" "$HTTPD_CONF"; then
-    echo "" >> "$HTTPD_CONF"
-    echo "# Galéria szerver VirtualHost" >> "$HTTPD_CONF"
-    echo "Include /opt/lampp/etc/extra/httpd-gallery.conf" >> "$HTTPD_CONF"
-    ok "Include hozzáadva: $HTTPD_CONF"
-  fi
-  # XAMPP-ban engedélyezni kell a proxy modulokat a httpd.conf-ban
-  for mod in mod_proxy.so mod_proxy_http.so mod_ssl.so mod_rewrite.so mod_headers.so; do
-    sed -i "s|^#LoadModule ${mod%.*}|LoadModule ${mod%.*}|" /opt/lampp/etc/httpd.conf || true
-  done
-  ok "XAMPP VirtualHost hozzáadva: $XAMPP_EXTRA/httpd-gallery.conf"
-  APACHE_CTL="/opt/lampp/bin/apachectl"
-else
-  err "Apache2 és XAMPP sem található. Telepítsd az egyiket, majd futtasd újra."
+  ok "VirtualHost site engedélyezve"
+elif [[ -n "$HTTPD_CONF" ]] && ! grep -q "httpd-gallery.conf" "$HTTPD_CONF"; then
+  printf "\n# Galéria szerver VirtualHost\nInclude %s\n" "$VHOST_FILE" >> "$HTTPD_CONF"
+  ok "Include hozzáadva: $HTTPD_CONF"
 fi
 
 # ── certbot telepítése ────────────────────────────────────────────────────
 if ! command -v certbot &>/dev/null; then
   log "certbot telepítése..."
-  apt-get install -y certbot python3-certbot-apache
+  eval "$CERTBOT_INSTALL"
   ok "certbot telepítve"
 fi
 
-# ── Apache újraindítása (a certbot HTTP-01 challenge-hez szükséges) ───────
-log "Apache újraindítása..."
-"$APACHE_CTL" graceful 2>/dev/null || "$APACHE_CTL" restart
+# ── Apache újraindítása ───────────────────────────────────────────────────
+log "Apache indítása..."
+"$APACHE_CTL" graceful 2>/dev/null || "$APACHE_CTL" start
 ok "Apache fut"
 
 # ── Let's Encrypt tanúsítvány ─────────────────────────────────────────────
 log "Let's Encrypt tanúsítvány kérése: ${DOMAIN}"
-certbot --apache -d "$DOMAIN" \
-  --redirect \
-  --agree-tos \
-  --register-unsafely-without-email \
-  --non-interactive \
-  || certbot --apache -d "$DOMAIN" --redirect
+if [[ "$CERTBOT_MODE" == "apache" ]]; then
+  # Ubuntu: certbot automatikusan konfigurálja az Apache-t
+  certbot --apache -d "$DOMAIN" --redirect --agree-tos \
+    --register-unsafely-without-email --non-interactive \
+    || certbot --apache -d "$DOMAIN" --redirect
+else
+  # XAMPP / Homebrew: standalone mód (rövid Apache-leállás)
+  log "Apache rövid leállítása a standalone challenge-hez..."
+  "$APACHE_CTL" stop 2>/dev/null || true
+  certbot certonly --standalone -d "$DOMAIN" --agree-tos \
+    --register-unsafely-without-email --non-interactive \
+    || certbot certonly --standalone -d "$DOMAIN"
+  "$APACHE_CTL" start
+  ok "Tanúsítvány → /etc/letsencrypt/live/${DOMAIN}/"
 
-ok "Tanúsítvány beszerezve"
+  # SSL VirtualHost blokk hozzáadása
+  CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
+  if ! grep -q ":443" "$VHOST_FILE"; then
+    cat >> "$VHOST_FILE" <<SSLBLOCK
 
-# ── Apache újraindítása HTTPS konfiggal ───────────────────────────────────
-log "Apache végső újraindítása..."
+<VirtualHost *:443>
+    ServerName ${DOMAIN}
+    SSLEngine             On
+    SSLCertificateFile    ${CERT_DIR}/fullchain.pem
+    SSLCertificateKeyFile ${CERT_DIR}/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyPass        / http://localhost:${PORT}/
+    ProxyPassReverse / http://localhost:${PORT}/
+    RequestHeader set X-Forwarded-Proto "https"
+</VirtualHost>
+SSLBLOCK
+    ok "HTTPS VirtualHost hozzáadva"
+  fi
+fi
+
+# ── Apache végső újraindítása ─────────────────────────────────────────────
 "$APACHE_CTL" graceful 2>/dev/null || "$APACHE_CTL" restart
 ok "Apache fut HTTPS-sel"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "HTTPS beállítva!"
+echo "   URL    : https://${DOMAIN}"
+echo "   Admin  : https://${DOMAIN}/admin"
+echo "   TLS    : Let's Encrypt (certbot, 90 naponta auto-megújítás)"
+echo "   Eltávolítás: sudo bash uninstall-https.sh"
+echo ""
+echo "   Node.js szerver indítása (külön terminálban):"
+echo "     python start.py --no-browser"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"""
+
+_UNINSTALL_HTTPS_CADDY = r"""#!/usr/bin/env bash
+# uninstall-https.sh — Caddy leállítása és eltávolítása (Linux / macOS)
+# Linux: sudo bash uninstall-https.sh
+# macOS: sudo bash uninstall-https.sh
+set -euo pipefail
+
+DOMAIN="__DOMAIN__"
+OS="$(uname -s)"
+
+log() { echo -e "\033[1;34m[uninstall]\033[0m $*"; }
+ok()  { echo -e "\033[1;32m[   ok    ]\033[0m $*"; }
+
+[[ $EUID -ne 0 ]] && { echo "sudo szükséges: sudo bash uninstall-https.sh"; exit 1; }
+
+# macOS: brew install/uninstall nem futhat root-ként
+REAL_USER="${SUDO_USER:-$USER}"
+
+if [[ "$OS" == "Darwin" ]]; then
+  BREW_BIN="$(sudo -u "$REAL_USER" command -v brew 2>/dev/null || echo "")"
+  BREW_PREFIX="$( [[ -n "$BREW_BIN" ]] && sudo -u "$REAL_USER" "$BREW_BIN" --prefix || echo /opt/homebrew)"
+  log "Caddy leállítása (launchd)..."
+  # sudo brew services → LaunchDaemon management (root OK)
+  "$BREW_PREFIX/bin/brew" services stop caddy 2>/dev/null || true
+  CFG="$BREW_PREFIX/etc/caddy/Caddyfile"
+  [[ -f "$CFG" ]] && rm "$CFG" && ok "Caddyfile törölve: $CFG"
+  read -rp "Caddy teljesen eltávolítása (brew uninstall)? (i/n): " yn
+  [[ "$yn" =~ ^[Ii] ]] && sudo -u "$REAL_USER" "$BREW_BIN" uninstall caddy && ok "Caddy eltávolítva"
+else
+  log "Caddy leállítása (systemd)..."
+  systemctl stop    caddy 2>/dev/null || true
+  systemctl disable caddy 2>/dev/null || true
+  [[ -f /etc/caddy/Caddyfile ]] && rm /etc/caddy/Caddyfile && ok "Caddyfile törölve"
+  read -rp "Caddy teljesen eltávolítása (apt remove)? (i/n): " yn
+  [[ "$yn" =~ ^[Ii] ]] && apt-get remove -y caddy && ok "Caddy eltávolítva"
+fi
+
+echo ""
+ok "Kész — Let's Encrypt tanúsítvány automatikusan lejár 90 nap múlva."
+echo "   (Azonnali visszavonás: certbot revoke --cert-name ${DOMAIN})"
+"""
+
+_UNINSTALL_HTTPS_APACHE = r"""#!/usr/bin/env bash
+# uninstall-https.sh — Apache/XAMPP VirtualHost + Let's Encrypt eltávolítása (Linux / macOS)
+# Futtatás: sudo bash uninstall-https.sh
+set -euo pipefail
+
+DOMAIN="__DOMAIN__"
+OS="$(uname -s)"
+
+log() { echo -e "\033[1;34m[uninstall]\033[0m $*"; }
+ok()  { echo -e "\033[1;32m[   ok    ]\033[0m $*"; }
+err() { echo -e "\033[1;31m[  hiba   ]\033[0m $*" >&2; exit 1; }
+
+[[ $EUID -ne 0 ]] && err "sudo szükséges: sudo bash uninstall-https.sh"
+
+REAL_USER="${SUDO_USER:-$USER}"
+
+# ── Apache helyszín detektálása ───────────────────────────────────────────
+if [[ "$OS" == "Darwin" ]]; then
+  BREW_BIN="$(sudo -u "$REAL_USER" command -v brew 2>/dev/null || echo "")"
+  BREW_PREFIX="$( [[ -n "$BREW_BIN" ]] && sudo -u "$REAL_USER" "$BREW_BIN" --prefix || echo /opt/homebrew)"
+  XAMPP_MAC="/Applications/XAMPP/xamppfiles"
+  if [[ -f "$XAMPP_MAC/etc/httpd.conf" ]]; then
+    HTTPD_CONF="$XAMPP_MAC/etc/httpd.conf"
+    VHOST_FILE="$XAMPP_MAC/etc/extra/httpd-gallery.conf"
+    APACHE_CTL="$XAMPP_MAC/bin/apachectl"
+    SITES_AVAILABLE=""
+  elif [[ -d "$BREW_PREFIX/etc/httpd" ]]; then
+    HTTPD_CONF="$BREW_PREFIX/etc/httpd/httpd.conf"
+    VHOST_FILE="$BREW_PREFIX/etc/httpd/extra/httpd-gallery.conf"
+    APACHE_CTL="$BREW_PREFIX/bin/apachectl"
+    SITES_AVAILABLE=""
+  else
+    err "XAMPP for Mac vagy Homebrew httpd nem található."
+  fi
+elif [[ -d "/etc/apache2/sites-available" ]]; then
+  SITES_AVAILABLE="/etc/apache2/sites-available"
+  VHOST_FILE="$SITES_AVAILABLE/gallery-${DOMAIN}.conf"
+  APACHE_CTL="apache2ctl"
+  HTTPD_CONF=""
+elif [[ -f "/opt/lampp/bin/apachectl" ]]; then
+  HTTPD_CONF="/opt/lampp/etc/httpd.conf"
+  VHOST_FILE="/opt/lampp/etc/extra/httpd-gallery.conf"
+  APACHE_CTL="/opt/lampp/bin/apachectl"
+  SITES_AVAILABLE=""
+else
+  err "Apache2 / XAMPP nem található."
+fi
+
+# ── VirtualHost konfig eltávolítása ───────────────────────────────────────
+if [[ -f "$VHOST_FILE" ]]; then
+  [[ -n "$SITES_AVAILABLE" ]] && a2dissite "gallery-${DOMAIN}.conf" 2>/dev/null || true
+  rm "$VHOST_FILE"
+  ok "VirtualHost konfig törölve: $VHOST_FILE"
+fi
+
+if [[ -n "$HTTPD_CONF" ]] && grep -q "httpd-gallery.conf" "$HTTPD_CONF"; then
+  SED_I="sed -i"
+  [[ "$OS" == "Darwin" ]] && SED_I="sed -i ''"
+  $SED_I '/# Galéria szerver VirtualHost/d' "$HTTPD_CONF"
+  $SED_I '/httpd-gallery\.conf/d'           "$HTTPD_CONF"
+  ok "Include eltávolítva: $HTTPD_CONF"
+fi
+
+# ── certbot tanúsítvány ───────────────────────────────────────────────────
+if command -v certbot &>/dev/null; then
+  read -rp "Let's Encrypt tanúsítvány törlése ($DOMAIN)? (i/n): " yn
+  if [[ "$yn" =~ ^[Ii] ]]; then
+    certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
+    ok "Tanúsítvány törölve"
+  fi
+fi
+
+# ── Apache újraindítása ───────────────────────────────────────────────────
+"$APACHE_CTL" graceful 2>/dev/null || "$APACHE_CTL" restart || true
+ok "Apache újraindítva"
+
+echo ""
+ok "Kész — a galéria aldomén (${DOMAIN}) le van tiltva."
+"""
+
+_UNINSTALL_HTTPS_CADDY_PS1 = r"""# uninstall-https.ps1 — Caddy leállítása és eltávolítása (Windows)
+# Futtatás: adminisztrátori PowerShell: .\uninstall-https.ps1
+param([string]$Domain = "__DOMAIN__")
+$ErrorActionPreference = "Stop"
+
+function Log { Write-Host "[uninstall] $args" -ForegroundColor Cyan  }
+function Ok  { Write-Host "[   ok    ] $args" -ForegroundColor Green }
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { Write-Error "Adminisztrátori PowerShell szükséges."; exit 1 }
+
+# ── Caddy service leállítása ──────────────────────────────────────────────
+$svc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
+if ($svc) {
+    Log "Caddy service leállítása..."
+    Stop-Service caddy -Force -ErrorAction SilentlyContinue
+    $caddy = (Get-Command caddy -ErrorAction SilentlyContinue)?.Source
+    if ($caddy) { & $caddy service uninstall 2>$null }
+    Ok "Caddy service eltávolítva"
+}
+
+# ── Caddyfile törlése ─────────────────────────────────────────────────────
+foreach ($p in @("C:\caddy\Caddyfile", "$env:ProgramData\caddy\Caddyfile")) {
+    if (Test-Path $p) { Remove-Item $p -Force; Ok "Törölve: $p" }
+}
+
+# ── Tűzfal szabályok eltávolítása ────────────────────────────────────────
+foreach ($p in @(80, 443)) {
+    Remove-NetFirewallRule -DisplayName "Caddy port $p" -ErrorAction SilentlyContinue
+}
+Ok "Tűzfal szabályok törölve"
+
+# ── Opcionális teljes eltávolítás ─────────────────────────────────────────
+$yn = Read-Host "Caddy teljesen eltávolítása (winget)? (i/n)"
+if ($yn -match "^[Ii]") {
+    winget uninstall --id Caddyserver.Caddy 2>$null
+    foreach ($d in @("C:\caddy", "$env:ProgramData\caddy")) {
+        Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Ok "Caddy eltávolítva"
+}
+
+Write-Host ""
+Ok "Kész — Let's Encrypt tanusítvány 90 nap múlva jár le automatikusan."
+"""
+
+_UNINSTALL_HTTPS_APACHE_PS1 = r"""# uninstall-https.ps1 — XAMPP VirtualHost + win-acme tanúsítvány eltávolítása (Windows)
+# Futtatás: adminisztrátori PowerShell: .\uninstall-https.ps1
+param(
+    [string]$Domain    = "__DOMAIN__",
+    [string]$XamppPath = ""
+)
+$ErrorActionPreference = "Stop"
+
+function Log { Write-Host "[uninstall] $args" -ForegroundColor Cyan  }
+function Ok  { Write-Host "[   ok    ] $args" -ForegroundColor Green }
+function Err { Write-Host "[  hiba   ] $args" -ForegroundColor Red; exit 1 }
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) { Err "Adminisztrátori PowerShell szükséges." }
+
+# ── XAMPP keresése ────────────────────────────────────────────────────────
+if (-not $XamppPath) {
+    $XamppPath = @("C:\xampp","D:\xampp","C:\Program Files\xampp") |
+        Where-Object { Test-Path "$_\apache\conf\httpd.conf" } | Select-Object -First 1
+    if (-not $XamppPath) { Err "XAMPP nem található. Add meg: -XamppPath C:\xampp" }
+}
+Ok "XAMPP: $XamppPath"
+
+$VhostConf = "$XamppPath\apache\conf\extra\httpd-gallery.conf"
+$HttpdConf  = "$XamppPath\apache\conf\httpd.conf"
+
+# ── VirtualHost konfig törlése ────────────────────────────────────────────
+if (Test-Path $VhostConf) {
+    Remove-Item $VhostConf -Force
+    Ok "VirtualHost konfig törölve: $VhostConf"
+}
+
+# ── Include sor törlése httpd.conf-ból ───────────────────────────────────
+if (Test-Path $HttpdConf) {
+    $raw = Get-Content $HttpdConf -Raw
+    $raw = $raw -replace "(?m)\r?\n# Galeria.*", ""
+    $raw = $raw -replace "(?m)\r?\nInclude[^\n]*httpd-gallery\.conf[^\n]*", ""
+    [IO.File]::WriteAllText($HttpdConf, $raw)
+    Ok "Include eltávolítva: $HttpdConf"
+}
+
+# ── win-acme tanúsítvány visszavonása ────────────────────────────────────
+$WacsExe = Get-ChildItem "$env:ProgramData\win-acme" -Filter "wacs.exe" -Recurse -ErrorAction SilentlyContinue |
+           Select-Object -First 1 -ExpandProperty FullName
+if ($WacsExe) {
+    $yn = Read-Host "Let's Encrypt tanusítvány visszavonása ($Domain)? (i/n)"
+    if ($yn -match "^[Ii]") {
+        & $WacsExe --cancel --host $Domain 2>$null
+        Ok "Tanúsítvány visszavonva"
+    }
+}
+
+# ── SSL-könyvtár törlése (opcionális) ────────────────────────────────────
+$SslDir = "$XamppPath\apache\conf\ssl\$Domain"
+if (Test-Path $SslDir) {
+    $yn = Read-Host "SSL cert fájlok törlése ($SslDir)? (i/n)"
+    if ($yn -match "^[Ii]") { Remove-Item $SslDir -Recurse -Force; Ok "SSL könyvtár törölve" }
+}
+
+# ── Apache újraindítása ───────────────────────────────────────────────────
+$apacheSvc = Get-Service -DisplayName "*Apache*" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($apacheSvc) { Restart-Service $apacheSvc.Name }
+elseif (Test-Path "$XamppPath\apache\bin\httpd.exe") {
+    & "$XamppPath\apache\bin\httpd.exe" -k restart 2>$null
+}
+Ok "Apache újraindítva"
+
+Write-Host ""
+Ok "Kész — a galeria aldomén ($Domain) le van tiltva."
+"""
+
+# ── Cloudflare Tunnel (cloudflared) ──────────────────────────────────────────
+
+_SETUP_TUNNEL_SH = r"""#!/usr/bin/env bash
+# setup-tunnel.sh — Cloudflare Tunnel beállítása (Linux / macOS)
+# Futtatás:  bash setup-tunnel.sh        (NEM kell sudo / root!)
+#
+# Nyilvános HTTPS a __DOMAIN__ domainre, nyitott portok NÉLKÜL — működik
+# CGNAT / mobilnet mögött is. A HTTPS tanúsítványt a Cloudflare kezeli.
+# Követelmény: a __DOMAIN__ domén Cloudflare-en legyen (a névszerverek a
+#              Cloudflare-re mutassanak).
+set -euo pipefail
+
+DOMAIN="__DOMAIN__"
+PORT="__PORT__"
+TUNNEL_NAME="galeria-__DOMAIN__"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OS="$(uname -s)"
+
+log() { echo -e "\033[1;34m[tunnel]\033[0m $*"; }
+ok()  { echo -e "\033[1;32m[  ok  ]\033[0m $*"; }
+err() { echo -e "\033[1;31m[ hiba ]\033[0m $*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] && err "NE root-ként futtasd: bash setup-tunnel.sh (sudo nélkül)."
+
+# ── cloudflared telepítése ────────────────────────────────────────────────
+if ! command -v cloudflared &>/dev/null; then
+  if [[ "$OS" == "Darwin" ]]; then
+    command -v brew &>/dev/null || err "Homebrew szükséges: https://brew.sh"
+    log "cloudflared telepítése (Homebrew)..."
+    brew install cloudflared
+  elif command -v apt-get &>/dev/null; then
+    log "cloudflared telepítése (apt)..."
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+      | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+      | sudo tee /etc/apt/sources.list.d/cloudflared.list
+    sudo apt-get update && sudo apt-get install -y cloudflared
+  else
+    err "Telepítsd a cloudflared-et: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+  fi
+  ok "cloudflared telepítve"
+else
+  ok "cloudflared már telepítve: $(cloudflared --version 2>&1 | head -1)"
+fi
+
+# ── Cloudflare bejelentkezés (böngészőt nyit) ──────────────────────────────
+if [[ ! -f "$HOME/.cloudflared/cert.pem" ]]; then
+  log "Cloudflare bejelentkezés — a böngészőben válaszd ki a domain zónát ($DOMAIN)..."
+  cloudflared tunnel login
+fi
+ok "Cloudflare hitelesítés kész"
+
+# ── Tunnel létrehozása (ha még nincs) ──────────────────────────────────────
+if ! cloudflared tunnel list 2>/dev/null | grep -qw "$TUNNEL_NAME"; then
+  log "Tunnel létrehozása: $TUNNEL_NAME"
+  cloudflared tunnel create "$TUNNEL_NAME"
+else
+  ok "Tunnel már létezik: $TUNNEL_NAME"
+fi
+
+TUNNEL_ID="$(cloudflared tunnel list 2>/dev/null | awk -v n="$TUNNEL_NAME" '$2==n{print $1}')"
+[[ -z "$TUNNEL_ID" ]] && err "Nem sikerült megállapítani a tunnel ID-t."
+CRED_FILE="$HOME/.cloudflared/${TUNNEL_ID}.json"
+ok "Tunnel ID: $TUNNEL_ID"
+
+# ── config.yml írása ──────────────────────────────────────────────────────
+cat > "$SCRIPT_DIR/cloudflared-config.yml" <<EOF
+# Cloudflare Tunnel konfiguráció — automatikusan generálva
+tunnel: ${TUNNEL_ID}
+credentials-file: ${CRED_FILE}
+ingress:
+  - hostname: ${DOMAIN}
+    service: http://localhost:${PORT}
+  - service: http_status:404
+EOF
+ok "config.yml → $SCRIPT_DIR/cloudflared-config.yml"
+
+# ── DNS route a domainre ───────────────────────────────────────────────────
+log "DNS rekord beállítása: ${DOMAIN} → tunnel"
+cloudflared tunnel route dns "$TUNNEL_NAME" "$DOMAIN" || \
+  log "(A DNS rekord már létezhet — ez rendben van.)"
+ok "DNS kész"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+ok "Cloudflare Tunnel beállítva!"
 echo "   URL   : https://${DOMAIN}"
 echo "   Admin : https://${DOMAIN}/admin"
-echo "   TLS   : Let's Encrypt (certbot, auto-megújítás 90 naponta)"
+echo "   TLS   : Cloudflare kezeli (nincs nyitott port, CGNAT/mobilnet OK)"
 echo ""
-echo "   A galériaszerverre (Node.js) külön kell elindítani:"
-echo "     python start.py --no-browser"
-echo "   Vagy systemd service-ként (lásd README.md #systemd szekció)."
+echo "   Indítás (Node + tunnel egyben, sudo NÉLKÜL):"
+echo "     python3 start.py"
+echo "   Eltávolítás: bash uninstall-tunnel.sh"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"""
+
+_UNINSTALL_TUNNEL_SH = r"""#!/usr/bin/env bash
+# uninstall-tunnel.sh — Cloudflare Tunnel eltávolítása (Linux / macOS)
+# Futtatás: bash uninstall-tunnel.sh   (sudo nélkül)
+set -euo pipefail
+
+DOMAIN="__DOMAIN__"
+TUNNEL_NAME="galeria-__DOMAIN__"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+log() { echo -e "\033[1;34m[uninstall]\033[0m $*"; }
+ok()  { echo -e "\033[1;32m[   ok    ]\033[0m $*"; }
+
+command -v cloudflared &>/dev/null || { echo "cloudflared nincs telepítve — nincs mit eltávolítani."; exit 0; }
+
+if cloudflared tunnel list 2>/dev/null | grep -qw "$TUNNEL_NAME"; then
+  read -rp "Tunnel törlése ($TUNNEL_NAME)? A DNS rekordot is érdemes a Cloudflare felületen törölni. (i/n): " yn
+  if [[ "$yn" =~ ^[Ii] ]]; then
+    cloudflared tunnel cleanup "$TUNNEL_NAME" 2>/dev/null || true
+    cloudflared tunnel delete "$TUNNEL_NAME" 2>/dev/null || true
+    ok "Tunnel törölve: $TUNNEL_NAME"
+  fi
+fi
+
+[[ -f "$SCRIPT_DIR/cloudflared-config.yml" ]] && rm "$SCRIPT_DIR/cloudflared-config.yml" && ok "config.yml törölve"
+
+echo ""
+ok "Kész. A ${DOMAIN} DNS (CNAME) rekordot a Cloudflare DNS felületén törölheted, ha kell."
+"""
+
+_SETUP_TUNNEL_PS1 = r"""# setup-tunnel.ps1 — Cloudflare Tunnel beállítása (Windows)
+# Futtatás:  .\setup-tunnel.ps1     (NEM kell rendszergazda!)
+param(
+    [string]$Domain = "__DOMAIN__",
+    [int]   $Port   = __PORT__
+)
+$ErrorActionPreference = "Stop"
+$TunnelName = "galeria-$Domain"
+$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Log { Write-Host "[tunnel] $args" -ForegroundColor Cyan  }
+function Ok  { Write-Host "[  ok  ] $args" -ForegroundColor Green }
+function Err { Write-Host "[ hiba ] $args" -ForegroundColor Red; exit 1 }
+
+# ── cloudflared telepítése ────────────────────────────────────────────────
+if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Log "cloudflared telepítése (winget)..."
+        winget install --id Cloudflare.cloudflared --accept-package-agreements --accept-source-agreements
+    } else {
+        Err "Telepítsd a cloudflared-et: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+    }
+    $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    Ok "cloudflared telepítve"
+} else {
+    Ok "cloudflared már telepítve: $(cloudflared --version)"
+}
+
+# ── Cloudflare bejelentkezés ───────────────────────────────────────────────
+if (-not (Test-Path "$env:USERPROFILE\.cloudflared\cert.pem")) {
+    Log "Cloudflare bejelentkezés — a böngészőben válaszd ki a domain zónát ($Domain)..."
+    cloudflared tunnel login
+}
+Ok "Cloudflare hitelesítés kész"
+
+# ── Tunnel létrehozása ─────────────────────────────────────────────────────
+$exists = (cloudflared tunnel list 2>$null | Select-String -Pattern "\b$TunnelName\b")
+if (-not $exists) {
+    Log "Tunnel létrehozása: $TunnelName"
+    cloudflared tunnel create $TunnelName
+} else {
+    Ok "Tunnel már létezik: $TunnelName"
+}
+
+$line = (cloudflared tunnel list 2>$null | Select-String -Pattern "\b$TunnelName\b").Line
+$TunnelId = ($line -split "\s+")[0]
+if (-not $TunnelId) { Err "Nem sikerült megállapítani a tunnel ID-t." }
+$CredFile = "$env:USERPROFILE\.cloudflared\$TunnelId.json"
+Ok "Tunnel ID: $TunnelId"
+
+# ── config.yml írása ──────────────────────────────────────────────────────
+$cfg = @"
+# Cloudflare Tunnel konfiguráció — automatikusan generálva
+tunnel: $TunnelId
+credentials-file: $($CredFile -replace '\\','/')
+ingress:
+  - hostname: $Domain
+    service: http://localhost:$Port
+  - service: http_status:404
+"@
+[IO.File]::WriteAllText("$ScriptDir\cloudflared-config.yml", $cfg)
+Ok "config.yml -> $ScriptDir\cloudflared-config.yml"
+
+# ── DNS route ──────────────────────────────────────────────────────────────
+Log "DNS rekord beállítása: $Domain -> tunnel"
+cloudflared tunnel route dns $TunnelName $Domain 2>$null
+Ok "DNS kész"
+
+Write-Host ""
+Write-Host ("=" * 60) -ForegroundColor Green
+Ok "Cloudflare Tunnel beallitva!"
+Write-Host "   URL   : https://$Domain"
+Write-Host "   Admin : https://$Domain/admin"
+Write-Host "   Inditas (Node + tunnel egyben): python start.py"
+Write-Host "   Eltavolitas: .\uninstall-tunnel.ps1"
+Write-Host ("=" * 60) -ForegroundColor Green
+"""
+
+_UNINSTALL_TUNNEL_PS1 = r"""# uninstall-tunnel.ps1 — Cloudflare Tunnel eltávolítása (Windows)
+# Futtatás: .\uninstall-tunnel.ps1
+param([string]$Domain = "__DOMAIN__")
+$ErrorActionPreference = "Stop"
+$TunnelName = "galeria-$Domain"
+$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Ok { Write-Host "[   ok    ] $args" -ForegroundColor Green }
+
+if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
+    Write-Host "cloudflared nincs telepítve — nincs mit eltávolítani."; exit 0
+}
+
+$exists = (cloudflared tunnel list 2>$null | Select-String -Pattern "\b$TunnelName\b")
+if ($exists) {
+    $yn = Read-Host "Tunnel törlése ($TunnelName)? (i/n)"
+    if ($yn -match "^[Ii]") {
+        cloudflared tunnel cleanup $TunnelName 2>$null
+        cloudflared tunnel delete  $TunnelName 2>$null
+        Ok "Tunnel törölve: $TunnelName"
+    }
+}
+
+if (Test-Path "$ScriptDir\cloudflared-config.yml") {
+    Remove-Item "$ScriptDir\cloudflared-config.yml" -Force
+    Ok "config.yml törölve"
+}
+
+Write-Host ""
+Ok "Kész. A $Domain DNS (CNAME) rekordot a Cloudflare felületén törölheted, ha kell."
+"""
+
+_README_TUNNEL_SECTION = """
+## HTTPS Cloudflare Tunnellel (domain: __DOMAIN__)
+
+A **Cloudflare Tunnel** nyilvános HTTPS-t ad a domainedre **nyitott portok
+nélkül** — működik CGNAT / mobilnet / otthoni router mögött is. A TLS
+tanúsítványt a Cloudflare kezeli, nincs Let's Encrypt és nincs port-forward.
+
+**Követelmény:** a `__DOMAIN__` domén a Cloudflare-en legyen (a domain
+névszerverei a Cloudflare-re mutassanak — ingyenes Cloudflare-fiók elég).
+
+### Gyors teszt (azonnali, bejelentkezés és domain nélkül)
+
+```bash
+python3 start.py --no-browser              # Node szerver külön terminálban
+cloudflared tunnel --url http://localhost:__PORT__
+```
+
+Ez ad egy ideiglenes `https://valami.trycloudflare.com` címet. Belépéskor a
+**6 jegyű kódot** használd (a magic-link e-mail a saját domainre mutat).
+
+### Tartós beállítás a saját domainnel
+
+**Linux / macOS** (NEM kell sudo):
+
+```bash
+bash setup-tunnel.sh        # cloudflared telepítése + login + tunnel + DNS
+python3 start.py            # Node + tunnel egyben (Ctrl+C mindkettőt leállítja)
+```
+
+**Windows** (NEM kell rendszergazda):
+
+```powershell
+.\\setup-tunnel.ps1
+python start.py
+```
+
+A `setup-tunnel.sh/.ps1` egyszer fut le: telepíti a `cloudflared`-et,
+bejelentkeztet a Cloudflare-be (böngészőt nyit), létrehozza a tunnelt, beállítja
+a `__DOMAIN__` DNS rekordját, és kiír egy `cloudflared-config.yml`-t. Ezután a
+`start.py` a Node mellett automatikusan elindítja a tunnelt is.
+
+### Eltávolítás
+
+```bash
+# Linux / macOS:
+bash uninstall-tunnel.sh
+# Windows:
+.\\uninstall-tunnel.ps1
+```
+
+### Automatikus indítás háttérszolgáltatásként (opcionális)
+
+A `cloudflared` rendszerszolgáltatásként is futhat (újraindítás után is feljön):
+
+```bash
+# Linux / macOS:
+sudo cloudflared --config "$(pwd)/cloudflared-config.yml" service install
+# Windows (admin PowerShell):
+cloudflared --config "$PWD\\cloudflared-config.yml" service install
+```
+
+> A galéria Node szerverét ekkor is el kell indítani (`python start.py --no-browser`),
+> a tunnel csak a publikus elérést adja.
 """
 
 _README_HTTPS_SECTION = """
 ## HTTPS beállítása (domain: __DOMAIN__)
 
-A Node.js szerver a **__PORT__**-es porton fut;
+A Node.js szerver a **__PORT__**-es porton fut belül;
 a 80/443-as portokat a reverse proxy (Caddy vagy Apache/XAMPP) kezeli.
 
-### Linux / macOS
+### HTTPS szkriptek
+
+| Fájl | Platform | Leírás |
+|------|----------|--------|
+| `setup-https.sh` | Linux / macOS | HTTPS telepítése és beállítása |
+| `setup-https.ps1` | Windows | HTTPS telepítése és beállítása |
+| `uninstall-https.sh` | Linux / macOS | Reverse proxy + cert eltávolítása |
+| `uninstall-https.ps1` | Windows | Reverse proxy + cert eltávolítása |
+| `Caddyfile` *(Caddy mód)* | minden | Caddy konfigurációs fájl |
+| `apache-vhost.conf` *(Apache mód)* | minden | Apache/XAMPP VirtualHost konfig |
+
+> **Megjegyzés:** A szkripteket elég **egyszer** futtatni a szerveren.
+> A Let's Encrypt tanúsítvány megújítása automatikus.
+
+### Beállítás — Linux / macOS
+
+Két lehetőség:
+
+**A) Minden egy paranccsal** (teszteléshez a legegyszerűbb) — a `start.py`
+felhúzza a Node szervert **és** a Caddy-t is. A 80/443-as porthoz root kell:
 
 ```bash
-python start.py --no-browser   # Node.js szerver indítása háttérben
-
-sudo bash setup-https.sh       # HTTPS beállítása (egyszer)
+sudo bash setup-https.sh         # CSAK ELŐSZÖR: telepíti a Caddy-t
+sudo python3 start.py            # Node + Caddy együtt (Ctrl+C mindkettőt leállítja)
 ```
 
-### Windows
+**B) Caddy háttérszolgáltatásként** (folyamatos üzemhez ajánlott) — a
+`setup-https.sh` a Caddy-t rendszerszolgáltatásként indítja, ami újraindításkor
+is feljön; a Node szervert külön indítod:
+
+```bash
+sudo bash setup-https.sh         # HTTPS beállítása (egyszer, a szerveren)
+python start.py --no-browser     # Node.js szerver indítása
+```
+
+### Beállítás — Windows
 
 Nyisd meg a PowerShellt **rendszergazdaként** (jobb klikk → Futtatás rendszergazdaként):
 
 ```powershell
-python start.py --no-browser   # Node.js szerver indítása háttérben
-
-.\\setup-https.ps1             # HTTPS beállítása (egyszer)
+python start.py --no-browser     # Node.js szerver indítása háttérben
+.\\setup-https.ps1               # HTTPS beállítása (egyszer, a szerveren)
 ```
 
-XAMPP nem az alapértelmezett `C:\\xampp` mappában van? Add meg a -XamppPath paramétert:
+XAMPP nem az alapértelmezett `C:\\xampp` mappában van?
 
 ```powershell
 .\\setup-https.ps1 -XamppPath D:\\xampp
 ```
 
-A szkriptek elvégzik:
-- Szükséges eszköz telepítése (Caddy: `winget` / Linux: `apt`; Apache mód: win-acme / certbot)
-- Reverse proxy konfig beállítása
-- Let's Encrypt TLS tanúsítvány megszerzése
-- Tanúsítvány **automatikus megújítása** (Caddy: beépített; Apache: systemd timer / Task Scheduler)
+### Eltávolítás
 
-### Automatikus indítás
+```bash
+# Linux / macOS:
+sudo bash uninstall-https.sh
+
+# Windows (admin PowerShell):
+.\\uninstall-https.ps1
+.\\uninstall-https.ps1 -XamppPath D:\\xampp   # ha nem C:\\xampp
+```
+
+Az uninstall script leállítja a proxyt, törli a konfigot, és opcionálisan
+visszavonja a Let's Encrypt tanúsítványt.
+
+### Mit csinálnak a szkriptek?
+
+**`setup-https.sh` / `setup-https.ps1`:**
+- Telepíti a szükséges eszközt (Caddy mód: winget/brew/apt; Apache mód: win-acme/certbot)
+- Beállítja a reverse proxy konfigot (Caddyfile vagy apache-vhost.conf)
+- Let's Encrypt TLS tanúsítványt igényel a domainre
+- Tanúsítvány **automatikusan megújul** — nincs további tennivaló
+
+**`uninstall-https.sh` / `uninstall-https.ps1`:**
+- Leállítja és eltávolítja a reverse proxy service-t (Caddy / Apache vhost)
+- Törli a generált konfigurációs fájlokat
+- Opcionálisan visszavonja a Let's Encrypt tanúsítványt is
+
+### Eltávolítás
+
+| Platform | Parancs |
+|----------|---------|
+| Linux / macOS | `sudo bash uninstall-https.sh` |
+| Windows | `.\\ uninstall-https.ps1` (admin PowerShell) |
+
+Az uninstall script leállítja a proxyt, törli a konfigot, és opcionálisan
+visszavonja a Let's Encrypt tanúsítványt is.
+
+XAMPP más mappában (Windows): `.\\uninstall-https.ps1 -XamppPath D:\\xampp`
+
+### Automatikus indítás (Node.js szerver)
 
 **Linux (systemd):**
 
@@ -454,11 +1166,35 @@ sudo nano /etc/systemd/system/gallery.service   # töltsd ki az __INSTALL_DIR__-
 sudo systemctl enable --now gallery
 ```
 
+**macOS (launchd):**
+
+```bash
+sudo tee /Library/LaunchDaemons/hu.galeria.server.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>hu.galeria.server</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/bin/node</string>
+    <string>__INSTALL_DIR__/server/index.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>__INSTALL_DIR__</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PORT</key><string>__PORT__</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+EOF
+sudo launchctl load /Library/LaunchDaemons/hu.galeria.server.plist
+```
+
 **Windows (Feladatütemező):**
 
 ```powershell
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$action  = New-ScheduledTaskAction -Execute "node" -Argument "__INSTALL_DIR__\\server\\index.js" `
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$action  = New-ScheduledTaskAction -Execute "node" `
+           -Argument "__INSTALL_DIR__\\server\\index.js" `
            -WorkingDirectory "__INSTALL_DIR__"
 Register-ScheduledTask -TaskName "GaleriaServer" -Trigger $trigger -Action $action `
   -RunLevel Highest -Force
@@ -807,6 +1543,101 @@ def _wait_for_server(port: int, timeout: float = 15.0) -> bool:
     return False
 
 
+def _is_root() -> bool:
+    """True if the process can bind privileged ports (80/443)."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def _port_in_use(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _start_caddy(here: Path, cfg: dict):
+    """Launch Caddy as a child process when HTTPS is enabled.
+
+    Returns the Popen, or None if Caddy should not / cannot be started here
+    (HTTP-only export, Caddy missing, already running as a service, or no
+    root for the 80/443 ports). In every skip case it prints why.
+    """
+    if not cfg.get("httpsEnabled"):
+        return None
+    caddyfile = here / "Caddyfile"
+    if not caddyfile.exists():
+        return None  # not a Caddy export (e.g. Apache mode)
+
+    domain = cfg.get("domain", "")
+    caddy = _find_exe(["caddy", "caddy.exe"])
+    if not caddy:
+        print("[https] Caddy nincs telepítve — egyelőre csak HTTP fut.")
+        print("        Telepítsd és állítsd be egyszer:  sudo bash setup-https.sh")
+        return None
+
+    # Caddy already serving (e.g. installed as a brew service / LaunchDaemon)?
+    if _port_in_use(443):
+        print(f"[https] A 443-as port már foglalt — a Caddy valószínűleg már fut "
+              f"(rendszerszolgáltatásként). https://{domain}")
+        return None
+
+    if not _is_root():
+        hint = ("Indítsd rendszergazdaként:  Jobb klikk a PowerShell-en → "
+                "Futtatás rendszergazdaként" if os.name == "nt"
+                else "Indítsd így:  sudo python3 start.py")
+        print("[https] A 80/443-as porthoz root/rendszergazda jogosultság kell.")
+        print(f"        {hint}")
+        print("        (Vagy telepítsd háttérszolgáltatásként: sudo bash setup-https.sh)")
+        return None
+
+    print(f"[https] Caddy indítása (reverse proxy + Let's Encrypt): https://{domain}")
+    try:
+        return subprocess.Popen(
+            [caddy, "run", "--config", str(caddyfile), "--adapter", "caddyfile"],
+            cwd=str(here),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"[https] Caddy indítása sikertelen: {e}")
+        return None
+
+
+def _start_cloudflared(here: Path, cfg: dict):
+    """Launch the Cloudflare Tunnel (cloudflared) when httpsMode == 'cloudflare'.
+
+    Needs NO root and no open ports — works behind CGNAT / mobile internet.
+    Returns the Popen, or None (with an explanation) if it should not start.
+    """
+    if cfg.get("httpsMode") != "cloudflare":
+        return None
+    domain = cfg.get("domain", "")
+    cfg_yml = here / "cloudflared-config.yml"
+    if not cfg_yml.exists():
+        print("[tunnel] A cloudflared-config.yml hiányzik — előbb futtasd egyszer:")
+        print("         bash setup-tunnel.sh   (Windows: .\\setup-tunnel.ps1)")
+        return None
+    cloudflared = _find_exe(["cloudflared", "cloudflared.exe"])
+    if not cloudflared:
+        print("[tunnel] cloudflared nincs telepítve — futtasd:  bash setup-tunnel.sh")
+        return None
+
+    print(f"[tunnel] Cloudflare Tunnel indítása: https://{domain}")
+    try:
+        return subprocess.Popen(
+            [cloudflared, "tunnel", "--config", str(cfg_yml), "run"],
+            cwd=str(here),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"[tunnel] cloudflared indítása sikertelen: {e}")
+        return None
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Galéria szerver")
     p.add_argument("--port",       type=int, default=None)
@@ -821,10 +1652,14 @@ def main() -> None:
               "Futtasd ezt a szkriptet az exportált mappa gyökeréből.")
         raise SystemExit(1)
 
+    try:
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+
     port = args.port
     if port is None:
         try:
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
             port = int(cfg.get("port", __PORT__))
         except Exception:
             port = __PORT__
@@ -844,21 +1679,36 @@ def main() -> None:
     proc = subprocess.Popen([node, str(server_dir / "index.js")],
                             env=env, cwd=str(HERE))
 
+    # When HTTPS is enabled, bring up the Caddy reverse proxy alongside Node so
+    # a single command starts everything. Skips itself (with an explanation) on
+    # HTTP-only exports, missing Caddy, an already-running Caddy service, or
+    # without root for the 80/443 ports.
+    caddy  = _start_caddy(HERE, cfg)
+    tunnel = _start_cloudflared(HERE, cfg)
+
     if not args.no_browser:
         if _wait_for_server(port):
             webbrowser.open(url)
         else:
             print(f"[!] Szerver nem válaszolt {15}s alatt — nyisd meg: {url}")
 
+    def _stop(p) -> None:
+        if not p:
+            return
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
     try:
         proc.wait()
     except KeyboardInterrupt:
         print("\nLeállítás…")
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    finally:
+        _stop(proc)
+        _stop(caddy)
+        _stop(tunnel)
     raise SystemExit(proc.returncode or 0)
 
 
@@ -909,6 +1759,18 @@ pause
 
 
 _README_MD = """# Galéria — helyi szerver
+
+## Generált fájlok
+
+| Fájl | Leírás |
+|------|--------|
+| `start.py` | Fő indítószkript (Python 3.8+, cross-platform) |
+| `start.sh` / `start.command` | Linux / macOS indító (dupla kattintás) |
+| `start.bat` | Windows indító (dupla kattintás) |
+| `server/` | Node.js / Express auth szerver (OTP belépés, session) |
+| `dist/` | Astro statikus galéria oldal |
+| `config.json` | Szerver konfiguráció (email, jelszó, portszám) |
+| `data/` | Futásidejű adatok (email-lista módosítások) |
 
 ## Indítás
 

@@ -263,7 +263,12 @@ app.use(session({
     maxAge: SESSION_MS,
     httpOnly: true,
     sameSite: 'lax',
-    secure: !!store.config.httpsEnabled,  // HTTPS-only cookie when behind TLS proxy
+    // 'auto': secure cookie only when the request is actually HTTPS.
+    // Behind the TLS proxy (Caddy/Apache sets X-Forwarded-Proto: https) the
+    // cookie is marked secure; direct http://localhost access still works
+    // (a plain secure:true cookie is silently dropped over HTTP, which made
+    // login "succeed" then bounce straight back to /login).
+    secure: 'auto',
   },
 }));
 
@@ -313,11 +318,20 @@ app.post('/api/verify-code', (req, res) => {
   if (!store.verifyOtp(email, code)) return res.status(401).json({ error: 'invalid or expired code' });
   req.session.email   = email;
   req.session.isAdmin = store.isAdmin(email);
-  res.json({ ok: true, isAdmin: req.session.isAdmin });
+  // Explicitly save before responding — with saveUninitialized:false the session
+  // may not be flushed to the store before res.json() sends the response,
+  // which causes the next request (the redirect) to find no session.
+  req.session.save((err) => {
+    if (err) { console.error('[session] save error:', err); return res.status(500).json({ error: 'session error' }); }
+    res.json({ ok: true, isAdmin: req.session.isAdmin });
+  });
 });
 
 app.post('/api/logout', (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+  req.session.destroy((err) => {
+    if (err) console.error('[session] destroy error:', err);
+    res.json({ ok: true });
+  });
 });
 
 app.get('/api/magic-login', (req, res) => {
@@ -325,9 +339,12 @@ app.get('/api/magic-login', (req, res) => {
   const token = (req.query.token || '').trim();
   if (!email || !token) return res.redirect('/login?error=invalid');
   if (!store.verifyMagicToken(email, token)) return res.redirect('/login?error=expired');
-  req.session.email = email;
+  req.session.email   = email;
   req.session.isAdmin = store.isAdmin(email);
-  res.redirect(req.session.isAdmin ? '/admin' : '/');
+  req.session.save((err) => {
+    if (err) { console.error('[session] save error:', err); return res.redirect('/login?error=session'); }
+    res.redirect(req.session.isAdmin ? '/admin' : '/');
+  });
 });
 
 // ---- Admin routes ----

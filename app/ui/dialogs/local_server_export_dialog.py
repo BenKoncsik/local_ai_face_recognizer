@@ -21,12 +21,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.gmail_check import check_credentials, send_test_email
+from app.services.server_settings_store import ServerProfile, get_server_settings_store
 from app.ui.i18n import t
 
 _HTTPS_MODES = [
-    ("none",   t("local_server_https_none")),
-    ("apache", t("local_server_https_apache")),
-    ("caddy",  t("local_server_https_caddy")),
+    ("none",       t("local_server_https_none")),
+    ("cloudflare", t("local_server_https_cloudflare")),
+    ("apache",     t("local_server_https_apache")),
+    ("caddy",      t("local_server_https_caddy")),
 ]
 
 
@@ -97,6 +99,17 @@ class LocalServerExportDialog(QDialog):
         info.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(info)
 
+        # Profile save / load toolbar
+        profile_row = QHBoxLayout()
+        self._save_profile_btn = QPushButton(t("server_profile_save_btn"))
+        self._save_profile_btn.clicked.connect(self._save_profile)
+        self._load_profile_btn = QPushButton(t("server_profile_load_btn"))
+        self._load_profile_btn.clicked.connect(self._load_profile)
+        profile_row.addWidget(self._save_profile_btn)
+        profile_row.addWidget(self._load_profile_btn)
+        profile_row.addStretch()
+        layout.addLayout(profile_row)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -113,6 +126,8 @@ class LocalServerExportDialog(QDialog):
             self._https_info.setText(t("local_server_https_info_apache"))
         elif mode == "caddy":
             self._https_info.setText(t("local_server_https_info_caddy"))
+        elif mode == "cloudflare":
+            self._https_info.setText(t("local_server_https_info_cloudflare"))
         else:
             self._https_info.setText("")
 
@@ -214,3 +229,44 @@ class LocalServerExportDialog(QDialog):
     @property
     def https_mode(self) -> str:
         return self._https_mode.currentData() or "none"
+
+    # ------------------------------------------------------------------
+    # Profile save / load
+    # ------------------------------------------------------------------
+
+    def _save_profile(self) -> None:
+        from app.ui.dialogs.server_profile_dialogs import ServerProfileSaveDialog
+        dlg = ServerProfileSaveDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        profile = ServerProfile(
+            name=dlg.profile_name,
+            admin_email=self._admin_email.text().strip().lower(),
+            gmail_app_password=self._app_password.text().strip(),
+            allowed_emails_csv=self._csv_path.text().strip(),
+            port=self._port.value(),
+            domain=self._domain.text().strip().lower(),
+            https_mode=self._https_mode.currentData() or "none",
+        )
+        get_server_settings_store().save_profile(profile, pin=dlg.pin)
+        QMessageBox.information(
+            self, t("sps_title"), t("server_profile_saved_msg", name=dlg.profile_name)
+        )
+
+    def _load_profile(self) -> None:
+        from app.ui.dialogs.server_profile_dialogs import ServerProfileLoadDialog
+        dlg = ServerProfileLoadDialog(self)
+        dlg.profile_loaded.connect(self._apply_profile)
+        dlg.exec()
+
+    def _apply_profile(self, profile: ServerProfile) -> None:
+        self._admin_email.setText(profile.admin_email)
+        self._app_password.setText(profile.gmail_app_password)
+        self._csv_path.setText(profile.allowed_emails_csv)
+        self._port.setValue(profile.port)
+        self._domain.setText(profile.domain)
+        idx = next(
+            (i for i, (k, _) in enumerate(_HTTPS_MODES) if k == profile.https_mode),
+            0,
+        )
+        self._https_mode.setCurrentIndex(idx)
