@@ -4,20 +4,20 @@
      xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>Face-Local</title>
-    <link>https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.50/Face-Local-macOS-sparkle-1.0.50.zip</link>
+    <link>https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.51/Face-Local-macOS-sparkle-1.0.51.zip</link>
     <description>Most recent changes with Face-Local.</description>
     <language>en</language>
     <item>
-      <title>Face-Local 1.0.50</title>
-      <sparkle:releaseNotesLink>https://github.com/HunKonTech/local_ai_face_recognizer/releases/tag/v1.0.50</sparkle:releaseNotesLink>
-      <pubDate>Wed, 24 Jun 2026 19:06:03 +0000</pubDate>
+      <title>Face-Local 1.0.51</title>
+      <sparkle:releaseNotesLink>https://github.com/HunKonTech/local_ai_face_recognizer/releases/tag/v1.0.51</sparkle:releaseNotesLink>
+      <pubDate>Wed, 24 Jun 2026 21:04:52 +0000</pubDate>
       <enclosure
-        url="https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.50/Face-Local-macOS-sparkle-1.0.50.zip"
-        sparkle:version="1.0.50"
-        sparkle:shortVersionString="1.0.50"
-        sparkle:edSignature="sparkle:edSignature="WUG3BZDU2QBFf7rRfztSMvIXGXVIUW5plMr0erMvHvivl9rzLtsXrSUP7Ch+q+yX414XHpi9tPo7fT6vZomrBQ==" length="361623152""
+        url="https://github.com/HunKonTech/local_ai_face_recognizer/releases/download/v1.0.51/Face-Local-macOS-sparkle-1.0.51.zip"
+        sparkle:version="1.0.51"
+        sparkle:shortVersionString="1.0.51"
+        sparkle:edSignature="sparkle:edSignature="RvJkRxZeblrIYmVEYHeWyw73dNeUuf1r1T6d4hW7c69MW+B2oSLNnPoc7/LWewdOsEjvlTelDA7NiJ0W9uW7CQ==" length="361628439""
         sparkle:minimumSystemVersion="12.0"
-        length="361623152"
+        length="361628439"
         type="application/octet-stream"/>
     </item>
   </channel>
