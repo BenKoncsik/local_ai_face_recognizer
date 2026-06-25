@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -39,6 +39,7 @@ from app.ui.dialogs.merge_decision_graph_dialog import (
 from app.config import RecognitionConfig
 from app.db.database import session_scope
 from app.db.models import Person
+from app.services.match_scoring import match_scores_for_face
 from app.services.unknown_merge_service import PendingAutoMerge, UnknownMergeService
 from app.ui.i18n import t
 from app.ui.widgets.person_search_select import PersonSearchSelect
@@ -65,9 +66,20 @@ class _ClickableCrop(QLabel):
 
 
 class _PersonPickerDialog(QDialog):
-    """Modal person picker reused for the per-row "Move…" action."""
+    """Modal person picker reused for the per-row "Move…" action.
 
-    def __init__(self, persons: List[Person], parent: Optional[QWidget] = None) -> None:
+    Like every other person picker it uses the shared
+    :class:`PersonSearchSelect`; when the caller supplies face-match scores the
+    selector exposes the shared "order by face-match similarity" toggle (see
+    :mod:`app.services.match_scoring`).
+    """
+
+    def __init__(
+        self,
+        persons: List[Person],
+        match_scores: Optional[Dict[int, float]] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("amerge_move"))
         self.setMinimumWidth(340)
@@ -76,6 +88,8 @@ class _PersonPickerDialog(QDialog):
         layout = QVBoxLayout(self)
         self._selector = PersonSearchSelect(self)
         self._selector.set_persons(persons)
+        if match_scores:
+            self._selector.set_match_scores(match_scores)
         self._selector.person_selected.connect(self._on_selected)
         self._selector.person_double_clicked.connect(self._on_double)
         layout.addWidget(self._selector)
@@ -102,12 +116,17 @@ class AutoMergeReviewDialog(QDialog):
     def __init__(
         self,
         recognition_config: Optional[RecognitionConfig] = None,
+        config=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("amerge_review_title"))
         self.setMinimumSize(560, 480)
         self._rec_cfg = recognition_config
+        # Full app config (optional): lets the "Move…" picker overlay the deep
+        # AI probability and embed missing faces on the fly, matching the other
+        # person pickers.  ``None`` simply falls back to similarity ordering.
+        self._config = config
         self._dirty = False
 
         root = QVBoxLayout(self)
@@ -264,8 +283,15 @@ class AutoMergeReviewDialog(QDialog):
             persons = (
                 session.query(Person).order_by(Person.name).all()
             )
+            # Score the moved face against everyone so the picker can offer the
+            # shared "order by face-match similarity" toggle (same as the merge /
+            # move-faces dialogs).  Best-effort: no embedding → empty mapping →
+            # the toggle simply stays hidden.
+            match_scores = match_scores_for_face(
+                session, face_id, self._rec_cfg, config=self._config
+            )
             # Detach the data the picker needs while the session is open.
-            picker = _PersonPickerDialog(persons, self)
+            picker = _PersonPickerDialog(persons, match_scores, self)
         if picker.exec() != QDialog.Accepted or picker.selected_id is None:
             return
         with session_scope() as session:

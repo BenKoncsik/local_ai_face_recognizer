@@ -1558,7 +1558,7 @@ jobs:
 
       - name: Upload assets to GitHub release
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN || github.token }}
         shell: bash
         run: |
           python3 scripts/github_release.py upload \
@@ -1574,7 +1574,7 @@ jobs:
 
       - name: Update GitHub release notes
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN || github.token }}
           RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash

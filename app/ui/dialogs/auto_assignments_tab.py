@@ -33,12 +33,14 @@ from app.db.models import (
     AUTO_ASSIGN_STATUS_CONFIRMED,
     AUTO_ASSIGN_STATUS_CORRECTED,
     AUTO_ASSIGN_STATUS_REVERTED,
+    AutoAssignment,
     Person,
 )
 from app.services.deep_recognition_service import (
     AutoAssignmentDTO,
     DeepRecognitionService,
 )
+from app.services.match_scoring import match_scores_for_faces
 from app.ui.i18n import t
 
 log = logging.getLogger(__name__)
@@ -283,9 +285,15 @@ class AutoAssignmentsTab(QWidget):
     data_changed = Signal()
     count_changed = Signal(int)
 
-    def __init__(self, deep_config=None, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, deep_config=None, app_config=None, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(parent)
         self._deep_config = deep_config
+        # Full AppConfig (optional): lets the "Move…" pickers compute face-match
+        # scores so they expose the shared "order by similarity" toggle, with the
+        # deep AI probability overlay.  ``None`` simply falls back to name order.
+        self._app_config = app_config
         self._loaded = False
         self._rows: List[_AutoAssignmentRow] = []
         self._build_ui()
@@ -491,6 +499,29 @@ class AutoAssignmentsTab(QWidget):
     # Actions
     # ------------------------------------------------------------------
 
+    def _match_scores_for(self, session, assignment_ids: List[int]) -> dict:
+        """Score the assignments' faces against everyone for the Move… picker.
+
+        Resolves each assignment to its face, then averages their embeddings via
+        the shared :mod:`app.services.match_scoring` so the picker can offer the
+        "order by face-match similarity" toggle.  Best-effort: missing config or
+        embeddings yields ``{}`` and the toggle simply stays hidden.
+        """
+        if not assignment_ids:
+            return {}
+        rows = (
+            session.query(AutoAssignment.face_id)
+            .filter(AutoAssignment.id.in_(assignment_ids))
+            .all()
+        )
+        face_ids = [r[0] for r in rows]
+        if not face_ids:
+            return {}
+        recognition_cfg = getattr(self._app_config, "recognition", None)
+        return match_scores_for_faces(
+            session, face_ids, recognition_cfg, config=self._app_config
+        )
+
     def _on_confirm(self, assignment_id: int) -> None:
         self._run_action(
             lambda svc: svc.confirm_assignment(assignment_id), "confirm"
@@ -508,12 +539,18 @@ class AutoAssignmentsTab(QWidget):
                     .order_by(Person.name)
                     .all()
                 )
+                match_scores = self._match_scores_for(session, [assignment_id])
         except Exception as exc:  # noqa: BLE001
             log.exception("Failed to load persons for correction")
             QMessageBox.critical(self, t("error"), str(exc))
             return
 
-        dlg = MoveFacesDialog(face_count=1, persons=persons, parent=self.window())
+        dlg = MoveFacesDialog(
+            face_count=1,
+            persons=persons,
+            match_scores=match_scores,
+            parent=self.window(),
+        )
         if dlg.exec() != MoveFacesDialog.Accepted:
             return
 
@@ -583,13 +620,17 @@ class AutoAssignmentsTab(QWidget):
                     .order_by(Person.name)
                     .all()
                 )
+                match_scores = self._match_scores_for(session, ids)
         except Exception as exc:  # noqa: BLE001
             log.exception("Failed to load persons for batch correction")
             QMessageBox.critical(self, t("error"), str(exc))
             return
 
         dlg = MoveFacesDialog(
-            face_count=len(ids), persons=persons, parent=self.window()
+            face_count=len(ids),
+            persons=persons,
+            match_scores=match_scores,
+            parent=self.window(),
         )
         if dlg.exec() != MoveFacesDialog.Accepted:
             return

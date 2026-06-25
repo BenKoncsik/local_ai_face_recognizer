@@ -1382,7 +1382,9 @@ class MainWindow(QMainWindow):
         from app.ui.dialogs.auto_merge_review_dialog import AutoMergeReviewDialog
 
         dlg = AutoMergeReviewDialog(
-            recognition_config=self._config.recognition, parent=self
+            recognition_config=self._config.recognition,
+            config=self._config,
+            parent=self,
         )
         dlg.applied.connect(self._refresh_persons)
         dlg.applied.connect(self._image_browser._reload_current_face_data)

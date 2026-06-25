@@ -241,7 +241,9 @@ class SuggestionDialog(QDialog):
 
         from app.ui.dialogs.auto_assignments_tab import AutoAssignmentsTab
 
-        self._auto_tab = AutoAssignmentsTab(self._deep_config, parent=self)
+        self._auto_tab = AutoAssignmentsTab(
+            self._deep_config, app_config=self._app_config, parent=self
+        )
         self._auto_tab.data_changed.connect(self._on_data_changed)
         dialog_root.addWidget(self._auto_tab, stretch=1)
         self._auto_tab.ensure_loaded()
