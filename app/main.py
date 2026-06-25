@@ -143,6 +143,16 @@ def main() -> None:
     from app.detectors.factory import warm_up_onnxruntime
     QTimer.singleShot(0, lambda: warm_up_onnxruntime(config.detection))
 
+    # Background install of optional AI packages (ai-edge-litert, insightface).
+    # Runs after the event loop starts so it never blocks startup.
+    from app.workers.dependency_installer_worker import DependencyInstallerWorker
+    _dep_worker = DependencyInstallerWorker()
+    _dep_worker.package_installing.connect(window.on_dep_installing)
+    _dep_worker.package_installed.connect(window.on_dep_installed)
+    _dep_worker.install_failed.connect(window.on_dep_install_failed)
+    _dep_worker.all_done.connect(window.on_dep_install_done)
+    QTimer.singleShot(2000, _dep_worker.start)  # wait 2 s so startup scan doesn't race
+
     # Google Drive cache — clean up on normal exit
     app.aboutToQuit.connect(_gdrive_cache.shutdown_cleanup)
 

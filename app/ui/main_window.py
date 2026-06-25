@@ -1293,6 +1293,37 @@ class MainWindow(QMainWindow):
             self._active_pipeline_task.cancel()
 
 
+    # ------------------------------------------------------------------
+    # Background dependency installer callbacks
+    # ------------------------------------------------------------------
+
+    @Slot(str)
+    def on_dep_installing(self, display_name: str) -> None:
+        self._status_label.setText(t("dep_installing", name=display_name))
+
+    @Slot(str)
+    def on_dep_installed(self, display_name: str) -> None:
+        self._status_label.setText(t("dep_installed", name=display_name))
+        # onnxruntime's C-extension must be imported on the main thread once
+        # before any background worker touches it — otherwise GC during the
+        # import can reclaim a Qt object on the worker thread and crash AppKit.
+        # We re-run the warm-up here so a freshly installed onnxruntime/
+        # insightface is safely primed even though the startup warm-up ran
+        # before the install completed.
+        if display_name in ("onnxruntime", "insightface"):
+            from app.detectors.factory import warm_up_onnxruntime
+            warm_up_onnxruntime(self._config.detection)
+
+    @Slot(str, str)
+    def on_dep_install_failed(self, display_name: str, reason: str) -> None:
+        log.warning("Background install failed for %s: %s", display_name, reason)
+
+    @Slot(bool)
+    def on_dep_install_done(self, any_installed: bool) -> None:
+        if not any_installed:
+            return
+        self._status_label.setText(t("dep_install_done"))
+
     @Slot()
     def _on_no_face_images(self) -> None:
         dlg = NoFaceImagesDialog(config=self._config, parent=self)

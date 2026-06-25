@@ -714,6 +714,39 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "close":      {"en": "Close", "hu": "Bezárás"},
     "clear":      {"en": "Clear", "hu": "Törlés"},
     "ready":      {"en": "Ready", "hu": "Kész"},
+    "dep_installing":   {"en": "Installing AI backend: {name}…", "hu": "AI backend telepítése: {name}…"},
+    "dep_installed":    {"en": "AI backend installed: {name} ✓ (active on next scan)", "hu": "AI backend telepítve: {name} ✓ (következő szkenneléskor aktív)"},
+    "dep_install_done": {"en": "AI backend ready ✓", "hu": "AI backend kész ✓"},
+
+    # ── AI Packages settings tab ──────────────────────────────────────────────
+    "settings_tab_packages":  {"en": "AI Packages", "hu": "AI csomagok"},
+    "pkg_tab_intro":          {"en": "Optional AI packages improve face recognition quality. "
+                                     "Missing packages are installed via pip into your Python "
+                                     "environment. No admin rights required.",
+                               "hu": "Az opcionális AI csomagok javítják az arcfelismerés "
+                                     "minőségét. A hiányzó csomagok pip-pel települnek a Python "
+                                     "környezetedbe. Rendszergazdai jog nem szükséges."},
+    "pkg_group_embedding":    {"en": "Embedding backend (recognition quality)", "hu": "Beágyazás backend (felismerés minősége)"},
+    "pkg_group_detection":    {"en": "Detection / Verification", "hu": "Detektálás / Verifikáció"},
+    "pkg_detection_note":     {"en": "onnxruntime + insightface enable the SCRFD co-detector that "
+                                     "recovers profile and turned faces. The InsightFace buffalo_l "
+                                     "model pack (~200 MB) downloads automatically on first scan.",
+                               "hu": "Az onnxruntime + insightface engedélyezi az SCRFD "
+                                     "ko-detektort, amely profil- és elfordult arcokat talál meg. "
+                                     "Az InsightFace buffalo_l modellcsomag (~200 MB) az első "
+                                     "szkenneléskor töltődik le automatikusan."},
+    "pkg_active_backend":     {"en": "Active embedding backend: {backend}", "hu": "Aktív beágyazás backend: {backend}"},
+    "pkg_backend_none":       {"en": "none (HOG stub — very low quality!)", "hu": "nincs (HOG stub — nagyon gyenge minőség!)"},
+    "pkg_model_file_ok":      {"en": "Model file: {path}  ✓", "hu": "Modell fájl: {path}  ✓"},
+    "pkg_model_file_missing": {"en": "Model file missing: {path}", "hu": "Modell fájl hiányzik: {path}"},
+    "pkg_status_installed":   {"en": "Installed", "hu": "Telepítve"},
+    "pkg_status_missing":     {"en": "Not installed", "hu": "Nincs telepítve"},
+    "pkg_status_installing":  {"en": "Installing…", "hu": "Telepítés…"},
+    "pkg_status_failed":      {"en": "Install failed — retry?", "hu": "Telepítés sikertelen — újra?"},
+    "pkg_install_btn":        {"en": "Install", "hu": "Telepítés"},
+    "pkg_installing_btn":     {"en": "Installing…", "hu": "Telepítés…"},
+    "pkg_install_all_btn":    {"en": "Install all missing", "hu": "Összes hiányzó telepítése"},
+    "pkg_refresh_btn":        {"en": "Refresh status", "hu": "Állapot frissítése"},
     "error":      {"en": "Error", "hu": "Hiba"},
     "warning":    {"en": "Warning", "hu": "Figyelmeztetés"},
     "save_error": {"en": "Save Error", "hu": "Mentési hiba"},

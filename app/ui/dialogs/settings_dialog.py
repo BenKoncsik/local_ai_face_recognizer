@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -113,6 +114,32 @@ class _AudioDevicesThread(QThread):
             self.result_ready.emit([])
 
 
+class _PackageInstallThread(QThread):
+    """Installs one package via pip in the background."""
+
+    done = Signal(bool, str)   # (success, display_name)
+
+    def __init__(self, pip_spec: str, display_name: str, parent=None) -> None:
+        super().__init__(parent)
+        self._pip_spec = pip_spec
+        self._display_name = display_name
+
+    def run(self) -> None:
+        from app.services.dependency_installer import (
+            find_python_executable,
+            install_package,
+            refresh_sys_path,
+        )
+        python_exe = find_python_executable()
+        if not python_exe:
+            self.done.emit(False, self._display_name)
+            return
+        ok = install_package(self._pip_spec, python_exe)
+        if ok:
+            refresh_sys_path()
+        self.done.emit(ok, self._display_name)
+
+
 class SettingsDialog(QDialog):
     """Settings dialog: language, database management, and TPU status."""
 
@@ -148,6 +175,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_tab_face_quality(), t("settings_tab_quality"))
         tabs.addTab(self._build_tab_tasks(), t("settings_tab_tasks"))
         tabs.addTab(self._build_tab_ai_model(), t("settings_tab_ai_model"))
+        tabs.addTab(self._build_tab_packages(), t("settings_tab_packages"))
         # Heavy tabs (shortcut table, ffmpeg probing, Drive prefs) are built
         # lazily on first visit so the dialog itself opens instantly.
         self._lazy_tab_builders = {}
@@ -995,6 +1023,264 @@ class SettingsDialog(QDialog):
 
         self._on_ai_layer_count_changed(self._ai_layer_count_spin.value())
         return scroll
+
+    # ------------------------------------------------------------------
+    # AI Packages tab
+    # ------------------------------------------------------------------
+
+    def _build_tab_packages(self) -> QWidget:
+        """Build the AI Packages tab — install / status for optional backends."""
+        self._pkg_install_threads: dict[str, _PackageInstallThread] = {}
+        self._pkg_row_widgets: dict[str, dict] = {}  # import_name → {btn, status_lbl}
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setSpacing(16)
+        layout.setContentsMargins(4, 8, 4, 4)
+
+        # ── Intro text ────────────────────────────────────────────────────
+        intro = QLabel(t("pkg_tab_intro"))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #aaa; font-size: 11px;")
+        layout.addWidget(intro)
+
+        # ── Embedding backend group ───────────────────────────────────────
+        emb_group = QGroupBox(t("pkg_group_embedding"))
+        emb_layout = QVBoxLayout(emb_group)
+
+        self._active_backend_label = QLabel()
+        self._active_backend_label.setStyleSheet("color: #888; font-size: 11px;")
+        emb_layout.addWidget(self._active_backend_label)
+
+        self._model_file_label = QLabel()
+        self._model_file_label.setStyleSheet("color: #888; font-size: 11px;")
+        emb_layout.addWidget(self._model_file_label)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #444;")
+        emb_layout.addWidget(sep)
+
+        from app.services.dependency_installer import CANDIDATE_PACKAGES
+        for import_name, pip_spec, display_name, size_hint in CANDIDATE_PACKAGES:
+            if import_name == "ai_edge_litert":
+                emb_layout.addWidget(
+                    self._build_package_row(import_name, pip_spec, display_name, size_hint)
+                )
+
+        layout.addWidget(emb_group)
+
+        # ── Detection / Verification group ────────────────────────────────
+        det_group = QGroupBox(t("pkg_group_detection"))
+        det_layout = QVBoxLayout(det_group)
+
+        det_note = QLabel(t("pkg_detection_note"))
+        det_note.setWordWrap(True)
+        det_note.setStyleSheet("color: #888; font-size: 11px;")
+        det_layout.addWidget(det_note)
+
+        for import_name, pip_spec, display_name, size_hint in CANDIDATE_PACKAGES:
+            if import_name in ("onnxruntime", "insightface"):
+                det_layout.addWidget(
+                    self._build_package_row(import_name, pip_spec, display_name, size_hint)
+                )
+
+        layout.addWidget(det_group)
+
+        # ── Bottom action row ─────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        self._install_all_btn = QPushButton(t("pkg_install_all_btn"))
+        self._install_all_btn.clicked.connect(self._on_install_all_packages)
+        btn_row.addWidget(self._install_all_btn)
+
+        refresh_btn = QPushButton(t("pkg_refresh_btn"))
+        refresh_btn.clicked.connect(self._refresh_packages_tab)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        layout.addStretch()
+        scroll.setWidget(inner)
+
+        self._refresh_packages_tab()
+        return scroll
+
+    def _build_package_row(
+        self,
+        import_name: str,
+        pip_spec: str,
+        display_name: str,
+        size_hint: str,
+    ) -> QWidget:
+        """Build one package row: icon + name + size + status label + install button."""
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 2, 0, 2)
+
+        self._pkg_row_widgets[import_name] = {}
+
+        status_icon = QLabel("…")
+        status_icon.setFixedWidth(20)
+        self._pkg_row_widgets[import_name]["icon"] = status_icon
+        h.addWidget(status_icon)
+
+        name_lbl = QLabel(f"<b>{display_name}</b>")
+        name_lbl.setFixedWidth(130)
+        h.addWidget(name_lbl)
+
+        size_lbl = QLabel(size_hint)
+        size_lbl.setStyleSheet("color: #666; font-size: 11px;")
+        size_lbl.setFixedWidth(140)
+        h.addWidget(size_lbl)
+
+        status_lbl = QLabel()
+        status_lbl.setStyleSheet("font-size: 11px;")
+        self._pkg_row_widgets[import_name]["status"] = status_lbl
+        h.addWidget(status_lbl, stretch=1)
+
+        btn = QPushButton(t("pkg_install_btn"))
+        btn.setFixedWidth(100)
+        btn.clicked.connect(lambda checked=False, n=import_name, s=pip_spec, d=display_name:
+                            self._on_install_package(n, s, d))
+        self._pkg_row_widgets[import_name]["btn"] = btn
+        h.addWidget(btn)
+
+        return row
+
+    def _refresh_packages_tab(self) -> None:
+        """Re-check all package states and update the UI."""
+        from app.services.dependency_installer import CANDIDATE_PACKAGES, _is_importable
+        from app.diagnostics import check_tflite_backend
+
+        any_missing = False
+        for import_name, pip_spec, display_name, _ in CANDIDATE_PACKAGES:
+            available = _is_importable(import_name)
+            widgets = self._pkg_row_widgets.get(import_name)
+            if not widgets:
+                continue
+            if available:
+                widgets["icon"].setText("✓")
+                widgets["icon"].setStyleSheet("color: #4caf50; font-weight: bold;")
+                widgets["status"].setText(t("pkg_status_installed"))
+                widgets["status"].setStyleSheet("color: #4caf50; font-size: 11px;")
+                widgets["btn"].setVisible(False)
+            else:
+                widgets["icon"].setText("✗")
+                widgets["icon"].setStyleSheet("color: #f57c00; font-weight: bold;")
+                widgets["status"].setText(t("pkg_status_missing"))
+                widgets["status"].setStyleSheet("color: #f57c00; font-size: 11px;")
+                widgets["btn"].setVisible(True)
+                widgets["btn"].setEnabled(True)
+                widgets["btn"].setText(t("pkg_install_btn"))
+                any_missing = True
+
+        self._install_all_btn.setVisible(any_missing)
+
+        # TFLite active backend + model file status
+        try:
+            diag = check_tflite_backend()
+            backend = diag.active_backend or t("pkg_backend_none")
+            backend_color = "#4caf50" if diag.active_backend else "#f57c00"
+            self._active_backend_label.setText(
+                t("pkg_active_backend", backend=backend)
+            )
+            self._active_backend_label.setStyleSheet(
+                f"color: {backend_color}; font-size: 11px;"
+            )
+            if diag.model_exists:
+                self._model_file_label.setText(
+                    t("pkg_model_file_ok", path=diag.model_path)
+                )
+                self._model_file_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            else:
+                self._model_file_label.setText(
+                    t("pkg_model_file_missing", path=diag.model_path)
+                )
+                self._model_file_label.setStyleSheet("color: #f57c00; font-size: 11px;")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_install_package(
+        self, import_name: str, pip_spec: str, display_name: str
+    ) -> None:
+        """Start background install for one package."""
+        widgets = self._pkg_row_widgets.get(import_name, {})
+        btn = widgets.get("btn")
+        status_lbl = widgets.get("status")
+        icon_lbl = widgets.get("icon")
+
+        if btn:
+            btn.setEnabled(False)
+            btn.setText(t("pkg_installing_btn"))
+        if icon_lbl:
+            icon_lbl.setText("⏳")
+            icon_lbl.setStyleSheet("color: #888;")
+        if status_lbl:
+            status_lbl.setText(t("pkg_status_installing"))
+            status_lbl.setStyleSheet("color: #888; font-size: 11px;")
+
+        thread = _track_thread(_PackageInstallThread(pip_spec, display_name))
+        thread.done.connect(lambda ok, name, iname=import_name:
+                            self._on_package_install_done(iname, name, ok))
+        self._pkg_install_threads[import_name] = thread
+        thread.start()
+
+    def _on_install_all_packages(self) -> None:
+        """Install all missing packages one by one."""
+        from app.services.dependency_installer import CANDIDATE_PACKAGES, _is_importable
+        for import_name, pip_spec, display_name, _ in CANDIDATE_PACKAGES:
+            if not _is_importable(import_name):
+                self._on_install_package(import_name, pip_spec, display_name)
+
+    def _on_package_install_done(
+        self, import_name: str, display_name: str, success: bool
+    ) -> None:
+        self._pkg_install_threads.pop(import_name, None)
+        widgets = self._pkg_row_widgets.get(import_name, {})
+        btn = widgets.get("btn")
+        status_lbl = widgets.get("status")
+        icon_lbl = widgets.get("icon")
+
+        if success:
+            if icon_lbl:
+                icon_lbl.setText("✓")
+                icon_lbl.setStyleSheet("color: #4caf50; font-weight: bold;")
+            if status_lbl:
+                status_lbl.setText(t("pkg_status_installed"))
+                status_lbl.setStyleSheet("color: #4caf50; font-size: 11px;")
+            if btn:
+                btn.setVisible(False)
+            # Warm up onnxruntime on the main thread after insightface/onnxruntime install
+            if import_name in ("onnxruntime", "insightface"):
+                try:
+                    from app.detectors.factory import warm_up_onnxruntime
+                    warm_up_onnxruntime(self._app_config.detection)
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            if icon_lbl:
+                icon_lbl.setText("✗")
+                icon_lbl.setStyleSheet("color: #e53935; font-weight: bold;")
+            if status_lbl:
+                status_lbl.setText(t("pkg_status_failed"))
+                status_lbl.setStyleSheet("color: #e53935; font-size: 11px;")
+            if btn:
+                btn.setEnabled(True)
+                btn.setText(t("pkg_install_btn"))
+
+        # Refresh backend/model info line
+        self._refresh_packages_tab()
+        # Hide "Install All" if nothing missing anymore
+        from app.services.dependency_installer import CANDIDATE_PACKAGES, _is_importable
+        still_missing = any(
+            not _is_importable(n) for n, *_ in CANDIDATE_PACKAGES
+        )
+        self._install_all_btn.setVisible(still_missing)
 
     def _on_ai_layer_count_changed(self, count: int) -> None:
         for i, (label, spin) in enumerate(self._ai_layer_rows):
