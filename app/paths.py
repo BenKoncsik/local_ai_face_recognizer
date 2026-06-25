@@ -74,6 +74,23 @@ def default_log_file() -> Path:
     return Path("data/face_local.log")
 
 
+def detection_logs_dir() -> Path:
+    """Return the directory for per-run detection debug log files.
+
+    Each detection run writes one timestamped ``.log`` file here when the
+    detection debug log option is enabled in Settings → Debug.
+
+    Platform mapping:
+        - macOS:   ``~/Library/Application Support/Face-Local/detection_logs``
+        - Windows: ``%LOCALAPPDATA%\\Face-Local\\detection_logs``
+        - Linux:   ``$XDG_DATA_HOME/face-local/detection_logs``
+        - Dev:     ``data/detection_logs``
+    """
+    if is_frozen():
+        return user_data_dir() / "detection_logs"
+    return Path("data/detection_logs")
+
+
 def drive_mirror_dir(folder_id: str) -> Path:
     """Return the persistent local mirror directory for a Drive project folder.
 

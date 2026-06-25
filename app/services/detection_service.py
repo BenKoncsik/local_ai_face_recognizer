@@ -27,6 +27,7 @@ from app.config import AppConfig
 from app.db.models import Face, Image
 from app.detectors.base import Detection, FaceDetector
 from app.detectors.cpu_detector import CpuDetector
+from app.services.detection_run_logger import DetectionRunLogger
 from app.services.face_crop_service import face_debug_state
 from app.services.face_quality_service import FaceQualityEvaluator
 from app.services.face_verification_service import FaceVerifier
@@ -100,11 +101,13 @@ class DetectionService:
         progress_cb: Optional[Callable[[int, Optional[int], str], None]] = None,
         high_accuracy: bool = False,
         verifier: Optional[FaceVerifier] = None,
+        run_logger: Optional[DetectionRunLogger] = None,
     ) -> None:
         self._session = session
         self._detector = detector
         self._config = config
         self._verifier = verifier
+        self._run_logger = run_logger
         self._crops_dir = config.crops_dir_resolved
         self._crops_dir.mkdir(parents=True, exist_ok=True)
         self._progress_cb = progress_cb or (lambda *_: None)
@@ -125,6 +128,14 @@ class DetectionService:
         total = len(image_ids)
         total_faces = 0
 
+        if self._run_logger:
+            mode = "high_accuracy" if self._high_accuracy else "fast"
+            self._run_logger.start(
+                total_images=total,
+                mode=mode,
+                backend=self._detector.backend_name,
+            )
+
         for idx, image_id in enumerate(image_ids, start=1):
             image: Optional[Image] = self._session.get(Image, image_id)
             if image is None:
@@ -139,11 +150,15 @@ class DetectionService:
                 total_faces += n
             except Exception as exc:  # noqa: BLE001
                 log.error("Detection failed for %s: %s", display_path, exc)
+                if self._run_logger:
+                    self._run_logger.log_error(display_path, exc)
             finally:
                 image.detection_done = True
                 self._session.commit()
 
         log.info("Detection complete: %d face(s) across %d image(s)", total_faces, total)
+        if self._run_logger:
+            self._run_logger.finish(total_faces=total_faces, total_images=total)
         return total_faces
 
     def _process_image(self, image: Image) -> int:
@@ -171,6 +186,15 @@ class DetectionService:
         image.width = w
         image.height = h
 
+        mode_label = "high_accuracy" if self._high_accuracy else "fast"
+        threshold = (
+            self._config.detection.high_accuracy_confidence_threshold
+            if self._high_accuracy
+            else self._config.detection.confidence_threshold
+        )
+        if self._run_logger:
+            self._run_logger.begin_image(str(path), w, h, mode_label, threshold)
+
         # --- Diagnostic: EXIF orientation ---
         exif_orient = get_exif_orientation(str(path))
 
@@ -184,6 +208,12 @@ class DetectionService:
                 log.warning(
                     "Coral TPU inference failed (%s) — switching to CPU detector.", exc
                 )
+                if self._run_logger:
+                    self._run_logger.log_fallback(
+                        from_backend=self._detector.backend_name,
+                        to_backend="cpu",
+                        reason=str(exc),
+                    )
                 self._detector = CpuDetector(
                     model_path=self._config.detection.cpu_model_path
                 )
@@ -192,12 +222,6 @@ class DetectionService:
                 raise
 
         # --- Diagnostic log ---
-        mode_label = "high_accuracy" if self._high_accuracy else "fast"
-        threshold = (
-            self._config.detection.high_accuracy_confidence_threshold
-            if self._high_accuracy
-            else self._config.detection.confidence_threshold
-        )
         diag_log.debug(
             "DETECT | path=%s | dhash=%016x | exif_orient=%d | size=%dx%d | "
             "mode=%s | threshold=%.2f | faces=%d | bboxes=%s | confidences=%s",
@@ -306,6 +330,8 @@ class DetectionService:
             )
 
         log.debug("Image %s: %d face(s) detected", path.name, len(detections))
+        if self._run_logger:
+            self._run_logger.end_image(len(detections))
         return len(detections)
 
     # ------------------------------------------------------------------
@@ -399,11 +425,25 @@ class DetectionService:
             else self._config.detection.verification_confidence_exempt
         )
         kept: List[Detection] = []
+        face_details: Optional[List] = [] if self._run_logger else None
         for det in detections:
             if det.confidence >= exempt:
                 kept.append(det)
+                if face_details is not None:
+                    face_details.append((det, {
+                        "mode": "exempt",
+                        "result": "KEPT",
+                        "reason": f"conf {det.confidence:.3f} >= exempt {exempt:.3f}",
+                    }))
                 continue
-            refined = verifier.verify(img_bgr, det)
+            if face_details is not None:
+                captured: dict = {}
+                def _capture(d, info, _store=captured):  # noqa: E731
+                    _store.update(info)
+                refined = verifier.verify(img_bgr, det, detail_cb=_capture)
+                face_details.append((det, captured))
+            else:
+                refined = verifier.verify(img_bgr, det)
             if refined is not None:
                 kept.append(refined)
             else:
@@ -416,6 +456,8 @@ class DetectionService:
                 "VERIFY: %d detection(s) → %d after crop-level verification",
                 len(detections), len(kept),
             )
+        if self._run_logger:
+            self._run_logger.log_verification(detections, kept, face_details=face_details)
         return kept
 
     def _detect_adaptive(self, img_bgr: np.ndarray) -> List[Detection]:
@@ -445,12 +487,15 @@ class DetectionService:
             )
             # The looser the rung, the more junk it pulls in — every rescued
             # box must survive crop-level verification before the rung counts.
+            count_raw = len(result)
             result = self._filter_verified(img_bgr, result)
             count = len(result)
             diag_log.debug(
                 "ADAPTIVE rung conf=%.2f min_size=%d (frac=%.3f, short=%d): %d face(s)",
                 conf, min_size, frac, short_side, count,
             )
+            if self._run_logger:
+                self._run_logger.log_adaptive_rung(conf, min_size, count_raw, count)
             if count == 0:
                 continue
 

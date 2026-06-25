@@ -56,6 +56,7 @@ from app.services.deep_recognition_service import (
     DeepRecognitionService,
     TrainAndRecognizeResult,
 )
+from app.services.detection_run_logger import DetectionRunLogger
 from app.services.detection_service import DetectionService
 from app.services.embedding_service import EmbeddingService
 from app.services.intra_image_consistency_service import (
@@ -768,6 +769,8 @@ class DeepPipelineWorker(QThread):
         def cb(current, total, path):
             self._emit_progress(current, total or 0, "Detecting", Path(path).name)
 
+        run_logger = self._make_detection_run_logger()
+
         with session_scope() as session:
             svc = DetectionService(
                 session=session,
@@ -775,8 +778,20 @@ class DeepPipelineWorker(QThread):
                 config=self._config,
                 progress_cb=cb,
                 high_accuracy=self._config.deep_recognition.high_accuracy_detection,
+                run_logger=run_logger,
             )
             return svc.process(image_ids)
+
+    def _make_detection_run_logger(self) -> Optional[DetectionRunLogger]:
+        """Return a DetectionRunLogger if the debug setting is enabled, else None."""
+        try:
+            from app.app_settings import app_qsettings
+            if not app_qsettings().value("debug/detection_log_enabled", False, type=bool):
+                return None
+            from app.paths import detection_logs_dir
+            return DetectionRunLogger(detection_logs_dir())
+        except Exception:  # noqa: BLE001
+            return None
 
     def _run_embedding(self) -> int:
         embedder = TFLiteEmbedder(

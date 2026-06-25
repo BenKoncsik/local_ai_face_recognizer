@@ -93,8 +93,19 @@ class FaceVerifier:
 
     # ------------------------------------------------------------------
 
-    def verify(self, image_bgr: np.ndarray, det: Detection) -> Optional[Detection]:
+    def verify(
+        self,
+        image_bgr: np.ndarray,
+        det: Detection,
+        detail_cb=None,
+    ) -> Optional[Detection]:
         """Re-detect *det* inside its own enlarged crop.
+
+        Args:
+            detail_cb: Optional ``(det, detail_dict) -> None`` callback.
+                When provided it is called exactly once with a dict describing
+                the outcome (``mode``, ``result``, ``reason``, ``crop_conf``).
+                Used by :class:`~app.services.detection_run_logger.DetectionRunLogger`.
 
         Returns:
             The confirmed detection — possibly refined (tighter bbox and/or
@@ -102,13 +113,23 @@ class FaceVerifier:
             at the candidate location.  When the verifier is unavailable the
             detection is passed through unchanged.
         """
+        def _cb(result: str, reason: str, crop_conf=None) -> None:
+            if detail_cb:
+                d = {"verifier": "yunet", "mode": "yunet", "result": result, "reason": reason}
+                if crop_conf is not None:
+                    d["crop_conf"] = crop_conf
+                detail_cb(det, d)
+
         if self._detector is None:
+            _cb("PASSTHROUGH", "unavailable")
             return det
         if det.w <= 1 or det.h <= 1:
+            _cb("DROP", "degenerate bbox")
             return None
 
         crop, offset, scale = self._extract_crop(image_bgr, det)
         if crop is None:
+            _cb("PASSTHROUGH", "degenerate crop")
             return det  # degenerate geometry — do not reject on our failure
 
         # Candidate box in crop coordinates.
@@ -133,6 +154,7 @@ class FaceVerifier:
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("Verifier detect failed: %s — keeping detection", exc)
+                _cb("PASSTHROUGH", f"detect error: {exc}")
                 return det
             for f in found:
                 if not self._confirms(local, f):
@@ -148,7 +170,9 @@ class FaceVerifier:
                     and not validate_face_landmarks(f)
                 ):
                     continue
+                _cb("KEPT", "re-detected", crop_conf=f.confidence)
                 return self._refine(det, f, offset, scale)
+        _cb("DROP", "not found in crop")
         return None
 
     # ------------------------------------------------------------------

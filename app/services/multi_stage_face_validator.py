@@ -147,8 +147,21 @@ class MultiStageFaceValidator:
     # Verify
     # ------------------------------------------------------------------
 
-    def verify(self, image_bgr: np.ndarray, det: Detection) -> Optional[Detection]:
+    def verify(
+        self,
+        image_bgr: np.ndarray,
+        det: Detection,
+        detail_cb=None,
+    ) -> Optional[Detection]:
         """Confirm or reject *det* by ensemble vote.
+
+        Args:
+            detail_cb: Optional ``(det, detail_dict) -> None`` callback called
+                once per detection with full vote breakdown.  When multi-stage
+                voting falls back to single YuNet, ``mode`` is ``"yunet_only"``
+                and ``fallback_reason`` explains why.  In full multi-stage mode
+                ``mode`` is ``"multistage"`` and ``votes`` lists every
+                technology's outcome (``"confirm"`` / ``"reject"`` / ``"error"``).
 
         Returns the (possibly refined) detection when a quorum of technologies
         confirm it, else ``None``.  Falls back to the legacy single-YuNet
@@ -156,24 +169,48 @@ class MultiStageFaceValidator:
         available — so behaviour never regresses below today's gate.
         """
         # YuNet first: it both votes and supplies the refined box/landmarks.
+        # We do NOT pass detail_cb here; multistage handles the overall callback.
         yunet_det = self._verifier.verify(image_bgr, det)
 
         if not self._multistage_live:
+            if not self._config.multistage_enabled:
+                fallback_reason = "multistage disabled"
+            else:
+                n_avail = len(self.active_technologies())
+                n_min = self._config.multistage_min_available
+                fallback_reason = f"only {n_avail}/{n_min} technologies available"
+            if detail_cb:
+                detail_cb(det, {
+                    "mode": "yunet_only",
+                    "fallback_reason": fallback_reason,
+                    "yunet": CONFIRM if yunet_det is not None else REJECT,
+                    "result": "KEPT" if yunet_det is not None else "DROP",
+                })
             return yunet_det
 
         crop, local, min_face = self._prepare_crop(image_bgr, det)
         if crop is None:
             # Degenerate geometry — do not reject on our own failure; defer to
             # the base verifier's verdict.
+            if detail_cb:
+                detail_cb(det, {
+                    "mode": "yunet_only",
+                    "fallback_reason": "degenerate crop geometry",
+                    "yunet": CONFIRM if yunet_det is not None else REJECT,
+                    "result": "KEPT" if yunet_det is not None else "DROP",
+                })
             return yunet_det
 
         confirm_weight = 1 if yunet_det is not None else 0
         votes = {"yunet": CONFIRM if yunet_det is not None else REJECT}
+        errors: dict = {}
         for name, weight, vote_fn in self._techs:
             try:
                 vote = vote_fn(crop, local, min_face)
             except Exception as exc:  # noqa: BLE001
                 log.debug("Validator %s errored (%s) — abstaining", name, exc)
+                votes[name] = "error"
+                errors[name] = str(exc)
                 continue
             votes[name] = vote
             if vote == CONFIRM:
@@ -186,6 +223,18 @@ class MultiStageFaceValidator:
                 det.x, det.y, det.w, det.h, det.confidence,
                 confirm_weight, self._config.multistage_min_confirmations, votes,
             )
+
+        if detail_cb:
+            detail_cb(det, {
+                "mode": "multistage",
+                "result": "KEPT" if keep else "DROP",
+                "votes": votes,
+                "errors": errors,
+                "confirm_weight": confirm_weight,
+                "min_confirmations": self._config.multistage_min_confirmations,
+            })
+
+        if not keep:
             return None
 
         # Prefer YuNet's refined geometry; otherwise keep the original box.

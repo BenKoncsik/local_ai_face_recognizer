@@ -929,6 +929,38 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "debug_log_cleared":        {"en": "Debug log cleared.", "hu": "Debug napló törölve."},
     "debug_log_not_found":      {"en": "No debug log found yet.", "hu": "Még nincs debug napló."},
 
+    # ── Detection debug log ───────────────────────────────────────────────
+    "debug_detection_log_group": {
+        "en": "Detection Debug Log",
+        "hu": "Detektálás Debug Log",
+    },
+    "debug_detection_log_desc": {
+        "en": (
+            "Writes a timestamped log file for each detection run. "
+            "Every image is listed with all raw bounding boxes and which ones "
+            "were kept or dropped by the verification filter. "
+            "Useful for diagnosing platform-specific false positives."
+        ),
+        "hu": (
+            "Minden detektálási futáshoz létrehoz egy időbélyeges log fájlt. "
+            "Minden képnél látható az összes nyers bounding box, és hogy melyeket "
+            "tartotta meg vagy dobta el a verifier szűrő. "
+            "Hasznos a platformspecifikus fals pozitívok vizsgálatához."
+        ),
+    },
+    "debug_detection_log_check": {
+        "en": "Save detection details to log file per run",
+        "hu": "Detektálás részleteinek mentése log fájlba futásonként",
+    },
+    "debug_detection_log_open_btn": {
+        "en": "Open log folder",
+        "hu": "Log mappa megnyitása",
+    },
+    "debug_detection_log_folder_empty": {
+        "en": "No detection log files found yet.\nEnable the option and run a scan.",
+        "hu": "Még nincs detektálás log fájl.\nKapcsold be a kapcsolót és futtass egy szkennelést.",
+    },
+
     # ── AI visualization window ───────────────────────────────────────────
     "debug_viz_title":          {"en": "AI Decision Visualizer", "hu": "AI döntés vizualizátor"},
     "debug_viz_gates":          {"en": "Gates", "hu": "Kapuk"},

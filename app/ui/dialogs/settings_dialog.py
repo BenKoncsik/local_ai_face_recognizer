@@ -703,6 +703,29 @@ class SettingsDialog(QDialog):
         log_layout.addLayout(btn_row)
         layout.addWidget(log_group)
 
+        # ── Detection Debug Log ───────────────────────────────────────────
+        det_log_group = QGroupBox(t("debug_detection_log_group"))
+        det_log_layout = QVBoxLayout(det_log_group)
+
+        det_log_desc = QLabel(t("debug_detection_log_desc"))
+        det_log_desc.setWordWrap(True)
+        det_log_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        det_log_layout.addWidget(det_log_desc)
+
+        self._debug_detection_log_check = QCheckBox(t("debug_detection_log_check"))
+        self._debug_detection_log_check.setChecked(
+            qs.value("debug/detection_log_enabled", False, type=bool)
+        )
+        det_log_layout.addWidget(self._debug_detection_log_check)
+
+        det_log_btn_row = QHBoxLayout()
+        open_det_log_btn = QPushButton(t("debug_detection_log_open_btn"))
+        open_det_log_btn.clicked.connect(self._on_open_detection_log_folder)
+        det_log_btn_row.addWidget(open_det_log_btn)
+        det_log_btn_row.addStretch()
+        det_log_layout.addLayout(det_log_btn_row)
+        layout.addWidget(det_log_group)
+
         # ── Neural Network Graph ─────────────────────────────────────────────
         nn_group = QGroupBox(t("debug_nn_group"))
         nn_layout = QVBoxLayout(nn_group)
@@ -720,6 +743,33 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         scroll.setWidget(inner)
         return scroll
+
+    def _on_open_detection_log_folder(self) -> None:
+        import subprocess
+        import sys
+        from app.paths import detection_logs_dir
+        folder = detection_logs_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        # Check if there are any log files yet.
+        files = list(folder.glob("detection_*.log"))
+        if not files:
+            QMessageBox.information(
+                self,
+                t("debug_detection_log_group"),
+                t("debug_detection_log_folder_empty"),
+            )
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:  # noqa: BLE001
+            QMessageBox.information(
+                self, t("debug_detection_log_group"), str(folder.resolve())
+            )
 
     def _on_open_nn_graph(self) -> None:
         # Settings runs exec() → application-modal on macOS, any new window is blocked.
@@ -1311,6 +1361,10 @@ class SettingsDialog(QDialog):
             )
         qs.setValue("debug/ai_visualization", self._debug_viz_check.isChecked())
         qs.setValue("debug/ai_log_enabled", self._debug_log_check.isChecked())
+        qs.setValue(
+            "debug/detection_log_enabled",
+            self._debug_detection_log_check.isChecked(),
+        )
         # Flush explicitly — the transient QSettings objects above would
         # otherwise only persist on destruction, which is unreliable on
         # Windows and can silently drop the writes.
