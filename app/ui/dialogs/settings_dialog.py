@@ -140,6 +140,57 @@ class _PackageInstallThread(QThread):
         self.done.emit(ok, self._display_name)
 
 
+_MOBILEFACENET_MIRRORS = [
+    "https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite",
+    "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite",
+    "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite",
+]
+
+
+class _ModelDownloadThread(QThread):
+    """Downloads mobilefacenet.tflite from the first working mirror."""
+
+    progress = Signal(int)      # 0-100
+    done = Signal(bool, str)    # (success, dest_path)
+
+    def __init__(self, dest_path: str, parent=None) -> None:
+        super().__init__(parent)
+        self._dest = dest_path
+
+    def run(self) -> None:
+        import urllib.request
+        from pathlib import Path
+
+        dest = Path(self._dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(dest) + ".tmp")
+
+        for url in _MOBILEFACENET_MIRRORS:
+            try:
+                tmp.unlink(missing_ok=True)
+                req = urllib.request.Request(url, headers={"User-Agent": "face-local/1.0"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    total = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    with tmp.open("wb") as f:
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                self.progress.emit(int(downloaded / total * 100))
+                tmp.rename(dest)
+                self.done.emit(True, str(dest))
+                return
+            except Exception:  # noqa: BLE001
+                tmp.unlink(missing_ok=True)
+                continue
+
+        self.done.emit(False, str(dest))
+
+
 class SettingsDialog(QDialog):
     """Settings dialog: language, database management, and TPU status."""
 
@@ -1057,9 +1108,28 @@ class SettingsDialog(QDialog):
         self._active_backend_label.setStyleSheet("color: #888; font-size: 11px;")
         emb_layout.addWidget(self._active_backend_label)
 
+        # Model file row — label + optional download button + progress bar
+        model_row = QHBoxLayout()
         self._model_file_label = QLabel()
         self._model_file_label.setStyleSheet("color: #888; font-size: 11px;")
-        emb_layout.addWidget(self._model_file_label)
+        model_row.addWidget(self._model_file_label, stretch=1)
+
+        self._model_download_btn = QPushButton(t("pkg_model_download_btn"))
+        self._model_download_btn.setFixedWidth(130)
+        self._model_download_btn.setVisible(False)
+        self._model_download_btn.clicked.connect(self._on_download_model)
+        model_row.addWidget(self._model_download_btn)
+        emb_layout.addLayout(model_row)
+
+        from PySide6.QtWidgets import QProgressBar
+        self._model_progress_bar = QProgressBar()
+        self._model_progress_bar.setRange(0, 100)
+        self._model_progress_bar.setVisible(False)
+        self._model_progress_bar.setMaximumHeight(8)
+        self._model_progress_bar.setTextVisible(False)
+        emb_layout.addWidget(self._model_progress_bar)
+
+        self._model_download_thread: Optional[_ModelDownloadThread] = None
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -1197,11 +1267,17 @@ class SettingsDialog(QDialog):
                     t("pkg_model_file_ok", path=diag.model_path)
                 )
                 self._model_file_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+                self._model_download_btn.setVisible(False)
             else:
                 self._model_file_label.setText(
                     t("pkg_model_file_missing", path=diag.model_path)
                 )
                 self._model_file_label.setStyleSheet("color: #f57c00; font-size: 11px;")
+                downloading = (
+                    self._model_download_thread is not None
+                    and self._model_download_thread.isRunning()
+                )
+                self._model_download_btn.setVisible(not downloading)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1236,6 +1312,35 @@ class SettingsDialog(QDialog):
         for import_name, pip_spec, display_name, _ in CANDIDATE_PACKAGES:
             if not _is_importable(import_name):
                 self._on_install_package(import_name, pip_spec, display_name)
+
+    def _on_download_model(self) -> None:
+        from app.paths import resource_path
+        dest = str(resource_path("models/mobilefacenet.tflite"))
+
+        self._model_download_btn.setVisible(False)
+        self._model_progress_bar.setValue(0)
+        self._model_progress_bar.setVisible(True)
+        self._model_file_label.setText(t("pkg_model_downloading"))
+        self._model_file_label.setStyleSheet("color: #888; font-size: 11px;")
+
+        self._model_download_thread = _track_thread(_ModelDownloadThread(dest))
+        self._model_download_thread.progress.connect(self._model_progress_bar.setValue)
+        self._model_download_thread.done.connect(self._on_model_download_done)
+        self._model_download_thread.start()
+
+    def _on_model_download_done(self, success: bool, dest_path: str) -> None:
+        self._model_progress_bar.setVisible(False)
+        if success:
+            self._model_file_label.setText(t("pkg_model_file_ok", path=dest_path))
+            self._model_file_label.setStyleSheet("color: #4caf50; font-size: 11px;")
+            self._model_download_btn.setVisible(False)
+            # Refresh the active-backend label — the model is now loadable
+            self._refresh_packages_tab()
+        else:
+            self._model_file_label.setText(t("pkg_model_download_failed"))
+            self._model_file_label.setStyleSheet("color: #e53935; font-size: 11px;")
+            self._model_download_btn.setVisible(True)
+            self._model_download_btn.setText(t("pkg_model_retry_btn"))
 
     def _on_package_install_done(
         self, import_name: str, display_name: str, success: bool
