@@ -760,7 +760,15 @@ class DeepPipelineWorker(QThread):
             ]
 
     def _run_detection(self, image_ids: list) -> int:
+        # Create the run logger before the early-return so a log file is always
+        # written when the debug option is enabled — even a "0 pending images"
+        # run is worth recording so the user knows detection was skipped.
+        run_logger = self._make_detection_run_logger()
+
         if not image_ids:
+            if run_logger:
+                run_logger.start(total_images=0, mode="n/a", backend="n/a")
+                run_logger.finish(total_faces=0, total_images=0)
             return 0
 
         detector = create_detector(self._config.detection)
@@ -768,8 +776,6 @@ class DeepPipelineWorker(QThread):
 
         def cb(current, total, path):
             self._emit_progress(current, total or 0, "Detecting", Path(path).name)
-
-        run_logger = self._make_detection_run_logger()
 
         with session_scope() as session:
             svc = DetectionService(
@@ -786,11 +792,20 @@ class DeepPipelineWorker(QThread):
         """Return a DetectionRunLogger if the debug setting is enabled, else None."""
         try:
             from app.app_settings import app_qsettings
-            if not app_qsettings().value("debug/detection_log_enabled", False, type=bool):
-                return None
+            enabled = app_qsettings().value("debug/detection_log_enabled", False, type=bool)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("DetectionRunLogger: could not read QSettings: %s", exc)
+            return None
+        if not enabled:
+            return None
+        try:
             from app.paths import detection_logs_dir
-            return DetectionRunLogger(detection_logs_dir())
-        except Exception:  # noqa: BLE001
+            logs_dir = detection_logs_dir()
+            logger = DetectionRunLogger(logs_dir)
+            log.info("Detection debug log: %s", logger.log_path)
+            return logger
+        except Exception as exc:  # noqa: BLE001
+            log.warning("DetectionRunLogger: could not create log file: %s", exc)
             return None
 
     def _run_embedding(self) -> int:

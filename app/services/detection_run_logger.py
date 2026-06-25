@@ -66,9 +66,11 @@ class DetectionRunLogger:
 
     def start(self, total_images: int, mode: str, backend: str) -> None:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        note = "  (all images already detected — nothing to run)\n" if total_images == 0 else ""
         self._write(
             f"=== Detection Run Started: {ts} ===\n"
-            f"  mode={mode}  backend={backend}  images={total_images}\n\n"
+            f"  mode={mode}  backend={backend}  images={total_images}\n"
+            f"{note}\n"
         )
 
     def begin_image(
