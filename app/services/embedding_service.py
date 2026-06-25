@@ -152,11 +152,29 @@ class EmbeddingService:
 
 
 def build_embedder(config: AppConfig) -> FaceEmbedder:
-    """Construct the default face embedder from the embedding configuration.
+    """Construct the configured face embedder from the embedding configuration.
 
-    Mirrors the embedder built by the batch pipeline so manually-created faces
-    are embedded with the exact same model/geometry as detected ones.
+    Dispatches on ``config.embedding.backend``:
+      * ``"arcface"``       → :class:`InsightFaceEmbedder` (ArcFace ResNet-50,
+                              512-dim, reuses the InsightFace ``buffalo_l`` pack).
+      * everything else     → :class:`TFLiteEmbedder` (MobileFaceNet, 192-dim).
+
+    All embedding paths (batch pipeline, manual faces) go through here so a
+    person's faces are always embedded with the exact same model/geometry.  If
+    the ArcFace backend cannot be loaded (missing package/model) it falls back
+    to the TFLite embedder so embedding never hard-fails.
     """
+    if config.embedding.backend == "arcface":
+        try:
+            from app.embeddings.insightface_embedder import InsightFaceEmbedder
+
+            return InsightFaceEmbedder()
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "ArcFace embedder unavailable (%s) — falling back to MobileFaceNet.",
+                exc,
+            )
+
     from app.embeddings.tflite_embedder import TFLiteEmbedder
 
     return TFLiteEmbedder(

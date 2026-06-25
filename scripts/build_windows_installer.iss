@@ -86,3 +86,36 @@ begin
   else
     Log('Fresh installation of {#AppName} {#AppVersion}');
 end;
+
+// Download mobilefacenet.tflite via PowerShell if the bundled copy is somehow
+// absent.  The model is normally embedded by PyInstaller (package_app.py) so
+// this only fires as a fallback (e.g. build produced without the model file).
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ModelPath, Script: String;
+  ResultCode: Integer;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  ModelPath := ExpandConstant('{app}\models\mobilefacenet.tflite');
+  if FileExists(ModelPath) then Exit;
+
+  Log('mobilefacenet.tflite not bundled — attempting post-install download');
+  Script :=
+    '$f=''' + ModelPath + ''';' +
+    'New-Item -ItemType Directory -Force -Path (Split-Path $f)|Out-Null;' +
+    '$urls=@(' +
+      '''https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite'',' +
+      '''https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite'',' +
+      '''https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite'');' +
+    'foreach($u in $urls){' +
+      'try{Invoke-WebRequest -Uri $u -OutFile "$f.tmp" -UseBasicParsing -ErrorAction Stop;' +
+           'Move-Item "$f.tmp" $f -Force;break}' +
+      'catch{Remove-Item "$f.tmp" -ea si}}';
+  Exec('powershell.exe',
+       '-NonInteractive -WindowStyle Hidden -Command "' + Script + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if FileExists(ModelPath) then
+    Log('mobilefacenet.tflite downloaded successfully')
+  else
+    Log('WARNING: mobilefacenet.tflite download failed (Settings > AI csomagok can retry)');
+end;

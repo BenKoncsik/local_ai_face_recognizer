@@ -287,6 +287,7 @@ jobs:
             mirrors=(
               "https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite"
               "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite"
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
@@ -792,7 +793,8 @@ jobs:
           if (-not (Test-Path $facenet)) {
             $mirrors = @(
               "https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite",
-              "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite"
+              "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite",
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
             )
             $ok = $false
             foreach ($url in $mirrors) {
@@ -969,6 +971,7 @@ jobs:
             mirrors=(
               "https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite"
               "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite"
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then
@@ -1077,6 +1080,7 @@ jobs:
             mirrors=(
               "https://github.com/MCarlomagno/FaceRecognitionAuth/raw/refs/heads/master/assets/mobilefacenet.tflite"
               "https://github.com/pb-julian/liteface/raw/main/tflite_models/mobilefacenet.tflite"
+              "https://github.com/shubham0204/FaceRecognition_With_FaceNet_Android/raw/master/app/src/main/assets/mobile_face_net.tflite"
             )
             for url in "${mirrors[@]}"; do
               if curl -fsSL --retry 3 -o models/mobilefacenet.tflite "$url"; then

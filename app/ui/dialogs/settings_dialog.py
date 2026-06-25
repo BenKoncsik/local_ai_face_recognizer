@@ -1104,6 +1104,38 @@ class SettingsDialog(QDialog):
         emb_group = QGroupBox(t("pkg_group_embedding"))
         emb_layout = QVBoxLayout(emb_group)
 
+        # Embedding model selector — MobileFaceNet (default) vs ArcFace.
+        model_label = QLabel(t("pkg_emb_model_label"))
+        model_label.setStyleSheet("font-size: 11px;")
+        emb_layout.addWidget(model_label)
+
+        self._emb_backend_group = QButtonGroup(emb_group)
+        self._emb_radio_mobilefacenet = QRadioButton(t("pkg_emb_mobilefacenet"))
+        self._emb_radio_mobilefacenet.setProperty("emb_backend", "mobilefacenet")
+        self._emb_radio_arcface = QRadioButton(t("pkg_emb_arcface"))
+        self._emb_radio_arcface.setProperty("emb_backend", "arcface")
+        self._emb_backend_group.addButton(self._emb_radio_mobilefacenet)
+        self._emb_backend_group.addButton(self._emb_radio_arcface)
+        emb_layout.addWidget(self._emb_radio_mobilefacenet)
+        emb_layout.addWidget(self._emb_radio_arcface)
+
+        if self._app_config.embedding.backend == "arcface":
+            self._emb_radio_arcface.setChecked(True)
+        else:
+            self._emb_radio_mobilefacenet.setChecked(True)
+        # Remember the backend at open time so we can detect a real change on save.
+        self._emb_backend_initial = self._app_config.embedding.backend
+
+        arcface_note = QLabel(t("pkg_emb_arcface_needs"))
+        arcface_note.setWordWrap(True)
+        arcface_note.setStyleSheet("color: #888; font-size: 10px;")
+        emb_layout.addWidget(arcface_note)
+
+        sep_top = QFrame()
+        sep_top.setFrameShape(QFrame.Shape.HLine)
+        sep_top.setStyleSheet("color: #444;")
+        emb_layout.addWidget(sep_top)
+
         self._active_backend_label = QLabel()
         self._active_backend_label.setStyleSheet("color: #888; font-size: 11px;")
         emb_layout.addWidget(self._active_backend_label)
@@ -1767,6 +1799,30 @@ class SettingsDialog(QDialog):
             from app.config import save_deep_recognition_values
             self._app_config.deep_recognition.hidden_layers = new_layers
             save_deep_recognition_values({"hidden_layers": list(new_layers)})
+        # Persist a changed embedding backend (AI Packages tab is built lazily,
+        # so only act when its widgets were actually created).
+        if hasattr(self, "_emb_backend_group"):
+            checked = self._emb_backend_group.checkedButton()
+            new_backend = (
+                checked.property("emb_backend") if checked else "mobilefacenet"
+            )
+            if new_backend != self._emb_backend_initial:
+                from app.config import save_embedding_values
+                self._app_config.embedding.backend = new_backend
+                save_embedding_values({"backend": new_backend})
+                _BACKEND_LABELS = {
+                    "mobilefacenet": "MobileFaceNet (192-dim)",
+                    "arcface": "ArcFace ResNet-50 (512-dim)",
+                }
+                QMessageBox.information(
+                    self,
+                    t("pkg_emb_switch_title"),
+                    t(
+                        "pkg_emb_switch_msg",
+                        old=_BACKEND_LABELS.get(self._emb_backend_initial, self._emb_backend_initial),
+                        new=_BACKEND_LABELS.get(new_backend, new_backend),
+                    ),
+                )
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)

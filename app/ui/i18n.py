@@ -736,6 +736,35 @@ _STRINGS: Dict[str, Dict[str, str]] = {
                                      "Az InsightFace buffalo_l modellcsomag (~200 MB) az első "
                                      "szkenneléskor töltődik le automatikusan."},
     "pkg_active_backend":     {"en": "Active embedding backend: {backend}", "hu": "Aktív beágyazás backend: {backend}"},
+    "pkg_emb_model_label":    {"en": "Embedding model:", "hu": "Beágyazás modell:"},
+    "pkg_emb_mobilefacenet":  {"en": "MobileFaceNet (default, lightweight, 192-dim)",
+                               "hu": "MobileFaceNet (alapértelmezett, könnyű, 192-dim)"},
+    "pkg_emb_arcface":        {"en": "ArcFace (ResNet-50) — higher quality, higher resource use (512-dim)",
+                               "hu": "ArcFace (ResNet-50) — magasabb minőség, magasabb erőforrásigény (512-dim)"},
+    "pkg_emb_arcface_needs":  {"en": "ArcFace reuses the InsightFace buffalo_l model — requires the insightface + onnxruntime packages below.",
+                               "hu": "Az ArcFace az InsightFace buffalo_l modellt használja újra — szükséges hozzá az alábbi insightface + onnxruntime csomag."},
+    "pkg_emb_switch_title":   {"en": "Embedding model changed — re-scan required",
+                               "hu": "Beágyazás modell megváltozott — újraszkennelés szükséges"},
+    "pkg_emb_switch_msg":     {"en": "The embedding model was changed ({old} → {new}).\n\n"
+                                     "The two models produce incompatible vectors, so all existing face "
+                                     "embeddings are now stale — recognition will not work correctly "
+                                     "until they are regenerated.\n\n"
+                                     "What to do:\n"
+                                     "  1. Open the AI tab (main window, top menu)\n"
+                                     "  2. Click \"AI Rebuild from Scratch\"\n\n"
+                                     "This re-detects every face, regenerates all embeddings with the "
+                                     "new model, and retrains the recognition network. "
+                                     "Your confirmed person assignments are kept.",
+                               "hu": "A beágyazás modell megváltozott ({old} → {new}).\n\n"
+                                     "A két modell inkompatibilis vektorokat állít elő, ezért a meglévő "
+                                     "arc-embeddingek érvénytelenek — a felismerés nem fog helyesen "
+                                     "működni, amíg ezek újra nem generálódnak.\n\n"
+                                     "Teendő:\n"
+                                     "  1. Nyisd meg az AI fület (főablak, felső menü)\n"
+                                     '  2. Kattints az „AI újraépítés nulláról” gombra\n\n'
+                                     "Ez újradetektál minden arcot, az új modellel újragenerálja az "
+                                     "összes embeddinget, és újratanítja a felismerő hálót. "
+                                     "A megerősített személy-hozzárendelések megmaradnak."},
     "pkg_backend_none":       {"en": "none (HOG stub — very low quality!)", "hu": "nincs (HOG stub — nagyon gyenge minőség!)"},
     "pkg_model_file_ok":      {"en": "Model file: {path}  ✓", "hu": "Modell fájl: {path}  ✓"},
     "pkg_model_file_missing": {"en": "Model file missing: {path}", "hu": "Modell fájl hiányzik: {path}"},

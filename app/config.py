@@ -191,6 +191,18 @@ class EmbeddingConfig:
           Coral is NOT used for embeddings — only for detection.
     """
 
+    # Which embedding model to use:
+    #   "mobilefacenet" — local MobileFaceNet TFLite model (192-dim, CPU,
+    #                     lightweight; the default).
+    #   "arcface"       — ArcFace ResNet-50 (512-dim) reusing the InsightFace
+    #                     ``buffalo_l`` recognition model already downloaded for
+    #                     detection.  Higher quality, higher resource use;
+    #                     requires the insightface + onnxruntime packages.
+    # WARNING: the two backends produce incompatible vectors (different
+    # dimensionality and vector space) — switching requires a full re-embed and
+    # an AI-model rebuild before recognition results are comparable again.
+    backend: str = "mobilefacenet"
+
     # Path to MobileFaceNet or compatible embedding TFLite model.
     # Download instructions in README; set this to a local path.
     model_path: Optional[str] = None
@@ -839,6 +851,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
         emb = raw.get("embedding", {})
         cfg.embedding = EmbeddingConfig(
+            backend=emb.get("backend", cfg.embedding.backend),
             model_path=emb.get("model_path"),
             input_size=tuple(emb.get("input_size", list(cfg.embedding.input_size))),
             embedding_dim=emb.get("embedding_dim", cfg.embedding.embedding_dim),
@@ -1208,6 +1221,13 @@ def save_detection_values(
 ) -> None:
     """Persist selected detection fields into the YAML config."""
     _update_config_section("detection", values, config_path)
+
+
+def save_embedding_values(
+    values: dict, config_path: Optional[str] = None
+) -> None:
+    """Persist selected embedding fields (e.g. ``backend``) into the YAML config."""
+    _update_config_section("embedding", values, config_path)
 
 
 def _update_config_section(

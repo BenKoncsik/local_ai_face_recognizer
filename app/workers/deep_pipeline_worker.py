@@ -49,7 +49,6 @@ from app.db.database import init_db, session_scope
 from app.db.models import Face, Image, Person
 from app.deep.dataset import TRUSTED_MANUAL_SOURCES
 from app.detectors.factory import create_detector
-from app.embeddings.tflite_embedder import TFLiteEmbedder
 from app.jobs.cancellation import OperationCancelled
 from app.services.clustering_service import ClusteringService, ClusteringStats
 from app.services.deep_recognition_service import (
@@ -809,11 +808,9 @@ class DeepPipelineWorker(QThread):
             return None
 
     def _run_embedding(self) -> int:
-        embedder = TFLiteEmbedder(
-            model_path=self._config.embedding.model_path,
-            embedding_dim=self._config.embedding.embedding_dim,
-            input_size=self._config.embedding.input_size,
-        )
+        from app.services.embedding_service import build_embedder
+
+        embedder = build_embedder(self._config)
         self._emit_log(
             f"  Embedder backend: {getattr(embedder, '_backend', '?')}"
         )

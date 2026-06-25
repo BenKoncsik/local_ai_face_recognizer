@@ -10,6 +10,7 @@ embedding:
   - 112
   - 112
   embedding_dim: 192
+  backend: arcface
 clustering:
   epsilon: 0.4
   min_samples: 2
