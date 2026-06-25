@@ -2,10 +2,11 @@ name: Test Report Dashboard
 
 on:
   schedule:
-    # Éjfél (UTC) - GitHub Actions szabadon futtat
-    - cron: '0 0 * * *'
-    # Reggel 8 (UTC) - opcionális, ha napi 2x szeretnél
-    # - cron: '0 8 * * *'
+    # 22:00 UTC = éjfél CEST (nyár, UTC+2) / 23:00 CET (tél, UTC+1)
+    # GitHub Actions késéssel (~1-2 h) hajnali 4 helyett éjfél körül fut
+    - cron: '0 22 * * *'
+    # Reggel 6 (UTC) - opcionális, ha napi 2x szeretnél
+    # - cron: '0 6 * * *'
   workflow_dispatch:
   # Összevetés: push + pull_request letiltva, hogy ne terheljen
   # pull_request:
