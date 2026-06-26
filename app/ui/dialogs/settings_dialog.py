@@ -1131,6 +1131,22 @@ class SettingsDialog(QDialog):
         arcface_note.setStyleSheet("color: #888; font-size: 10px;")
         emb_layout.addWidget(arcface_note)
 
+        # Apple Silicon only: opt into running embeddings on the Neural Engine
+        # via Core ML.  The control is hidden entirely on Windows / Linux / Intel
+        # Macs, where it would have no effect.
+        from app import accel
+        self._emb_coreml_check = None
+        self._emb_coreml_initial = bool(self._app_config.embedding.prefer_coreml)
+        if accel.is_apple_silicon():
+            self._emb_coreml_check = QCheckBox(t("pkg_emb_apple_ane"))
+            self._emb_coreml_check.setChecked(self._emb_coreml_initial)
+            emb_layout.addWidget(self._emb_coreml_check)
+
+            ane_note = QLabel(t("pkg_emb_apple_ane_note", accel=accel.summary()))
+            ane_note.setWordWrap(True)
+            ane_note.setStyleSheet("color: #888; font-size: 10px;")
+            emb_layout.addWidget(ane_note)
+
         sep_top = QFrame()
         sep_top.setFrameShape(QFrame.Shape.HLine)
         sep_top.setStyleSheet("color: #444;")
@@ -1823,6 +1839,15 @@ class SettingsDialog(QDialog):
                         new=_BACKEND_LABELS.get(new_backend, new_backend),
                     ),
                 )
+        # Persist the Apple Neural Engine (Core ML) preference (Apple Silicon
+        # only; the checkbox is None elsewhere).  Same model + dimensionality,
+        # so toggling it needs no re-embed — it only changes the runtime device.
+        if getattr(self, "_emb_coreml_check", None) is not None:
+            new_pref = self._emb_coreml_check.isChecked()
+            if new_pref != self._emb_coreml_initial:
+                from app.config import save_embedding_values
+                self._app_config.embedding.prefer_coreml = new_pref
+                save_embedding_values({"prefer_coreml": new_pref})
         selected_lang = self._lang_combo.currentData()
         if selected_lang != current_language():
             set_language(selected_lang)

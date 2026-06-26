@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import List
 
 import numpy as np
 
@@ -26,6 +27,17 @@ class FaceEmbedder(ABC):
         Returns:
             1-D float32 numpy array of length :attr:`embedding_dim`.
         """
+
+    def embed_batch(self, faces_bgr: List[np.ndarray]) -> List[np.ndarray]:
+        """Embed several crops at once; returns one vector per input crop.
+
+        Default implementation simply calls :meth:`embed` per crop — backends
+        that support true batched inference (e.g. the TFLite embedder) override
+        this to run the whole batch through the model in one invocation, which
+        is substantially faster.  The returned list has the same length and
+        order as *faces_bgr*.
+        """
+        return [self.embed(face_bgr) for face_bgr in faces_bgr]
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} dim={self.embedding_dim}>"

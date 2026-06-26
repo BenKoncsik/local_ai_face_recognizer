@@ -162,8 +162,39 @@ class TestTrainAndRecognize:
             _seed_two_persons(s, img)
             assert DeepRecognitionService(s, cfg).debug_sample_face() is None
 
-    def test_assignment_records_decision_graph(self, tmp_db, tmp_path):
-        """Each assignment stores a parseable deep decision graph."""
+    def test_assignment_decision_graph_is_lazy(self, tmp_db, tmp_path):
+        """With the viz off, the per-row graph is not persisted eagerly.
+
+        Computing the decision graph eagerly meant a second full forward pass
+        per assigned face on the hot path.  It is now left NULL and recomputed
+        on demand from the saved model when the review tab opens a row.
+        """
+        cfg = _fast_config(tmp_path)
+        with session_scope() as s:
+            img = _add_image(s)
+            _seed_two_persons(s, img)
+            _add_face(s, img, None, _vec(0, seed=999), source=None)
+
+        with session_scope() as s:
+            DeepRecognitionService(s, cfg).train_and_recognize()
+
+        with session_scope() as s:
+            row = s.query(AutoAssignment).one()
+            # Not stored eagerly when no debug viz was attached to the run …
+            assert row.decision_json is None
+            # … and the DTO surfaces None until the UI asks for a recompute.
+            dtos = DeepRecognitionService(s, cfg).list_auto_assignments(only_open=True)
+            assert dtos and dtos[0].decision is None
+            # Recomputed lazily from the saved model on demand.
+            decision = DeepRecognitionService(s, cfg).decision_for_face(row.face_id)
+            assert decision is not None
+            assert decision["engine"] == "deep"
+            assert decision["reason"] == "assigned"
+            assert isinstance(decision["gates"], list) and decision["gates"]
+            assert decision.get("recomputed") is True
+
+    def test_assignment_records_decision_graph_with_debug(self, tmp_db, tmp_path):
+        """A run with the debug viz on still persists a parseable graph."""
         import json
 
         cfg = _fast_config(tmp_path)
@@ -173,7 +204,9 @@ class TestTrainAndRecognize:
             _add_face(s, img, None, _vec(0, seed=999), source=None)
 
         with session_scope() as s:
-            DeepRecognitionService(s, cfg).train_and_recognize()
+            DeepRecognitionService(s, cfg).train_and_recognize(
+                debug_cb=lambda info: None
+            )
 
         with session_scope() as s:
             row = s.query(AutoAssignment).one()

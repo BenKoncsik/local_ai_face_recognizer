@@ -281,13 +281,16 @@ class PerformancePanel(QWidget):
         header.addStretch(1)
         self._cpu_label = QLabel()
         self._gpu_label = QLabel()
+        self._accel_label = QLabel()
+        self._accel_label.setToolTip(t("perf_accel_tip"))
         self._ram_label = QLabel()
         self._io_label = QLabel()
-        for lbl in (self._cpu_label, self._gpu_label, self._ram_label,
-                    self._io_label):
+        for lbl in (self._cpu_label, self._gpu_label, self._accel_label,
+                    self._ram_label, self._io_label):
             lbl.setStyleSheet("font-weight: bold; padding: 0 8px;")
             header.addWidget(lbl)
         layout.addLayout(header)
+        self._update_accel_label()
 
         if self._psutil is None:
             layout.addWidget(QLabel(t("perf_psutil_missing")))
@@ -455,8 +458,29 @@ class PerformancePanel(QWidget):
         self._io_last = counters
         self._io_last_wall = now
 
+    def _update_accel_label(self) -> None:
+        """Refresh the AI-accelerator status (which device the models run on).
+
+        This is a status, not a live metric: macOS exposes no per-process ANE
+        utilisation, so we show *which* accelerator is active (Neural Engine /
+        CUDA / Coral / CPU) with a per-component breakdown in the tooltip.
+        """
+        try:
+            from app import accel
+
+            summary = accel.summary()
+            self._accel_label.setText(f"{t('perf_accel')} {summary}")
+            lines = accel.detail_lines()
+            self._accel_label.setToolTip(
+                "\n".join(lines) if lines else t("perf_accel_tip")
+            )
+        except Exception:  # noqa: BLE001 — never let the monitor break on this
+            self._accel_label.setText(t("perf_accel_none"))
+
     def sample(self) -> None:
         """Pull one sample from psutil and push it into the graphs/labels."""
+        # Accelerator status is independent of psutil — always keep it fresh.
+        self._update_accel_label()
         if self._psutil is None:
             return
         ps = self._psutil

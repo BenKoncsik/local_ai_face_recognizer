@@ -254,6 +254,9 @@ class DeepFaceClassifier:
             return rejected
 
         state = self._state
+        if state.train_matrix.ndim == 2 and state.train_matrix.shape[1] != vec.shape[0]:
+            rejected.reason = "no_embedding"
+            return rejected
         sims = state.train_matrix @ vec
         best_global_sim = float(np.max(sims)) if sims.size else 0.0
 
@@ -318,7 +321,12 @@ class DeepFaceClassifier:
         all_similarities: Dict[str, float] = {}
 
         vec = self._unit(embedding)
-        if vec is None or not self.is_trained:
+        dim_mismatch = (
+            vec is not None
+            and state.train_matrix.ndim == 2
+            and state.train_matrix.shape[1] != vec.shape[0]
+        )
+        if vec is None or not self.is_trained or dim_mismatch:
             pred = self.predict(embedding)
             return pred, DeepDebugInfo(
                 face_id=face_id, crop_path=crop_path,

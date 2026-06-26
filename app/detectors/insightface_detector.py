@@ -115,14 +115,14 @@ class InsightFaceDetector(FaceDetector):
                 "pip install insightface onnxruntime"
             ) from exc
 
+        from app import accel
+
         ctx_id = self._resolve_ctx(gpu)
+        # Platform-safe provider list: CUDA priority where present (unchanged
+        # Windows/Linux path), CoreML only on macOS, CPU always as fallback.
+        providers = accel.onnx_providers()
         try:
-            app = FaceAnalysis(
-                name=model_pack,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-                if ctx_id >= 0
-                else ["CPUExecutionProvider"],
-            )
+            app = FaceAnalysis(name=model_pack, providers=providers)
             app.prepare(
                 ctx_id=ctx_id,
                 det_thresh=self._det_thresh,
@@ -133,11 +133,30 @@ class InsightFaceDetector(FaceDetector):
                 f"Could not load InsightFace pack {model_pack!r}: {exc}"
             ) from exc
 
+        # Report which accelerator the detection session actually bound to.  The
+        # detection graph (SCRFD) has dynamic input shapes, so CoreML often only
+        # partially offloads — classify_providers still reports CoreML when its
+        # provider is in the active list.
+        active_providers = self._session_providers(app) or providers
+        accel.report_onnx("detection", active_providers, detail="SCRFD")
+
         log.info(
-            "InsightFace loaded: pack=%s ctx_id=%d det_size=%s thresh=%.2f",
-            model_pack, ctx_id, self._det_size, self._det_thresh,
+            "InsightFace loaded: pack=%s ctx_id=%d det_size=%s thresh=%.2f providers=%s",
+            model_pack, ctx_id, self._det_size, self._det_thresh, active_providers,
         )
         return app
+
+    @staticmethod
+    def _session_providers(app) -> Optional[list]:
+        """Active onnxruntime providers from any sub-model session, if exposed."""
+        try:
+            for model in getattr(app, "models", {}).values():
+                session = getattr(model, "session", None)
+                if session is not None:
+                    return session.get_providers()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     @staticmethod
     def _resolve_ctx(gpu: Optional[bool]) -> int:

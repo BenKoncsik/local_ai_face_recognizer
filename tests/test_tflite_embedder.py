@@ -181,6 +181,44 @@ class TestLoadTfliteBackendSelection:
 
 
 # ---------------------------------------------------------------------------
+# Batched inference equivalence
+# ---------------------------------------------------------------------------
+
+class TestEmbedBatch:
+    """embed_batch must produce the same vectors as per-crop embed."""
+
+    def test_batch_matches_serial(self):
+        """A real TFLite model embeds a batch identically to one-by-one."""
+        from app.config import AppConfig
+        from app.services.embedding_service import build_embedder
+
+        embedder = build_embedder(AppConfig())
+        if getattr(embedder, "_backend", None) != "tflite":
+            pytest.skip("real MobileFaceNet TFLite model not available")
+
+        rng = np.random.default_rng(7)
+        faces = [
+            rng.integers(0, 255, size=(80, 70, 3), dtype=np.uint8)
+            for _ in range(5)
+        ]
+
+        serial = [embedder.embed(f) for f in faces]
+        batched = embedder.embed_batch(faces)
+
+        assert len(batched) == len(serial)
+        for got, want in zip(batched, serial):
+            assert got.shape == want.shape
+            assert np.allclose(got, want, atol=1e-4)
+
+    def test_empty_batch_returns_empty(self):
+        from app.config import AppConfig
+        from app.services.embedding_service import build_embedder
+
+        embedder = build_embedder(AppConfig())
+        assert embedder.embed_batch([]) == []
+
+
+# ---------------------------------------------------------------------------
 # HOG stub fallback (no model file, no TFLite backend)
 # ---------------------------------------------------------------------------
 

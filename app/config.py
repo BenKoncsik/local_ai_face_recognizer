@@ -226,6 +226,32 @@ class EmbeddingConfig:
     # a full re-detect + re-embed is required for results to stay comparable.
     crop_mode: str = "legacy"
 
+    # Number of face crops embedded together in one batched model invocation.
+    # Batching amortises the per-call overhead of the TFLite interpreter and
+    # lets BLAS work on a whole matrix at once — the single biggest embedding
+    # speed-up.  Backends without batch support fall back to per-crop embedding
+    # transparently.  1 disables batching.
+    batch_size: int = 32
+
+    # Number of background threads used to read + decode face crops from disk
+    # while the model embeds the previous batch.  Crop loading is I/O- and
+    # decode-bound (GIL is released), so overlapping it with inference hides
+    # most of the disk latency.  Clamped to the CPU count at runtime.
+    loader_workers: int = 8
+
+    # macOS only: path to a Core ML embedding model (``.mlpackage`` / ``.mlmodel``).
+    # When present on an Apple-Silicon Mac, the MobileFaceNet path runs through
+    # Core ML (Apple Neural Engine / GPU) instead of the CPU TFLite backend.
+    # Ignored on Windows/Linux and when the file is missing — the TFLite path is
+    # used unchanged.  Produce the file once with
+    # ``scripts/convert_mobilefacenet_to_coreml.py``.  None → auto-detect at
+    # ``models/mobilefacenet.mlpackage``.
+    coreml_model_path: Optional[str] = None
+
+    # macOS only: set False to force the CPU TFLite path even when a Core ML
+    # model exists (e.g. to benchmark, or if a conversion misbehaves).
+    prefer_coreml: bool = True
+
 
 @dataclass
 class ClusteringConfig:
@@ -856,6 +882,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             input_size=tuple(emb.get("input_size", list(cfg.embedding.input_size))),
             embedding_dim=emb.get("embedding_dim", cfg.embedding.embedding_dim),
             crop_mode=emb.get("crop_mode", cfg.embedding.crop_mode),
+            batch_size=emb.get("batch_size", cfg.embedding.batch_size),
+            loader_workers=emb.get("loader_workers", cfg.embedding.loader_workers),
+            coreml_model_path=emb.get("coreml_model_path", cfg.embedding.coreml_model_path),
+            prefer_coreml=emb.get("prefer_coreml", cfg.embedding.prefer_coreml),
         )
 
         clu = raw.get("clustering", {})

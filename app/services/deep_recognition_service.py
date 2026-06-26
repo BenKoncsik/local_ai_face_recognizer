@@ -487,12 +487,16 @@ class DeepRecognitionService:
             face.assignment_confidence = prediction.score
             face.assigned_at = now
 
-            # Capture the decision graph for this assignment so the review tab
-            # can explain it later.  Reuse the debug info already computed for
-            # the live viz; otherwise compute it once for this assigned face
-            # (rejected faces stay on the cheap predict() path).
-            decision_json = self._serialize_decision(
-                classifier, face, debug_info
+            # Capture the decision graph only when it was already computed for
+            # the live visualization.  Otherwise leave it NULL: the review tab
+            # recomputes the graph on demand via ``decision_for_face`` when a
+            # row is opened, so the hot path avoids a second full forward pass
+            # per assigned face — roughly halving recognition time on large
+            # archives where most runs have the viz off.
+            decision_json = (
+                self._serialize_decision(classifier, face, debug_info)
+                if debug_info is not None
+                else None
             )
 
             self._session.add(

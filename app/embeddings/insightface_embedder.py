@@ -92,12 +92,13 @@ class InsightFaceEmbedder(FaceEmbedder):
         import glob
         import os
 
+        from app import accel
+
         ctx_id = InsightFaceEmbedder._resolve_ctx(gpu)
-        providers = (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if ctx_id >= 0
-            else ["CPUExecutionProvider"]
-        )
+        # Platform-safe provider list: CUDA stays the priority where present
+        # (Windows/Linux GPU path unchanged); CoreML is added only on macOS so
+        # ArcFace runs on the Apple Neural Engine / GPU.  CPU is the fallback.
+        providers = accel.onnx_providers()
 
         try:
             # Downloads the pack on first use (same pack the SCRFD co-detector
@@ -120,9 +121,17 @@ class InsightFaceEmbedder(FaceEmbedder):
                 f"pack {model_pack!r}: {exc}"
             ) from exc
 
+        # Report the accelerator the session actually bound to (CoreML/ANE,
+        # CUDA or CPU) so the Performance tab can show a truthful status.
+        try:
+            active_providers = rec.session.get_providers()
+        except Exception:  # noqa: BLE001
+            active_providers = providers
+        accel.report_onnx("embedding", active_providers, detail="ArcFace r50")
+
         log.info(
-            "InsightFace ArcFace embedder loaded: pack=%s ctx_id=%d dim=%d",
-            model_pack, ctx_id, _EMBED_DIM,
+            "InsightFace ArcFace embedder loaded: pack=%s ctx_id=%d dim=%d providers=%s",
+            model_pack, ctx_id, _EMBED_DIM, active_providers,
         )
         return rec
 

@@ -813,6 +813,7 @@ class DeepPipelineWorker(QThread):
         embedder = build_embedder(self._config)
         self._emit_log(
             f"  Embedder backend: {getattr(embedder, '_backend', '?')}"
+            f" (dim={embedder.embedding_dim})"
         )
 
         def cb(current, total, face_id):
@@ -826,7 +827,8 @@ class DeepPipelineWorker(QThread):
                 progress_cb=cb,
             )
             return svc.process_pending(
-                exclude_low_quality=self._config.deep_recognition.strict_quality_filter
+                exclude_low_quality=self._config.deep_recognition.strict_quality_filter,
+                expected_dim=embedder.embedding_dim,
             )
 
     def _run_overlap_resolution(self) -> OverlapResolutionStats:

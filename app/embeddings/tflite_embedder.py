@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -74,6 +74,17 @@ class TFLiteEmbedder(FaceEmbedder):
         self._interpreter = None
         self._input_index: int = 0
         self._output_index: int = 0
+        # Batch dimension currently allocated on the interpreter's input tensor.
+        # The model is loaded with a fixed batch of 1; ``_ensure_batch`` resizes
+        # it on demand so single-crop and batched inference can share one
+        # interpreter without re-allocating every call.
+        self._allocated_n: Optional[int] = None
+        # Tri-state: None = batch support not probed yet, True/False = known.
+        # Many MobileFaceNet/ArcFace TFLite graphs are exported with a fixed
+        # batch of 1 and the XNNPACK delegate refuses to reshape them, so true
+        # batching is a best-effort optimisation that disables itself on the
+        # first failure and falls back to per-crop inference.
+        self._batch_supported: Optional[bool] = None
         self._sface = None
 
         resolved = Path(model_path) if model_path else resource_path(_DEFAULT_MODEL_PATH)
@@ -178,7 +189,13 @@ class TFLiteEmbedder(FaceEmbedder):
         if len(out_shape) >= 2:
             self._embedding_dim = int(out_shape[-1])
 
+        # The model is allocated with a batch of 1 here; _ensure_batch tracks
+        # and resizes this lazily for batched inference.
+        self._allocated_n = 1
         self._backend = "tflite"
+        # TFLite on macOS uses XNNPACK (CPU) — never the ANE — so report CPU.
+        from app import accel
+        accel.report("embedding", accel.ACC_CPU, "MobileFaceNet TFLite (XNNPACK)")
         log.info(
             "Embedding model loaded: %s  (input=%dx%d, dim=%d)",
             model_path.name, self._input_w, self._input_h, self._embedding_dim,
@@ -199,6 +216,55 @@ class TFLiteEmbedder(FaceEmbedder):
             return self._sface.embed(face_bgr)
         return self._embed_hog_stub(face_bgr)
 
+    def embed_batch(self, faces_bgr: List[np.ndarray]) -> List[np.ndarray]:
+        """Embed many crops in a single TFLite invocation when the model allows.
+
+        Only the real TFLite path attempts batching; the SFace/HOG fallbacks
+        have no batch API, so they reuse the per-crop default from the base
+        class.  If the model's graph cannot be reshaped to a batch > 1 (common
+        for fixed-batch exports), batching disables itself and every call falls
+        back to fast per-crop inference on this interpreter.
+        """
+        if self._interpreter is None:
+            return super().embed_batch(faces_bgr)
+        if not faces_bgr:
+            return []
+        if self._batch_supported is False or len(faces_bgr) == 1:
+            return [self._embed_tflite(face_bgr) for face_bgr in faces_bgr]
+
+        batch = np.concatenate(
+            [self._preprocess(face_bgr) for face_bgr in faces_bgr], axis=0
+        )
+        n = batch.shape[0]
+        try:
+            self._ensure_batch(n)
+            self._interpreter.set_tensor(self._input_index, batch)
+            self._interpreter.invoke()
+            out = self._interpreter.get_tensor(self._output_index)
+        except (RuntimeError, ValueError) as exc:
+            # The model graph won't reshape to a batch — disable batching for
+            # this interpreter and continue per-crop (still benefits from the
+            # caller's parallel crop loading).
+            log.info(
+                "TFLite model does not support batched inference (%s) — "
+                "using per-crop embedding.",
+                exc,
+            )
+            self._batch_supported = False
+            self._restore_single_batch()
+            return [self._embed_tflite(face_bgr) for face_bgr in faces_bgr]
+
+        self._batch_supported = True
+        return [self._l2_normalise(out[i].astype(np.float32)) for i in range(n)]
+
+    def _restore_single_batch(self) -> None:
+        """Reset the interpreter to a batch of 1 after a failed batch resize."""
+        try:
+            self._allocated_n = None
+            self._ensure_batch(1)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not restore single-batch interpreter state: %s", exc)
+
     # ------------------------------------------------------------------
     # Backend implementations
     # ------------------------------------------------------------------
@@ -216,9 +282,25 @@ class TFLiteEmbedder(FaceEmbedder):
         normalised = (rgb.astype(np.float32) - 127.5) / 128.0
         return np.expand_dims(normalised, axis=0)  # (1, H, W, 3)
 
+    def _ensure_batch(self, n: int) -> None:
+        """Resize the interpreter's input tensor to a batch of *n* if needed.
+
+        Re-allocating tensors is only done when the requested batch size differs
+        from the one currently allocated, so a steady-size embedding loop pays
+        the cost once rather than every call.
+        """
+        if self._allocated_n == n:
+            return
+        self._interpreter.resize_tensor_input(
+            self._input_index, [n, self._input_h, self._input_w, 3]
+        )
+        self._interpreter.allocate_tensors()
+        self._allocated_n = n
+
     def _embed_tflite(self, face_bgr: np.ndarray) -> np.ndarray:
-        """Run TFLite inference."""
+        """Run TFLite inference for a single crop."""
         inp = self._preprocess(face_bgr)
+        self._ensure_batch(1)
         self._interpreter.set_tensor(self._input_index, inp)
         self._interpreter.invoke()
         embedding = self._interpreter.get_tensor(self._output_index)[0]
