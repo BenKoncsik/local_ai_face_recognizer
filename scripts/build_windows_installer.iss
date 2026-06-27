@@ -20,8 +20,8 @@ PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-; Skip the directory page when upgrading (preserves the previous install location).
-DisableDirPage=auto
+; Always show the directory page so the user can choose or confirm the install location.
+DisableDirPage=no
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -78,12 +78,24 @@ const
 function InitializeSetup(): Boolean;
 var
   PreviousVersion: String;
+  InstallPath: String;
+  Msg: String;
 begin
   Result := True;
   if RegQueryStringValue(HKEY_CURRENT_USER, UNINSTALL_REGKEY,
-                         'DisplayVersion', PreviousVersion) then
-    Log('Upgrade detected: installed=' + PreviousVersion + ' -> new={#AppVersion}')
-  else
+                         'DisplayVersion', PreviousVersion) then begin
+    Log('Upgrade detected: installed=' + PreviousVersion + ' -> new={#AppVersion}');
+    if not RegQueryStringValue(HKEY_CURRENT_USER, UNINSTALL_REGKEY,
+                               'InstallLocation', InstallPath) then
+      InstallPath := ExpandConstant('{autopf}\{#AppName}');
+    Msg := 'A Face-Local egy korábbi verziója már telepítve van:' + #13#10 + #13#10 +
+           '  Jelenlegi verzió: ' + PreviousVersion + #13#10 +
+           '  Új verzió:        {#AppVersion}' + #13#10 +
+           '  Telepítési hely:  ' + InstallPath + #13#10 + #13#10 +
+           'A telepítő frissíti az alkalmazást. Folytatja?';
+    if MsgBox(Msg, mbConfirmation, MB_YESNO) = IDNO then
+      Result := False;
+  end else
     Log('Fresh installation of {#AppName} {#AppVersion}');
 end;
 
