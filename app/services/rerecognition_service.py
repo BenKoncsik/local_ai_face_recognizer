@@ -223,9 +223,9 @@ class ReRecognitionService:
             return {}
         # Reuse the recognizer's correction-aware loader; it expects ORM faces.
         face_ids = [f.face_id for f in faces]
-        orm_faces = (
-            self._session.query(Face).filter(Face.id.in_(face_ids)).all()
-        )
+        orm_faces: list = []
+        for chunk in in_chunks(face_ids):
+            orm_faces.extend(self._session.query(Face).filter(Face.id.in_(chunk)).all())
         return self._rec._load_rejected_face_targets(orm_faces)
 
     # ------------------------------------------------------------------

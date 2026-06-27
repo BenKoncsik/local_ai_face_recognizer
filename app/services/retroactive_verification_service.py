@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.config import AppConfig
 from app.db.models import Face, Image
+from app.db.query_utils import in_chunks
 from app.detectors.base import Detection
 from app.services.image_library_service import resolve_image_path
 from app.utils.image_utils import load_image_bgr_normalized
@@ -238,7 +239,9 @@ class RetroactiveVerificationService:
         ids = list(face_ids)
         if not ids:
             return 0
-        faces = self._session.query(Face).filter(Face.id.in_(ids)).all()
+        faces = []
+        for chunk in in_chunks(ids):
+            faces.extend(self._session.query(Face).filter(Face.id.in_(chunk)).all())
         removed = 0
         crops_removed = 0
         for face in faces:
