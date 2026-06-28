@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.config import IdentityRepairConfig
 from app.db.models import Face, FaceCorrection, Person
+from app.db.query_utils import in_chunks
 from app.services.identity_service import IdentityService
 
 log = logging.getLogger(__name__)
@@ -300,10 +301,10 @@ class IdentityRepairService:
         for c in corrections:
             face_ids.add(c.face_id_a)
             face_ids.add(c.face_id_b)
-        person_of: Dict[int, Optional[int]] = {
-            f.id: f.person_id
-            for f in self._session.query(Face).filter(Face.id.in_(face_ids)).all()
-        }
+        person_of: Dict[int, Optional[int]] = {}
+        for chunk in in_chunks(list(face_ids)):
+            for f in self._session.query(Face).filter(Face.id.in_(chunk)).all():
+                person_of[f.id] = f.person_id
         suppressed: Set[frozenset] = set()
         for c in corrections:
             pa = person_of.get(c.face_id_a)

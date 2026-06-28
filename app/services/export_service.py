@@ -1898,13 +1898,21 @@ def _build_person_relationship_map(
     ids = [p.id for p in persons]
     if not ids:
         return {}
-    rows = (
-        session.query(Relationship)
-        .filter(
-            (Relationship.person_a_id.in_(ids)) | (Relationship.person_b_id.in_(ids))
-        )
-        .all()
-    )
+    # Each chunk is used twice in the OR filter (person_a_id + person_b_id), so
+    # limit to 450 IDs per chunk to stay below SQLite's 999-parameter limit.
+    seen_rel_ids: set = set()
+    rows = []
+    for chunk in in_chunks(ids, size=450):
+        for r in (
+            session.query(Relationship)
+            .filter(
+                (Relationship.person_a_id.in_(chunk)) | (Relationship.person_b_id.in_(chunk))
+            )
+            .all()
+        ):
+            if r.id not in seen_rel_ids:
+                seen_rel_ids.add(r.id)
+                rows.append(r)
     name_cache: Dict[int, str] = {p.id: p.name for p in persons}
 
     def name_of(pid: int) -> str:

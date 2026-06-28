@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.clustering.clusterer import cluster_embeddings
 from app.config import ClusteringConfig
 from app.db.models import Face, FaceCorrection, Person
+from app.db.query_utils import in_chunks
 
 log = logging.getLogger(__name__)
 
@@ -177,13 +178,11 @@ class ClusteringService:
         # Cache of label → Person.id (built as we go)
         label_to_person: Dict[int, int] = {}
 
-        # Face lookup
-        face_map: Dict[int, Face] = {
-            f.id: f
-            for f in self._session.query(Face)
-            .filter(Face.id.in_(face_ids))
-            .all()
-        }
+        # Face lookup (chunked to stay under SQLite's per-statement parameter limit)
+        face_map: Dict[int, Face] = {}
+        for chunk in in_chunks(face_ids):
+            for f in self._session.query(Face).filter(Face.id.in_(chunk)).all():
+                face_map[f.id] = f
 
         for fid in face_ids:
             face = face_map.get(fid)
@@ -317,10 +316,10 @@ class ClusteringService:
             normed.append(emb / norm if norm > 1e-8 else emb.copy())
 
         existing_unknowns = self._load_unknown_centroids()
-        face_map: Dict[int, Face] = {
-            f.id: f
-            for f in self._session.query(Face).filter(Face.id.in_(face_ids)).all()
-        }
+        face_map: Dict[int, Face] = {}
+        for chunk in in_chunks(face_ids):
+            for f in self._session.query(Face).filter(Face.id.in_(chunk)).all():
+                face_map[f.id] = f
         now = _utcnow_naive()
         threshold = self._config.unknown_assign_threshold
 
