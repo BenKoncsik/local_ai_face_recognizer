@@ -622,6 +622,13 @@ def parse_dshow_audio_devices(stderr_text: str) -> List[str]:
         if "video devices" in low:
             in_audio = False
             continue
+        # New FFmpeg
+        if "(audio)" in low:
+            m = name_re.search(raw)
+            if m:
+                names.append(m.group(1))
+            continue
+        # Old FFmpeg
         if in_audio:
             m = name_re.search(raw)
             if m:
@@ -868,6 +875,8 @@ def validate_recording_audio(
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
     except Exception as exc:  # noqa: BLE001
@@ -929,6 +938,8 @@ def probe_devices(
                 [ffmpeg_path, *args],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             return (proc.stderr or "") + (proc.stdout or "")
@@ -1086,6 +1097,8 @@ def list_audio_devices(
                 [ffmpeg_path, *args],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             return (proc.stderr or "") + (proc.stdout or "")
