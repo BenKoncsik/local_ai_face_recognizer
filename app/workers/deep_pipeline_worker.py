@@ -37,6 +37,7 @@ is allowed to saturate every CPU core.
 
 from __future__ import annotations
 
+import gc
 import logging
 import traceback
 from pathlib import Path
@@ -335,6 +336,13 @@ class DeepPipelineWorker(QThread):
             )
         self._checkpoint()
 
+        # Explicit GC pass: gc_guard has automatic GC disabled and only runs on
+        # the main thread every 2s, so transient allocations (detected faces,
+        # cropped images, embeddings) accumulate on the worker thread. Drain
+        # cyclic garbage here before the expensive training stage to keep peak
+        # memory in check and avoid Windows VM (commit-memory) exhaustion.
+        gc.collect()
+
         # --- Multi-stage false-positive cleanup (rescan + rebuild) ---
         # Both scan modes re-verify the stored *uncertain* boxes with the
         # multi-technology ensemble and delete the ones that are not faces (ears,
@@ -360,6 +368,10 @@ class DeepPipelineWorker(QThread):
 
         # --- Cluster the remaining unknown faces into groups ---
         announce("Grouping remaining unknown faces …")
+        # GC before clustering: the deep train+recognize stage above may have
+        # left transient numpy arrays and embeddings on the worker. Drain them
+        # before DBSCAN's potential O(N^2) distance matrix.
+        gc.collect()
         cluster_stats = self._run_clustering()
 
         # --- Same-image identity consistency ---

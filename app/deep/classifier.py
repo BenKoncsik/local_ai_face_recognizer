@@ -32,6 +32,7 @@ so people with only a handful of confirmed faces still train a stable class.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import pickle
 import time
@@ -47,6 +48,30 @@ from app.deep.dataset import TrainingDataset
 log = logging.getLogger(__name__)
 
 _MODEL_FILE_VERSION = 1
+
+
+def _limit_native_threads():
+    """Cap BLAS/OpenMP threads to 1 for the duration of outer-parallel training.
+
+    The ensemble members and calibration folds are already parallelised across a
+    :class:`ThreadPoolExecutor`.  Without this, each sklearn ``.fit()`` *also*
+    lets the BLAS backend (OpenBLAS/MKL) spawn one thread per core, so the total
+    becomes ``cpu_count × cpu_count`` compute threads — each needing its own
+    ~1 MB stack.  On Windows that thread-stack pressure, stacked on the scan's
+    memory use, helped exhaust the commit limit and hard-freeze the whole
+    machine ("a new guard page for the stack cannot be created").  Limiting
+    native threads to 1 here keeps the total ≈ the executor width and leaves
+    cores free for the UI/compositor.  (Windows scan memory-exhaustion freeze.)
+
+    Degrades to a no-op if ``threadpoolctl`` is somehow unavailable (it ships as
+    a scikit-learn dependency, so this is just belt-and-braces).
+    """
+    try:
+        from threadpoolctl import threadpool_limits
+
+        return threadpool_limits(limits=1)
+    except Exception:  # noqa: BLE001 — diagnostics/perf guard must never break training
+        return contextlib.nullcontext()
 
 
 @dataclass
@@ -584,7 +609,7 @@ class DeepFaceClassifier:
             return idx, model
 
         workers = max(1, min(len(members), os.cpu_count() or 1))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _limit_native_threads(), ThreadPoolExecutor(max_workers=workers) as pool:
             for idx, model in pool.map(fit_one, range(len(members))):
                 members[idx] = model
         return [m for m in members if m is not None]
@@ -676,7 +701,7 @@ class DeepFaceClassifier:
         import os
 
         workers = max(1, min(n_folds, os.cpu_count() or 1))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _limit_native_threads(), ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(run_fold, range(n_folds)))
 
         for test_idx, classes_, proba in results:

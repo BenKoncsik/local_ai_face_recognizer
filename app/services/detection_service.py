@@ -542,15 +542,18 @@ class DetectionService:
 
         all_dets: List[Detection] = []
 
-        variants = [
-            ("original",    img_bgr),
-            ("clahe",       apply_clahe(img_bgr)),
-            ("gamma_bright", apply_gamma(img_bgr, gamma=0.7)),
-            ("histeq",      apply_histeq(img_bgr)),
-            ("bilateral",   apply_bilateral(img_bgr)),
-        ]
+        # Generate preprocessing variants lazily, one at a time, so only one
+        # full-resolution copy is alive at once. On large images (100+ MP) this
+        # saves hundreds of MB during the high-accuracy detection stage.
+        # (Windows scan memory-exhaustion freeze.)
+        def _variants():
+            yield ("original", img_bgr)
+            yield ("clahe", apply_clahe(img_bgr))
+            yield ("gamma_bright", apply_gamma(img_bgr, gamma=0.7))
+            yield ("histeq", apply_histeq(img_bgr))
+            yield ("bilateral", apply_bilateral(img_bgr))
 
-        for name, variant_img in variants:
+        for name, variant_img in _variants():
             try:
                 dets = self._detector.detect(
                     variant_img,

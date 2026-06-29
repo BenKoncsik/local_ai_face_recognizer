@@ -68,8 +68,19 @@ def cluster_embeddings(
         len(face_ids), epsilon, min_samples, metric,
     )
 
-    db = DBSCAN(eps=epsilon, min_samples=min_samples, metric=metric, n_jobs=-1)
-    labels = db.fit_predict(matrix)
+    # Memory safety for large unknown-face sets (10k+) on Windows.
+    # 'cosine' has no tree support, so DBSCAN computes pairwise distances by
+    # brute force. With n_jobs=-1 sklearn ran `pairwise_distances_chunked` in
+    # parallel, holding one `working_memory`-sized chunk PER CORE at once
+    # (default 1 GiB × N_cores → many GB peak), which on a multitasking box
+    # (VS/Edge already resident) exhausted the commit limit and hard-froze the
+    # OS. Pin n_jobs=1 so only one chunk is live, and bound the chunk to 256 MiB
+    # so the distance pass never spikes. (Windows scan memory-exhaustion freeze.)
+    from sklearn import config_context
+
+    db = DBSCAN(eps=epsilon, min_samples=min_samples, metric=metric, n_jobs=1)
+    with config_context(working_memory=256):
+        labels = db.fit_predict(matrix)
 
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
     n_noise = int(np.sum(labels == -1))
