@@ -54,6 +54,23 @@ def main() -> None:
     log = logging.getLogger(__name__)
     log.info("Starting Face-Local")
 
+    # --- Crash & resource diagnostics (observability only) ---
+    # A scan can drive the machine into a memory/CPU-exhaustion hard freeze that
+    # leaves no Python traceback.  Enable faulthandler + exception hooks as early
+    # as possible, and start a lightweight resource watchdog that records the
+    # RAM/CPU run-up and snapshots all thread stacks just before a likely freeze.
+    try:
+        from app.crash_diagnostics import (
+            install_crash_handlers,
+            start_resource_watchdog,
+        )
+
+        _log_dir = default_log_file().parent
+        install_crash_handlers(_log_dir)
+        start_resource_watchdog(_log_dir)
+    except Exception:  # noqa: BLE001 — diagnostics must never block startup
+        log.exception("Could not install crash/resource diagnostics")
+
     # --- Load .env (Google OAuth secrets, etc.) ---
     # Must run BEFORE app.gdrive.oauth_config is imported, so the module
     # picks up the values from the environment.  .env is in .gitignore.
