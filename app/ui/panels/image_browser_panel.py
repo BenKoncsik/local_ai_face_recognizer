@@ -14,6 +14,7 @@ Public API consumed by MainWindow
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -210,7 +211,15 @@ def _bgr_to_qpixmap(img_bgr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
+@functools.lru_cache(maxsize=64)
 def _get_pil_font(size: int):
+    """Load (and cache) the PIL font used for face-name labels.
+
+    ``_draw_faces`` calls this once per face on every overlay redraw, and
+    redraws happen on every face selection/highlight change. Without caching,
+    each call re-reads and re-parses a TrueType font file from disk, which
+    dominates redraw time once a photo has more than a few faces.
+    """
     import sys
     from PIL import ImageFont
     if sys.platform == "darwin":
@@ -257,70 +266,78 @@ def _draw_faces(
 
     pending_ids = pending_ids or set()
     img = img_bgr.copy()
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    pil_img = PILImage.fromarray(img_rgb)
-    draw = ImageDraw.Draw(pil_img)
-
     image_h, image_w = img.shape[:2]
-    font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
 
-    # --- Phase 1: measure all labels (needed for layout even if hidden) ---
-    _UNCERTAIN_RGB = (255, 160, 50)
-    face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
-    for face_id, x, y, w, h, person_name, _, is_uncertain in faces:
-        selected = face_id == selected_id
-        if selected:
-            color_rgb = (50, 220, 50)
-        elif face_id in pending_ids:
-            color_rgb = _PENDING_RGB
-        elif is_uncertain:
-            color_rgb = _UNCERTAIN_RGB
-        else:
-            color_rgb = (180, 180, 180)
-        if face_id in pending_ids and person_name:
-            name = "⚠ " + person_name
-        elif is_uncertain and person_name:
-            name = person_name + " (?)"
-        else:
-            name = person_name or "?"
-        label_font_size = font_size
-        font = _get_pil_font(label_font_size)
+    # Label measurement/layout/rendering all funnel into Phase 3, which is a
+    # no-op unless labels are actually visible. Skip the whole PIL round-trip
+    # (BGR->RGB->PIL, per-face font loads/measurements, RGBA compositing) when
+    # there is nothing to draw — this is on the hot path since every face
+    # selection/highlight change re-runs this function on the full-res image.
+    do_labels = show_labels and label_opacity > 0.0 and bool(faces)
 
-        bbox = draw.textbbox((0, 0), name, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        pad_x = max(8, label_font_size // 4)
-        pad_y = max(5, label_font_size // 7)
-        max_label_w = max(80, image_w - 8)
-        while tw + 2 * pad_x > max_label_w and label_font_size > 26:
-            label_font_size -= 2
+    if do_labels:
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        pil_img = PILImage.fromarray(img_rgb)
+        draw = ImageDraw.Draw(pil_img)
+
+        font_size = max(34, min(96, int(min(image_w, image_h) * 0.028)))
+
+        # --- Phase 1: measure all labels ---
+        _UNCERTAIN_RGB = (255, 160, 50)
+        face_meta = []  # (name, font, pad_x, pad_y, label_w, label_h, color_rgb)
+        for face_id, x, y, w, h, person_name, _, is_uncertain in faces:
+            selected = face_id == selected_id
+            if selected:
+                color_rgb = (50, 220, 50)
+            elif face_id in pending_ids:
+                color_rgb = _PENDING_RGB
+            elif is_uncertain:
+                color_rgb = _UNCERTAIN_RGB
+            else:
+                color_rgb = (180, 180, 180)
+            if face_id in pending_ids and person_name:
+                name = "⚠ " + person_name
+            elif is_uncertain and person_name:
+                name = person_name + " (?)"
+            else:
+                name = person_name or "?"
+            label_font_size = font_size
             font = _get_pil_font(label_font_size)
+
             bbox = draw.textbbox((0, 0), name, font=font)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
             pad_x = max(8, label_font_size // 4)
             pad_y = max(5, label_font_size // 7)
+            max_label_w = max(80, image_w - 8)
+            while tw + 2 * pad_x > max_label_w and label_font_size > 26:
+                label_font_size -= 2
+                font = _get_pil_font(label_font_size)
+                bbox = draw.textbbox((0, 0), name, font=font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                pad_x = max(8, label_font_size // 4)
+                pad_y = max(5, label_font_size // 7)
 
-        label_w = min(tw + 2 * pad_x, image_w)
-        label_h = th + 2 * pad_y
-        face_meta.append((name, font, pad_x, pad_y, label_w, label_h, color_rgb))
+            label_w = min(tw + 2 * pad_x, image_w)
+            label_h = th + 2 * pad_y
+            face_meta.append((name, font, pad_x, pad_y, label_w, label_h, color_rgb))
 
-    # --- Phase 2: compute collision-free positions ---
-    face_labels = [
-        FaceLabel(
-            face_id=faces[i][0],
-            x=faces[i][1], y=faces[i][2],
-            w=faces[i][3], h=faces[i][4],
-            selected=faces[i][0] == selected_id,
-            label_w=face_meta[i][4],
-            label_h=face_meta[i][5],
-        )
-        for i in range(len(faces))
-    ]
-    layouts = place_labels(image_w, image_h, face_labels)
+        # --- Phase 2: compute collision-free positions ---
+        face_labels = [
+            FaceLabel(
+                face_id=faces[i][0],
+                x=faces[i][1], y=faces[i][2],
+                w=faces[i][3], h=faces[i][4],
+                selected=faces[i][0] == selected_id,
+                label_w=face_meta[i][4],
+                label_h=face_meta[i][5],
+            )
+            for i in range(len(faces))
+        ]
+        layouts = place_labels(image_w, image_h, face_labels)
 
-    # --- Phase 3: render labels with opacity via RGBA compositing ---
-    if show_labels and label_opacity > 0.0 and faces:
+        # --- Phase 3: render labels with opacity via RGBA compositing ---
         lbl_alpha = int(label_opacity * 255)
         overlay = PILImage.new("RGBA", pil_img.size, (0, 0, 0, 0))
         odraw = ImageDraw.Draw(overlay)
@@ -347,7 +364,7 @@ def _draw_faces(
         base_rgba = pil_img.convert("RGBA")
         pil_img = PILImage.alpha_composite(base_rgba, overlay).convert("RGB")
 
-    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     # --- Phase 4: render bounding boxes ---
     # BGR amber for pending boxes (reversed _PENDING_RGB).
@@ -638,13 +655,19 @@ class _InlineFaceEditor(QFrame):
         persons: List[Person],
         priority_ids: Optional[List[int]] = None,
         match_scores: Optional[dict[int, float]] = None,
+        scores_pending: bool = False,
     ) -> None:
         self._name_lbl.setText(person_name or "?")
         # Forget the previously edited face's selection so a new face never
         # inherits it (e.g. "Apa" staying highlighted while editing "Jerne").
         self._person_search.clear_selection()
         self._person_search.set_persons(persons, priority_ids=priority_ids)
-        self._person_search.set_match_scores(match_scores)
+        if scores_pending and not match_scores:
+            # Background scoring is running — show "computing…" instead of
+            # silently missing percentages (apply_late_match_scores clears it).
+            self._person_search.set_scores_pending()
+        else:
+            self._person_search.set_match_scores(match_scores)
         if person_id is not None:
             self._person_search.set_current_by_id(person_id)
         else:
@@ -652,6 +675,19 @@ class _InlineFaceEditor(QFrame):
             # visible, and preselect the best match when match-sorting is on.
             self._person_search.preselect_best_match()
         self._new_edit.clear()
+
+    def apply_late_match_scores(
+        self, match_scores: Optional[dict[int, float]], *, preselect_best: bool
+    ) -> None:
+        """Apply face-match scores computed after the editor already opened.
+
+        The popup opens instantly in name order (no blocking scoring on the GUI
+        thread); this re-ranks the list once background scoring finishes.  When
+        *preselect_best* (an unassigned face), the top match is re-selected.
+        """
+        self._person_search.set_match_scores(match_scores)
+        if preselect_best:
+            self._person_search.preselect_best_match()
 
     def reset_search(self) -> None:
         """Clear the person search filter after a successful assignment."""
@@ -2020,6 +2056,12 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.assign_requested.connect(self._on_inline_assign)
         self._inline_editor.create_requested.connect(self._on_inline_create)
         self._inline_editor.closed.connect(self._hide_inline_editor)
+        # Whether background match scoring should preselect the top match when it
+        # arrives (set per open in _start_match_scoring; true for unassigned faces).
+        self._match_score_preselect: bool = False
+        # Face id currently being scored in the background (dedupes concurrent
+        # requests when the info panel and the inline editor show the same face).
+        self._match_score_inflight: Optional[int] = None
 
         # Floating quick-action bar for pending (auto-merged) faces.
         self._pending_bar = _PendingActionBar(self._image_label)
@@ -2268,41 +2310,14 @@ class ImageBrowserPanel(QWidget):
 
         info_layout.addWidget(_hline())
 
-        self._assign_hdr = QLabel()
-        self._assign_hdr.setWordWrap(True)
-        self._assign_hdr.setMinimumWidth(0)
-        self._assign_hdr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._assign_hdr.setStyleSheet(
-            "font-weight: bold; color: #888; font-size: 11px;"
-        )
-        info_layout.addWidget(self._assign_hdr)
-
-        self._person_search = PersonSearchSelect()
-        self._person_search.person_selected.connect(self._on_person_search_selected)
-        self._person_search.person_double_clicked.connect(self._on_assign_existing)
-        info_layout.addWidget(self._person_search)
-
-        self._assign_btn = QPushButton()
-        self._assign_btn.clicked.connect(self._on_assign_existing)
-        self._assign_btn.setEnabled(False)
-        info_layout.addWidget(self._assign_btn)
-
-        info_layout.addWidget(_hline())
-
-        self._new_hdr = QLabel()
-        self._new_hdr.setStyleSheet(
-            "font-weight: bold; color: #888; font-size: 11px;"
-        )
-        info_layout.addWidget(self._new_hdr)
-
-        self._new_name_edit = QLineEdit()
-        self._new_name_edit.returnPressed.connect(self._on_create_and_assign)
-        info_layout.addWidget(self._new_name_edit)
-
-        self._create_btn = QPushButton()
-        self._create_btn.clicked.connect(self._on_create_and_assign)
-        self._create_btn.setEnabled(False)
-        info_layout.addWidget(self._create_btn)
+        # SINGLE assignment surface: this button opens the same context-menu
+        # style inline editor as right-clicking the face (search + match
+        # percentages + create-new-person in one popup).  The panel used to
+        # duplicate all of that inline, which meant two divergent assign UIs.
+        self._assign_open_btn = QPushButton()
+        self._assign_open_btn.clicked.connect(self._open_assign_editor)
+        self._assign_open_btn.setEnabled(False)
+        info_layout.addWidget(self._assign_open_btn)
 
         info_layout.addStretch()
 
@@ -2387,11 +2402,7 @@ class ImageBrowserPanel(QWidget):
         self._person_info_btn.setText(t("ibp_person_info_btn"))
         self._person_info_btn.setToolTip(t("ibp_person_info_tooltip"))
         self._rename_edit.setPlaceholderText(t("ibp_rename_placeholder"))
-        self._assign_hdr.setText(t("ibp_assign_hdr"))
-        self._assign_btn.setText(t("ibp_assign_btn"))
-        self._new_hdr.setText(t("ibp_new_hdr"))
-        self._new_name_edit.setPlaceholderText(t("ibp_new_placeholder"))
-        self._create_btn.setText(t("ibp_create_btn"))
+        self._assign_open_btn.setText(t("ibp_assign_open_btn"))
         self._inline_editor.retranslate()
         self._deol_lbl.setText(t("ibp_deol_pair_lbl"))
         self._btn_view_bw.setText(t("ibp_view_original_bw"))
@@ -2881,16 +2892,13 @@ class ImageBrowserPanel(QWidget):
         if source_id is None:
             return
         with session_scope() as session:
-            if self._config is not None:
-                img = session.get(Image, source_id)
-                if img is not None:
-                    from app.services.face_crop_service import ensure_unique_face_crops
-                    ensure_unique_face_crops(
-                        session,
-                        [f for f in img.faces if not f.is_excluded],
-                        self._config.crops_dir_resolved,
-                        self._config.scan.thumbnail_size,
-                    )
+            # NOTE: crop-path self-heal (ensure_unique_face_crops) intentionally
+            # does NOT run here.  It is a maintenance/repair pass that decodes the
+            # source image and writes UPDATE faces SET crop_path on the UI thread;
+            # running it on every image selection made navigation slow and, while
+            # the one-time startup repair task holds the SQLite write lock, caused
+            # "database is locked" crashes.  Repair now runs once at startup only
+            # (MainWindow._start_crop_repair_task); this path is read-only.
             svc = ImageBrowserService(session)
             self._face_data = svc.get_image_faces(source_id)
             from app.services.unknown_merge_service import UnknownMergeService
@@ -4045,7 +4053,6 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _on_image_clicked(self, lx: int, ly: int) -> None:
-        self._new_name_edit.clearFocus()
         self._rename_edit.clearFocus()
 
         if self._full_pixmap is None:
@@ -4728,38 +4735,72 @@ class ImageBrowserPanel(QWidget):
             crops_dir.mkdir(parents=True, exist_ok=True)
             thumbnail_size = self._config.scan.thumbnail_size
 
-        with session_scope() as session:
-            face = Face(
-                image_id=img_id,
-                bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
-                confidence=1.0,
-                detector_backend="manual",
-                crop_path=None,
-            )
-            session.add(face)
-            session.flush()
-            new_id = face.id
-            if crops_dir is not None and self._orig_img_bgr is not None:
-                crop_path = save_face_crop(
-                    img_bgr=self._orig_img_bgr,
-                    detection=detection,
-                    crops_dir=crops_dir,
+        def _persist() -> int:
+            with session_scope() as session:
+                face = Face(
                     image_id=img_id,
-                    thumbnail_size=thumbnail_size,
-                    face_index=new_id,
+                    bbox_x=x, bbox_y=y, bbox_w=w, bbox_h=h,
+                    confidence=1.0,
+                    detector_backend="manual",
+                    crop_path=None,
                 )
-                if crop_path is not None:
-                    face.crop_path = str(crop_path)
+                session.add(face)
+                session.flush()
+                new_id = face.id
+                if crops_dir is not None and self._orig_img_bgr is not None:
+                    crop_path = save_face_crop(
+                        img_bgr=self._orig_img_bgr,
+                        detection=detection,
+                        crops_dir=crops_dir,
+                        image_id=img_id,
+                        thumbnail_size=thumbnail_size,
+                        face_index=new_id,
+                    )
+                    if crop_path is not None:
+                        face.crop_path = str(crop_path)
+                # The embedding is NOT computed here: that needs a model load +
+                # inference pass (seconds), which used to freeze the UI on every
+                # manual mark.  A ManualFaceEmbedRunnable is started after the
+                # save instead, and the person picker's scoring path computes a
+                # missing embedding on the fly, so nothing is lost.
+                return new_id
 
-            # Compute the embedding right away so the manually-marked face is
-            # comparable in the person-assign panel (face-match ordering),
-            # exactly like an automatically detected face.  Best-effort: a
-            # missing model or read error leaves the face without a vector but
-            # never blocks marking.
-            if self._config is not None and face.crop_path:
-                from app.services.embedding_service import embed_manual_face
+        # A background writer (e.g. the startup crop-repair task) can hold
+        # SQLite's single write lock; the INSERT then waits out busy_timeout and
+        # raises OperationalError("database is locked").  This runs in a Qt slot,
+        # so an uncaught error crashes the app — retry a few times, then surface
+        # a warning instead of dying.
+        from sqlalchemy.exc import OperationalError
 
-                embed_manual_face(session, face, self._config)
+        new_id: Optional[int] = None
+        last_exc: Optional[OperationalError] = None
+        for attempt in range(3):
+            try:
+                new_id = _persist()
+                break
+            except OperationalError as exc:
+                last_exc = exc
+                log.warning(
+                    "Manual face save attempt %d/3 hit a locked database: %s",
+                    attempt + 1, exc,
+                )
+        if new_id is None:
+            log.error("Manual face save failed after retries: %s", last_exc)
+            QMessageBox.warning(
+                self,
+                t("error"),
+                t("ibp_manual_face_save_failed"),
+            )
+            return None
+
+        # Fill in the embedding off-thread so the face becomes comparable in
+        # the person-assign panel without blocking the mark itself.
+        if self._config is not None:
+            from app.workers.manual_face_worker import ManualFaceEmbedRunnable
+
+            QThreadPool.globalInstance().start(
+                ManualFaceEmbedRunnable(new_id, self._config)
+            )
 
         log.info(
             "Manual face saved: image_id=%d face_id=%d bbox=(%d,%d,%d,%d)",
@@ -5081,21 +5122,55 @@ class ImageBrowserPanel(QWidget):
     # Inline face editor
     # ──────────────────────────────────────────────────────────────────
 
-    def _compute_match_scores(self, face_id: int) -> dict[int, float]:
-        """Score *face_id*'s embedding against known people for match ordering.
+    def _start_match_scoring(self, face_id: int, *, had_person: bool) -> None:
+        """Score *face_id* against known people in the background.
 
-        Thin wrapper over the shared :mod:`app.services.match_scoring` helper so
-        every person-selector popup ranks candidates the same way.  Returns an
-        empty mapping (default ordering, no checkbox) when the face has no
-        embedding or scoring fails.
+        Scoring deserialises many embeddings and is slow on a large database, so
+        it runs in a thread-pool worker instead of the GUI thread — otherwise
+        selecting a face freezes the app.  The inline editor opens instantly in
+        name order; :meth:`_on_match_scores_ready` re-ranks it when the worker
+        finishes, but only if the editor still shows this same face.
         """
-        from app.services.match_scoring import match_scores_for_face
+        from app.workers.match_score_worker import MatchScoreRunnable
 
-        recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-        with session_scope() as session:
-            return match_scores_for_face(
-                session, face_id, recognition_cfg, config=self._config
+        recognition_cfg = (
+            getattr(self._config, "recognition", None) if self._config else None
+        )
+        # Newest request wins; a stale worker result is discarded on arrival.
+        self._match_score_preselect = not had_person
+        # One worker per face is enough: its result is applied to every surface
+        # showing the face (info panel + inline editor) by _on_match_scores_ready.
+        if self._match_score_inflight == face_id:
+            return
+        self._match_score_inflight = face_id
+        worker = MatchScoreRunnable(face_id, recognition_cfg, self._config)
+        worker.signals.ready.connect(self._on_match_scores_ready)
+        # On failure deliver an empty score set so the "computing similarity…"
+        # hint in the picker is cleared instead of sticking forever.
+        worker.signals.failed.connect(self._on_match_scores_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(int, object)
+    def _on_match_scores_ready(self, face_id: int, scores: object) -> None:
+        """Apply background-computed match scores if the inline editor still
+        shows this face; stale results are discarded."""
+        if self._match_score_inflight == face_id:
+            self._match_score_inflight = None
+        scores = scores or {}
+        # Inline editor popup — the single assignment surface: apply only while
+        # it still shows this same face.
+        if (
+            self._inline_editor_face_id == face_id
+            and self._inline_editor.isVisible()
+        ):
+            self._inline_editor.apply_late_match_scores(
+                scores, preselect_best=self._match_score_preselect
             )
+
+    @Slot(int)
+    def _on_match_scores_failed(self, face_id: int) -> None:
+        """Clear the picker's "computing…" state when background scoring fails."""
+        self._on_match_scores_ready(face_id, {})
 
     def _show_inline_editor(self, face_id: int) -> None:
         entry = next((f for f in self._face_data if f[0] == face_id), None)
@@ -5106,12 +5181,16 @@ class ImageBrowserPanel(QWidget):
         self._pending_bar.hide()
         _, bx, by, bw, bh, person_name, person_id, *_ = entry
 
+        # Open instantly in name order; match scores are computed off-thread and
+        # applied by _on_match_scores_ready so selecting a face never blocks the
+        # GUI (heavy on a large database).
         self._inline_editor.populate(
             person_name,
             person_id,
             self._all_persons,
             priority_ids=list(self._recent_assignment_person_ids),
-            match_scores=self._compute_match_scores(face_id),
+            match_scores=None,
+            scores_pending=True,
         )
         self._inline_editor.adjustSize()
 
@@ -5156,6 +5235,10 @@ class ImageBrowserPanel(QWidget):
         self._inline_editor.show()
         self._inline_editor.raise_()
         self._inline_editor_face_id = face_id
+        # Set the face id first, then kick off background scoring: its result is
+        # delivered via the event loop and _on_match_scores_ready matches it
+        # against this id, so the ordering only updates while this face is shown.
+        self._start_match_scoring(face_id, had_person=person_id is not None)
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._inline_editor.focus_search)
 
@@ -5326,10 +5409,9 @@ class ImageBrowserPanel(QWidget):
         entry = next((f for f in self._face_data if f[0] == face_id), None)
         if entry is None:
             return
-        _, _, _, _, _, person_name, _, *_ = entry
+        _, _, _, _, _, person_name, person_id, *_ = entry
         self.active_person_changed.emit(person_name)
-        self._assign_btn.setEnabled(True)
-        self._create_btn.setEnabled(True)
+        self._assign_open_btn.setEnabled(True)
         if person_name:
             self._face_status_label.setText(t("ibp_identified"))
             self._person_name_label.setText(person_name)
@@ -5356,9 +5438,7 @@ class ImageBrowserPanel(QWidget):
         self._person_name_label.setVisible(False)
         self._rename_btn.setVisible(False)
         self._person_info_btn.setVisible(False)
-        self._assign_btn.setEnabled(False)
-        self._create_btn.setEnabled(False)
-        self._new_name_edit.clear()
+        self._assign_open_btn.setEnabled(False)
         self.active_person_changed.emit(None)
 
     # ──────────────────────────────────────────────────────────────────
@@ -5905,12 +5985,10 @@ class ImageBrowserPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────
 
     def _reload_persons_combo(self) -> None:
+        # Refreshes the person list consumed by the inline assign editor (the
+        # single assignment surface — it is (re)populated on every open).
         with session_scope() as session:
             self._all_persons = session.query(Person).order_by(Person.name).all()
-        self._person_search.set_persons(
-            self._all_persons,
-            priority_ids=list(self._recent_assignment_person_ids),
-        )
 
     def _recent_person_rank(self, session) -> Dict[int, int]:
         rank: Dict[int, int] = {}
@@ -5929,102 +6007,26 @@ class ImageBrowserPanel(QWidget):
     # Assign / create actions (info panel buttons)
     # ──────────────────────────────────────────────────────────────────
 
-    def _on_person_search_selected(self, person_id: int) -> None:
-        """Called when user picks a person via the search widget (single click or Enter)."""
-        # Store pending selection; the Assign button still commits it.
-        # This makes the widget's selection immediately visible but doesn't
-        # save until the user presses Assign.
-        pass  # selection is already reflected in current_person_id()
+    def _open_assign_editor(self) -> None:
+        """Open the single shared assign popup (inline editor) for the selected face.
 
-    def _on_assign_existing(self) -> None:
+        The info panel used to embed its own person search + create-new-person
+        controls; assignment now always goes through the same context-menu
+        style editor as right-clicking a face, so there is exactly one UI (with
+        match percentages and background scoring) everywhere.
+
+        The panel button can be pressed while the image label is still in
+        interactive-edit mode; dismiss that first so the popup anchors cleanly
+        and the next face click is not consumed by the stale edit-exit handler.
+        """
         if self._selected_face_id is None:
             return
-        person_id = self._person_search.current_person_id()
-        if person_id is None:
-            return
-
-        # Same defensive cleanup as _on_create_and_assign: the panel Assign
-        # button can be pressed while the image label is in interactive-edit
-        # mode.  Dismiss silently so the next face click works normally.
         if self._interactive_edit_face_id is not None:
-            log.warning(
-                "Assign existing: stale interactive-edit active for face_id=%d "
-                "— dismissing before assignment",
-                self._interactive_edit_face_id,
-            )
             self._interactive_edit_face_id = None
             self._interactive_edit_orig_bbox = None
             self._draw_hint.setVisible(False)
             self._image_label.dismiss_interactive_edit()
-
-        log.info(
-            "Face assignment: face_id=%d → person_id=%d (panel assign button)",
-            self._selected_face_id, person_id,
-        )
-        with session_scope() as session:
-            result = UnknownMergeService(
-                session, self._config.recognition if self._config else None
-            ).assign_unknown_face(self._selected_face_id, person_id)
-        self._remember_recent_person(person_id)
-        self._reload_current_face_data()
-        self._reload_persons_combo()
-        self.person_data_changed.emit()
-        self._image_label.setFocus()
-        self._notify_unknown_merge(result)
-
-    def _on_create_and_assign(self) -> None:
-        if self._selected_face_id is None:
-            return
-        name = self._new_name_edit.text().strip()
-        if not name:
-            QMessageBox.warning(
-                self, t("ibp_empty_name_title"), t("ibp_empty_name_msg")
-            )
-            return
-
-        # CRITICAL: the panel "Create" button can be pressed while the image
-        # label is still in interactive-edit mode (_imode=True), because the
-        # button is a separate widget outside the label.  If we don't clean up
-        # here, _image_label._imode stays True after person creation, and the
-        # next click on ANY face will be silently consumed by the stale edit-
-        # exit handler instead of selecting that face.  The intermediate bbox
-        # commits already persisted the latest position, so we just dismiss.
-        if self._interactive_edit_face_id is not None:
-            log.warning(
-                "New person (panel): stale interactive-edit active for face_id=%d "
-                "while creating person — dismissing interactive edit",
-                self._interactive_edit_face_id,
-            )
-            self._interactive_edit_face_id = None
-            self._interactive_edit_orig_bbox = None
-            self._draw_hint.setVisible(False)
-            self._image_label.dismiss_interactive_edit()
-
-        face_id = self._selected_face_id
-        with session_scope() as session:
-            person = Person(name=name, is_auto_named=False)
-            session.add(person)
-            session.flush()
-            person_id = person.id
-            log.info(
-                "New person creation: face_id=%d new_person='%s' person_id=%d",
-                face_id, name, person_id,
-            )
-            result = UnknownMergeService(
-                session, self._config.recognition if self._config else None
-            ).assign_unknown_face(face_id, person_id)
-            log.info(
-                "Face assignment: face_id=%d → person_id=%d (new person via panel)",
-                face_id, person_id,
-            )
-        self._remember_recent_person(person_id)
-        self._new_name_edit.clear()
-        self._reload_current_face_data()
-        self._reload_persons_combo()
-        self.person_data_changed.emit()
-        self._image_label.setFocus()
-        self._notify_unknown_merge(result)
-        self._open_person_info_dialog(person_id)
+        self._show_inline_editor(self._selected_face_id)
 
     def _open_person_info_dialog(self, person_id: int) -> None:
         with session_scope() as session:

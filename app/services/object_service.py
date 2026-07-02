@@ -205,6 +205,23 @@ class ObjectService:
         self, filters: Optional[ObjectFilters] = None
     ) -> List[ObjectSummary]:
         """Return every object with aggregate counts, ordered by name."""
+        return self._summaries(filters=filters, with_thumbnails=True)
+
+    def _summaries(
+        self,
+        *,
+        filters: Optional[ObjectFilters] = None,
+        object_ids: Optional[List[int]] = None,
+        with_thumbnails: bool = True,
+    ) -> List[ObjectSummary]:
+        """Build :class:`ObjectSummary` rows with aggregate counts.
+
+        *object_ids* restricts the result to a subset (single-object lookups
+        avoid scanning the whole table).  *with_thumbnails* controls the
+        fallback-thumbnail resolution, which requires scanning occurrences +
+        images and is skipped where the caller does not render icons (search /
+        detail views), keeping keystroke-driven searches cheap on large DBs.
+        """
         filters = filters or ObjectFilters()
 
         occ_count = func.count(distinct(ObjectOccurrence.id)).label("occ_count")
@@ -234,34 +251,48 @@ class ObjectService:
             .group_by(TaggedObject.id)
         )
 
+        if object_ids is not None:
+            if not object_ids:
+                return []
+            q = q.filter(TaggedObject.id.in_(object_ids))
+
         name = filters.name.strip()
         if name:
             q = q.filter(TaggedObject.name.ilike(f"%{name}%"))
 
         rows = q.order_by(TaggedObject.name).all()
+        if not rows:
+            return []
+
+        result_ids = [obj.id for obj, *_ in rows]
 
         # Person counts in one extra query (avoids a second outer join that would
         # inflate the occurrence/image counts).
-        person_counts = dict(
-            self._session.query(
-                ObjectPersonLink.object_id,
-                func.count(distinct(ObjectPersonLink.person_id)),
-            )
-            .group_by(ObjectPersonLink.object_id)
-            .all()
-        )
+        person_q = self._session.query(
+            ObjectPersonLink.object_id,
+            func.count(distinct(ObjectPersonLink.person_id)),
+        ).group_by(ObjectPersonLink.object_id)
+        if object_ids is not None:
+            person_q = person_q.filter(ObjectPersonLink.object_id.in_(result_ids))
+        person_counts = dict(person_q.all())
 
         # Thumbnail fallback: first occurrence's image path when none is set.
+        # Only resolved when the caller renders icons — it scans occurrences
+        # joined with images, which is expensive on large databases.
         fallback_thumb: dict[int, str] = {}
-        thumb_rows = (
-            self._session.query(ObjectOccurrence.object_id, Image.file_path)
-            .join(Image, Image.id == ObjectOccurrence.image_id)
-            .order_by(ObjectOccurrence.object_id, ObjectOccurrence.id)
-            .all()
-        )
-        for oid, path in thumb_rows:
-            if oid not in fallback_thumb and path:
-                fallback_thumb[oid] = path
+        if with_thumbnails:
+            thumb_q = (
+                self._session.query(ObjectOccurrence.object_id, Image.file_path)
+                .join(Image, Image.id == ObjectOccurrence.image_id)
+                .order_by(ObjectOccurrence.object_id, ObjectOccurrence.id)
+            )
+            if object_ids is not None:
+                thumb_q = thumb_q.filter(
+                    ObjectOccurrence.object_id.in_(result_ids)
+                )
+            for oid, path in thumb_q.all():
+                if oid not in fallback_thumb and path:
+                    fallback_thumb[oid] = path
 
         return [
             ObjectSummary(
@@ -332,18 +363,19 @@ class ObjectService:
 
     def get_summary(self, object_id: int) -> ObjectSummary:
         """Return the :class:`ObjectSummary` for a single object."""
-        results = self.list_objects(ObjectFilters())
-        for s in results:
-            if s.object_id == object_id:
-                return s
+        results = self._summaries(object_ids=[object_id], with_thumbnails=False)
+        if results:
+            return results[0]
         raise ValueError(f"Object id={object_id} not found")
 
     def search_objects(self, query: str, max_results: int = 100) -> List[ObjectSummary]:
         """Accent-insensitive search over name, description and per-image notes.
 
-        An empty query returns all objects (capped at *max_results*).
+        An empty query returns all objects (capped at *max_results*).  Thumbnail
+        fallback resolution is skipped here — the picker shows names + counts
+        only — so keystroke-driven searches stay cheap on large databases.
         """
-        all_objects = self.list_objects(ObjectFilters())
+        all_objects = self._summaries(with_thumbnails=False)
         q = normalize((query or "").strip())
         if not q:
             return all_objects[:max_results]

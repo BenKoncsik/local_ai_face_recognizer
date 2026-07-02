@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -302,17 +303,53 @@ def build_embedder(config: AppConfig) -> FaceEmbedder:
     )
 
 
+# Shared single-face embedder cache.  Building an embedder loads a model from
+# disk (ONNX / TFLite), which takes seconds; the one-off paths (manual marking,
+# on-the-fly embedding inside match scoring) used to rebuild it on EVERY call,
+# so each manual mark froze for the whole model load.  The instance is reused
+# until the embedding config changes.  The lock also serialises inference:
+# TFLite interpreters are not thread-safe, and these one-off calls are rare
+# enough that serialising them costs nothing.
+_shared_embedder: Optional[FaceEmbedder] = None
+_shared_embedder_key: Optional[tuple] = None
+_shared_embedder_lock = threading.Lock()
+
+
+def _embedder_config_key(config: AppConfig) -> tuple:
+    emb = config.embedding
+    return (
+        str(getattr(emb, "backend", "")),
+        str(getattr(emb, "model_path", "")),
+        str(getattr(emb, "embedding_dim", "")),
+        str(getattr(emb, "input_size", "")),
+    )
+
+
+def _get_shared_embedder_locked(config: AppConfig) -> FaceEmbedder:
+    """Return the cached embedder (build on first use / config change).
+
+    Caller must hold ``_shared_embedder_lock``.
+    """
+    global _shared_embedder, _shared_embedder_key
+    key = _embedder_config_key(config)
+    if _shared_embedder is None or _shared_embedder_key != key:
+        _shared_embedder = build_embedder(config)
+        _shared_embedder_key = key
+    return _shared_embedder
+
+
 def embed_manual_face(session: Session, face: Face, config: AppConfig) -> bool:
     """Best-effort embedding for a manually-marked face.
 
-    Builds the default embedder and computes the embedding for *face* (which
-    must already have a saved crop).  Never raises — embedding is best-effort,
-    so a missing model or read error simply leaves the face without a vector
-    and returns ``False``.
+    Computes the embedding for *face* (which must already have a saved crop)
+    using a cached embedder, so the model is loaded once per app run instead of
+    once per call.  Never raises — embedding is best-effort, so a missing model
+    or read error simply leaves the face without a vector and returns ``False``.
     """
     try:
-        embedder = build_embedder(config)
-        return EmbeddingService(session, embedder, config).embed_face(face)
+        with _shared_embedder_lock:
+            embedder = _get_shared_embedder_locked(config)
+            return EmbeddingService(session, embedder, config).embed_face(face)
     except Exception as exc:  # noqa: BLE001 — embedding must never break marking
         log.warning("Manual-face embedding failed for face id=%s: %s", face.id, exc)
         return False

@@ -58,7 +58,18 @@ def _person_centroid(person: Person) -> Optional[np.ndarray]:
     ]
     if not vecs:
         return None
+    # A person may hold faces from more than one embedding model (e.g. legacy
+    # 128-dim + new 512-dim after a model change); vectors of different length
+    # cannot be averaged, so keep only the majority model's vectors.
+    from app.services.vector_scoring import _keep_majority_dim
+
+    vecs = _keep_majority_dim(vecs)
     return _normalised(np.mean(vecs, axis=0))
+
+
+def _same_dim(a: np.ndarray, b: np.ndarray) -> bool:
+    """True when two embeddings share dimensionality (comparable via dot)."""
+    return a.shape == b.shape
 
 
 def _fallback_scores(session, query_centroid: np.ndarray) -> Dict[int, float]:
@@ -70,7 +81,9 @@ def _fallback_scores(session, query_centroid: np.ndarray) -> Dict[int, float]:
     out: Dict[int, float] = {}
     for person in session.query(Person).all():
         centroid = _person_centroid(person)
-        if centroid is None:
+        # Skip people whose embeddings come from a different model — a
+        # cross-dimension dot product raises and is meaningless anyway.
+        if centroid is None or not _same_dim(query_centroid, centroid):
             continue
         out[person.id] = float(np.dot(query_centroid, centroid))
     return out

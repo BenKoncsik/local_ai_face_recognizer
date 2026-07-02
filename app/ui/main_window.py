@@ -39,11 +39,6 @@ from app.logging_setup import QLogHandler
 from app.paths import app_icon_path
 from app.services.duplicate_unknown_face_finder import DuplicateUnknownFaceFinder
 from app.services.identity_service import BulkReassignResult, IdentityService
-from app.services.match_scoring import (
-    match_scores_for_face,
-    match_scores_for_faces,
-    match_scores_for_person,
-)
 from app.services.unknown_merge_service import UnknownMergeService
 from app.ui.dialogs.export_dialog import ExportDialog
 from app.ui.dialogs.manual_face_dialog import NoFaceImagesDialog
@@ -2521,13 +2516,11 @@ class MainWindow(QMainWindow):
             faces = svc.get_faces_for_person(person_id)
             if person is None:
                 return
-            from app.services.face_crop_service import ensure_unique_face_crops
-            ensure_unique_face_crops(
-                session,
-                faces,
-                self._config.crops_dir_resolved,
-                self._config.scan.thumbnail_size,
-            )
+            # Crop-path self-heal is NOT run here: it decodes images and writes
+            # UPDATE faces SET crop_path on the UI thread, so doing it on every
+            # person selection blocked the UI and contended with the startup
+            # repair task's write lock ("database is locked").  Repair runs once
+            # at startup only (_start_crop_repair_task); selecting a person reads.
             is_protected = person.is_protected
             is_auto_named = person.is_auto_named
             for f in faces:
@@ -2984,21 +2977,33 @@ class MainWindow(QMainWindow):
 
         with session_scope() as session:
             persons = session.query(Person).order_by(Person.name).all()
-            for p in persons:
-                _ = p.faces  # noqa: F841
             source = session.get(Person, self._current_person_id)
             if source is None or len(persons) < 2:
                 return
 
-            # Compute face-match scores for the source person so the
-            # MergeDialog's person selector can show probabilistic name
-            # suggestions (same shared logic as every other selector popup).
-            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = match_scores_for_person(
-                session, source, recognition_cfg, config=self._config
+            # One aggregate COUNT query for the "name (N)" labels — loading
+            # every person's faces just to count them pulled the whole face
+            # table (embeddings included) into RAM on a large database.
+            from sqlalchemy import func
+            face_counts = dict(
+                session.query(Face.person_id, func.count(Face.id))
+                .filter(Face.person_id.isnot(None))
+                .group_by(Face.person_id)
+                .all()
             )
 
-            dlg = MergeDialog(source, persons, parent=self, match_scores=match_scores)
+            # Match scores are computed in the background: the dialog opens
+            # instantly with a "computing…" hint (shared selector behaviour).
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
+            dlg = MergeDialog(
+                source,
+                persons,
+                parent=self,
+                face_counts=face_counts,
+                score_person_id=source.id,
+                recognition_cfg=recognition_cfg,
+                config=self._config,
+            )
             if dlg.exec() != MergeDialog.Accepted:
                 return
             target_id = dlg.target_person_id()
@@ -3125,26 +3130,33 @@ class MainWindow(QMainWindow):
 
         with session_scope() as session:
             persons = session.query(Person).order_by(Person.name).all()
-            for p in persons:
-                _ = p.faces  # noqa: F841
 
             class _FakePerson:
                 name = f"Face #{self._current_face_id}"
                 id = -1
                 faces: list = []
 
-            # Optional face-match ordering: score the face being reassigned
-            # against the known people so the user can sort candidates by
-            # similarity (shared logic with every other selector popup).  A
-            # missing embedding yields an empty mapping, which the selector
-            # treats as "no match data" (default ordering).
-            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = match_scores_for_face(
-                session, self._current_face_id, recognition_cfg, config=self._config
+            # One aggregate COUNT query for the "name (N)" labels instead of
+            # lazy-loading every person's faces (huge on a large database).
+            from sqlalchemy import func
+            face_counts = dict(
+                session.query(Face.person_id, func.count(Face.id))
+                .filter(Face.person_id.isnot(None))
+                .group_by(Face.person_id)
+                .all()
             )
 
+            # The face being reassigned is scored in the background so the
+            # dialog opens instantly; percentages appear when scoring finishes.
+            recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
             dlg = MergeDialog(
-                _FakePerson(), persons, parent=self, match_scores=match_scores
+                _FakePerson(),
+                persons,
+                parent=self,
+                face_counts=face_counts,
+                score_face_ids=[self._current_face_id],
+                recognition_cfg=recognition_cfg,
+                config=self._config,
             )
             dlg.setWindowTitle(t("reassign_title"))
             if dlg.exec() != MergeDialog.Accepted:
@@ -3198,14 +3210,15 @@ class MainWindow(QMainWindow):
                 src_name = src.name if src is not None else ""
             persons = session.query(Person).order_by(Person.name).all()
             recognition_cfg = getattr(self._config, "recognition", None) if self._config else None
-            match_scores = match_scores_for_faces(
-                session, face_ids, recognition_cfg, config=self._config
-            )
+            # Scores are computed in the background: the dialog opens instantly
+            # with a "computing…" hint instead of freezing on a large database.
             dlg = MoveFacesDialog(
                 face_count=len(face_ids),
                 persons=persons,
                 exclude_person_id=self._current_person_id,
-                match_scores=match_scores,
+                score_face_ids=face_ids,
+                recognition_cfg=recognition_cfg,
+                config=self._config,
                 parent=self,
             )
         if dlg.exec() != MoveFacesDialog.Accepted:
@@ -4079,14 +4092,23 @@ class MainWindow(QMainWindow):
             t("tasks_btn_count", n=total) if total else t("tasks_btn")
         )
 
+    # Delay before the startup crop-repair pass begins.  Starting it with the
+    # window leaves it competing with first paint / thumbnail loading for CPU,
+    # IO and the SQLite write lock exactly when the user starts working — on a
+    # large library that reads as "the whole app is slow right after launch".
+    _CROP_REPAIR_DELAY_MS = 30_000
+
     def _start_crop_repair_task(self) -> None:
         """Repair missing/duplicated crop paths once, in the background.
 
         This used to run inside ``_refresh_persons`` — i.e. on the UI thread,
         on every refresh, after every face assignment.  It is a consistency
-        safety net, so running it once per app start (off the UI thread) is
-        enough.
+        safety net, so running it once per app start (off the UI thread, at LOW
+        priority, half a minute after launch) is enough.
         """
+        QTimer.singleShot(self._CROP_REPAIR_DELAY_MS, self._submit_crop_repair_task)
+
+    def _submit_crop_repair_task(self) -> None:
         crops_dir = self._config.crops_dir_resolved
         thumb_size = self._config.scan.thumbnail_size
 
@@ -4111,13 +4133,20 @@ class MainWindow(QMainWindow):
                 )
 
         from app.tasks import get_task_manager
+        from app.tasks.manager import TaskPriority
 
         def on_done(repaired: object) -> None:
             if repaired:
                 self._refresh_persons()
 
+        # LOW priority: this is a maintenance safety net, so scans/recognition
+        # runs and anything the user starts must preempt it.
         get_task_manager().submit(
-            t("task_crop_repair"), work, transient=True, on_done=on_done
+            t("task_crop_repair"),
+            work,
+            transient=True,
+            priority=TaskPriority.LOW,
+            on_done=on_done,
         )
 
     # ------------------------------------------------------------------

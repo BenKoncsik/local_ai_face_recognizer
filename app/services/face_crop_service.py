@@ -122,23 +122,49 @@ def ensure_unique_face_crops(
                 to_repair[face.id] = face
 
     repaired = 0
-    image_cache: dict[int, Optional[np.ndarray]] = {}
+    # Process one source image at a time so only a SINGLE decoded full-resolution
+    # image is ever resident in memory.  A previous version cached every decoded
+    # image in a dict for the whole run; on a large library that needed many
+    # repairs it accumulated every full image in RAM (each 4000×3000 image is
+    # ~36 MB decoded), growing to tens of GB and driving the process into an
+    # out-of-memory abort.  Grouping by image keeps the single-decode-per-image
+    # optimisation while bounding peak memory to one image.
+    by_image: dict[int, list[Face]] = {}
     for face in to_repair.values():
-        if face.image_id not in image_cache:
-            image_cache[face.image_id] = (
-                load_image_bgr_normalized(face.image.file_path) if face.image else None
-            )
-        crop_path = save_crop_for_face(
-            face,
-            crops_dir=crops_dir,
-            thumbnail_size=thumbnail_size,
-            img_bgr=image_cache[face.image_id],
+        by_image.setdefault(face.image_id, []).append(face)
+
+    for faces_for_image in by_image.values():
+        sample = faces_for_image[0]
+        img_bgr = (
+            load_image_bgr_normalized(sample.image.file_path)
+            if sample.image
+            else None
         )
-        if crop_path is not None:
-            repaired += 1
+        image_repaired = 0
+        for face in faces_for_image:
+            crop_path = save_crop_for_face(
+                face,
+                crops_dir=crops_dir,
+                thumbnail_size=thumbnail_size,
+                img_bgr=img_bgr,
+            )
+            if crop_path is not None:
+                repaired += 1
+                image_repaired += 1
+        # Release the decoded image before decoding the next one.
+        del img_bgr
+        # Commit after each source image so SQLite's single write lock is
+        # released between images instead of being held for the whole repair.
+        # A previous version committed only once at the very end; under WAL the
+        # first UPDATE acquired the write lock and kept it for the entire run
+        # (minutes on a large library). Any competing writer — e.g. a manual
+        # face INSERT drawn while the startup repair task runs — then waited out
+        # busy_timeout and crashed with "database is locked". Per-image commits
+        # bound the lock hold to one image's UPDATEs (~milliseconds).
+        if image_repaired:
+            session.commit()
 
     if repaired:
-        session.flush()
         log.info("Repaired %d face crop preview mapping(s)", repaired)
     return repaired
 

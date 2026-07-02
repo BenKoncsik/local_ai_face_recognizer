@@ -21,7 +21,6 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -38,46 +37,12 @@ from app.services.rerecognition_service import (
     ReRecognitionService,
     SuggestItem,
 )
+from app.ui.dialogs.person_picker_dialog import PersonPickerDialog
 from app.ui.i18n import t
-from app.ui.widgets.person_search_select import PersonSearchSelect
 
 log = logging.getLogger(__name__)
 
 _CROP_SIZE = 160
-
-
-class _PersonPickerDialog(QDialog):
-    """Tiny modal wrapper around :class:`PersonSearchSelect`."""
-
-    def __init__(self, persons: List[Person], parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(t("rerec_pick_person_title"))
-        self.setMinimumWidth(340)
-        self.selected_id: Optional[int] = None
-        self.selected_name: Optional[str] = None
-
-        layout = QVBoxLayout(self)
-        self._selector = PersonSearchSelect(self)
-        self._selector.set_persons(persons)
-        self._selector.person_selected.connect(self._on_selected)
-        self._selector.person_double_clicked.connect(self._on_double)
-        layout.addWidget(self._selector)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._names = {p.id: p.name for p in persons}
-
-    def _on_selected(self, person_id: int) -> None:
-        self.selected_id = person_id
-        self.selected_name = self._names.get(person_id)
-
-    def _on_double(self, person_id: int) -> None:
-        self._on_selected(person_id)
-        self.accept()
 
 
 class ReRecognitionReviewDialog(QDialog):
@@ -236,10 +201,26 @@ class ReRecognitionReviewDialog(QDialog):
         self._apply(cand.person_id, cand.name, cand.score)
 
     def _on_choose_other(self) -> None:
-        picker = _PersonPickerDialog(self._persons, self)
-        if picker.exec() != QDialog.Accepted or picker.selected_id is None:
+        # Shared picker with background face-match scoring for the reviewed
+        # face, so percentages appear next to every candidate name.
+        face_id = (
+            self._items[self._index].face.face_id
+            if 0 <= self._index < len(self._items)
+            else None
+        )
+        picker = PersonPickerDialog(
+            self._persons,
+            title=t("rerec_pick_person_title"),
+            score_face_ids=[face_id] if face_id is not None else None,
+            recognition_cfg=self._rec_cfg,
+            parent=self,
+        )
+        if picker.exec() != QDialog.Accepted:
             return
-        self._apply(picker.selected_id, picker.selected_name or "", 0.0)
+        person_id = picker.selected_person_id()
+        if person_id is None:
+            return
+        self._apply(person_id, picker.selected_person_name() or "", 0.0)
 
     def _on_skip(self) -> None:
         self._index += 1

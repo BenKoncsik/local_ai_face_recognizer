@@ -38,7 +38,6 @@ from PySide6.QtWidgets import (
 from app.db.database import session_scope
 from app.db.models import Person
 from app.services.identity_service import BulkReassignResult, IdentityService
-from app.services.match_scoring import match_scores_for_faces
 from app.services.person_service import (
     PersonFaceCrop,
     PersonFilters,
@@ -826,12 +825,13 @@ class PersonsPanel(QWidget):
 
         with session_scope() as session:
             persons = session.query(Person).order_by(Person.name).all()
-            match_scores = match_scores_for_faces(session, face_ids)
+            # Scores are computed in the background: the dialog opens instantly
+            # with a "computing…" hint instead of freezing on a large database.
             dlg = MoveFacesDialog(
                 face_count=len(face_ids),
                 persons=persons,
                 exclude_person_id=self._current_person_id,
-                match_scores=match_scores,
+                score_face_ids=face_ids,
                 parent=self,
             )
         if dlg.exec() != QDialog.Accepted:

@@ -175,6 +175,29 @@ def _migrate_add_columns(engine: Engine) -> None:
     _migrate_place_display_name(engine)
     _migrate_object_tagging(engine)
     _migrate_deep_recognition_tables(engine)
+    _refresh_query_planner_stats(engine)
+
+
+def _refresh_query_planner_stats(engine: Engine) -> None:
+    """Update SQLite's query-planner statistics so existing indexes are used.
+
+    Without ``sqlite_stat1`` data the planner guesses index selectivity and can
+    ignore a perfectly good index, so a large database's queries stay slow even
+    though the indexes exist.  ``PRAGMA optimize`` (bounded by ``analysis_limit``
+    so it stays cheap even on huge tables) refreshes those statistics for tables
+    that changed meaningfully since last time.  Best-effort: a failure here never
+    blocks startup.
+    """
+    try:
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            # Cap per-index sampling so this stays fast on large tables.
+            conn.execute(text("PRAGMA analysis_limit=400"))
+            conn.execute(text("PRAGMA optimize"))
+        log.debug("Query-planner statistics refreshed (PRAGMA optimize)")
+    except Exception as exc:  # noqa: BLE001 — statistics are an optimisation only
+        log.warning("PRAGMA optimize failed (non-fatal): %s", exc)
 
 
 def _migrate_face_blobs(engine: Engine) -> None:
@@ -689,6 +712,13 @@ def _migrate_add_indexes(engine: Engine) -> None:
         (
             "CREATE INDEX IF NOT EXISTS ix_faces_auto_merge_review "
             "ON faces(auto_merge_review_status)"
+        ),
+        # The UniqueConstraint(face_id_a, face_id_b) only indexes lookups by
+        # face_id_a (the leftmost prefix); re-recognition and clustering also
+        # filter/join on face_id_b, which was otherwise a full table scan.
+        (
+            "CREATE INDEX IF NOT EXISTS ix_face_corrections_b "
+            "ON face_corrections(face_id_b)"
         ),
         "CREATE INDEX IF NOT EXISTS ix_places_type ON places(place_type)",
         "CREATE INDEX IF NOT EXISTS ix_places_parent ON places(parent_id)",

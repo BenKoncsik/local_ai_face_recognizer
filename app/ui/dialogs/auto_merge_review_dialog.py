@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -39,10 +38,9 @@ from app.ui.dialogs.merge_decision_graph_dialog import (
 from app.config import RecognitionConfig
 from app.db.database import session_scope
 from app.db.models import Person
-from app.services.match_scoring import match_scores_for_face
 from app.services.unknown_merge_service import PendingAutoMerge, UnknownMergeService
+from app.ui.dialogs.person_picker_dialog import PersonPickerDialog
 from app.ui.i18n import t
-from app.ui.widgets.person_search_select import PersonSearchSelect
 
 log = logging.getLogger(__name__)
 
@@ -63,48 +61,6 @@ class _ClickableCrop(QLabel):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
-
-
-class _PersonPickerDialog(QDialog):
-    """Modal person picker reused for the per-row "Move…" action.
-
-    Like every other person picker it uses the shared
-    :class:`PersonSearchSelect`; when the caller supplies face-match scores the
-    selector exposes the shared "order by face-match similarity" toggle (see
-    :mod:`app.services.match_scoring`).
-    """
-
-    def __init__(
-        self,
-        persons: List[Person],
-        match_scores: Optional[Dict[int, float]] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(t("amerge_move"))
-        self.setMinimumWidth(340)
-        self.selected_id: Optional[int] = None
-
-        layout = QVBoxLayout(self)
-        self._selector = PersonSearchSelect(self)
-        self._selector.set_persons(persons)
-        if match_scores:
-            self._selector.set_match_scores(match_scores)
-        self._selector.person_selected.connect(self._on_selected)
-        self._selector.person_double_clicked.connect(self._on_double)
-        layout.addWidget(self._selector)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _on_selected(self, person_id: int) -> None:
-        self.selected_id = person_id
-
-    def _on_double(self, person_id: int) -> None:
-        self.selected_id = person_id
-        self.accept()
 
 
 class AutoMergeReviewDialog(QDialog):
@@ -283,19 +239,24 @@ class AutoMergeReviewDialog(QDialog):
             persons = (
                 session.query(Person).order_by(Person.name).all()
             )
-            # Score the moved face against everyone so the picker can offer the
-            # shared "order by face-match similarity" toggle (same as the merge /
-            # move-faces dialogs).  Best-effort: no embedding → empty mapping →
-            # the toggle simply stays hidden.
-            match_scores = match_scores_for_face(
-                session, face_id, self._rec_cfg, config=self._config
+            # The shared picker scores the moved face in the background (the
+            # dialog opens instantly with a "computing…" hint), so a large
+            # database never freezes the GUI here.
+            picker = PersonPickerDialog(
+                persons,
+                title=t("amerge_move"),
+                score_face_ids=[face_id],
+                recognition_cfg=self._rec_cfg,
+                config=self._config,
+                parent=self,
             )
-            # Detach the data the picker needs while the session is open.
-            picker = _PersonPickerDialog(persons, match_scores, self)
-        if picker.exec() != QDialog.Accepted or picker.selected_id is None:
+        if picker.exec() != QDialog.Accepted:
+            return
+        target_id = picker.selected_person_id()
+        if target_id is None:
             return
         with session_scope() as session:
-            UnknownMergeService(session).move_auto_merge(face_id, picker.selected_id)
+            UnknownMergeService(session).move_auto_merge(face_id, target_id)
         self._after_change()
 
     def _on_create_new(self, face_id: int) -> None:

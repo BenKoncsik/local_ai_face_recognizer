@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Face, Image
 from app.db.query_utils import in_chunks
-from app.services.face_crop_service import face_debug_state
 
 log = logging.getLogger(__name__)
 
@@ -76,28 +75,32 @@ class ImageBrowserService:
         Two SQL queries total: one for images, one for face counts.
         Grouping is done in Python.
         """
-        images = self._session.query(Image).all()
+        # Column-only query: full Image entities are ~10× heavier to build and
+        # this runs on every panel refresh, over the whole table.
+        images = self._session.query(
+            Image.id, Image.file_path, Image.detection_done
+        ).all()
         if not images:
             return []
 
         face_by_image = self._face_counts_by_image(
-            [img.id for img in images]
+            [img_id for img_id, _, _ in images]
         )
 
-        groups: Dict[str, List[Image]] = defaultdict(list)
-        for img in images:
-            folder = str(Path(img.file_path).parent)
-            groups[folder].append(img)
+        groups: Dict[str, List[tuple]] = defaultdict(list)
+        for row in images:
+            folder = str(Path(row[1]).parent)
+            groups[folder].append(row)
 
         result: List[FolderSummary] = []
         for folder_path in sorted(groups.keys()):
             imgs = groups[folder_path]
             total = len(imgs)
-            processed = sum(1 for i in imgs if i.detection_done)
+            processed = sum(1 for _, _, done in imgs if done)
 
             detected = assigned = 0
-            for img in imgs:
-                t, a = face_by_image.get(img.id, (0, 0))
+            for img_id, _, _ in imgs:
+                t, a = face_by_image.get(img_id, (0, 0))
                 detected += t
                 assigned += a
 
@@ -213,22 +216,29 @@ class ImageBrowserService:
         Each tuple: (face_id, x, y, w, h, person_name_or_None, person_id_or_None, is_uncertain)
         Excluded faces are omitted.
         """
-        img = self._session.get(Image, image_id)
-        if img is None:
-            return []
-        for f in img.faces:
-            _ = f.person
-            log.debug("Image-browser face entity: %s", face_debug_state(f, f.crop_path))
-        return [
-            (
-                f.id,
-                f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
-                f.person.name if f.person else None,
-                f.person_id,
-                bool(f.is_uncertain_identification),
+        # Column-only query: loading Face entities via ``img.faces`` also
+        # batch-loaded every face's embedding blob (lazy="selectin") and
+        # lazy-loaded each face's person/image rows, which made every image
+        # selection scale with face count on a large database.  This runs on
+        # each image open AND after every assignment, so it must stay cheap.
+        from app.db.models import Person
+
+        rows = (
+            self._session.query(
+                Face.id,
+                Face.bbox_x, Face.bbox_y, Face.bbox_w, Face.bbox_h,
+                Person.name,
+                Face.person_id,
+                Face.is_uncertain_identification,
             )
-            for f in img.faces
-            if not f.is_excluded
+            .outerjoin(Person, Person.id == Face.person_id)
+            .filter(Face.image_id == image_id)
+            .filter(Face.is_excluded == False)  # noqa: E712
+            .all()
+        )
+        return [
+            (fid, x, y, w, h, person_name, person_id, bool(uncertain))
+            for fid, x, y, w, h, person_name, person_id, uncertain in rows
         ]
 
     # ------------------------------------------------------------------

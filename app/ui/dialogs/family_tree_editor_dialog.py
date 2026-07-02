@@ -6,9 +6,8 @@ links. All relationship mutations go through :class:`FamilyService` so cycle
 prevention and spouse-ordering rules are enforced centrally; this dialog only
 drives the UI and surfaces validation errors.
 
-The module also exposes :class:`PersonPickerDialog`, a small reusable picker
-built on :class:`PersonSearchSelect` (used here and by the family-tree panel to
-choose a root).
+Person picking uses the shared
+:class:`app.ui.dialogs.person_picker_dialog.PersonPickerDialog`.
 """
 
 from __future__ import annotations
@@ -55,57 +54,6 @@ REL_SPOUSE_ROW = "spouse_of"
 # Qt user-data role for stashing (role, other_person_id) on a list item.
 _ROLE_DATA = int(Qt.UserRole)
 _SELECTABLE = Qt.ItemIsSelectable
-
-
-class PersonPickerDialog(QDialog):
-    """Modal person picker. Returns the chosen person id via :meth:`selected_id`."""
-
-    def __init__(
-        self,
-        persons: List[Person],
-        title: Optional[str] = None,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title or t("ft_pick_person_title"))
-        self.setMinimumWidth(360)
-        self._selected_id: Optional[int] = None
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        if not persons:
-            layout.addWidget(QLabel(t("ft_no_persons")))
-
-        self._selector = PersonSearchSelect(self)
-        self._selector.set_persons(persons)
-        self._selector.person_selected.connect(self._on_selected)
-        self._selector.person_double_clicked.connect(self._on_double_clicked)
-        layout.addWidget(self._selector)
-
-        self._buttons = QDialogButtonBox()
-        self._ok_btn = self._buttons.addButton(
-            t("ft_select_label"), QDialogButtonBox.AcceptRole
-        )
-        self._buttons.addButton(t("cancel"), QDialogButtonBox.RejectRole)
-        self._buttons.accepted.connect(self.accept)
-        self._buttons.rejected.connect(self.reject)
-        layout.addWidget(self._buttons)
-
-        self._ok_btn.setEnabled(False)
-        self._selector.focus_search()
-
-    def _on_selected(self, person_id: int) -> None:
-        self._selected_id = person_id
-        self._ok_btn.setEnabled(True)
-
-    def _on_double_clicked(self, person_id: int) -> None:
-        self._selected_id = person_id
-        self.accept()
-
-    def selected_id(self) -> Optional[int]:
-        return self._selected_id
 
 
 def _role_label(kind: str) -> str:

@@ -70,6 +70,9 @@ class PersonSearchSelect(QWidget):
         self._entries: List[PersonEntry] = []
         self._selected_id: Optional[int] = None
         self._match_scores: Dict[int, float] = {}
+        # True while background match scoring is still running for the current
+        # face — shows the "computing…" hint until set_match_scores() arrives.
+        self._scores_pending: bool = False
         # Hide placeholder/unknown identities from the base (empty-query) list.
         # On by default so every selector follows the shared rule; navigation
         # surfaces that must list unknown clusters (e.g. the persons sidebar)
@@ -100,6 +103,15 @@ class PersonSearchSelect(QWidget):
         self._match_spacer_top.setFixedHeight(8)
         self._match_spacer_top.setVisible(False)
         layout.addWidget(self._match_spacer_top)
+
+        # Shown while background match scoring runs, so the user knows the
+        # percentages are still being computed rather than missing.
+        self._computing_label = QLabel(t("pss_match_computing"))
+        self._computing_label.setStyleSheet(
+            "color: #888; font-style: italic; font-size: 11px;"
+        )
+        self._computing_label.setVisible(False)
+        layout.addWidget(self._computing_label)
 
         self._match_checkbox = QCheckBox(t("pss_match_sort"))
         self._match_checkbox.setChecked(self._load_match_pref())
@@ -216,6 +228,8 @@ class PersonSearchSelect(QWidget):
         untouched; they can still uncheck it to fall back to name order.
         """
         self._match_scores = dict(scores or {})
+        self._scores_pending = False
+        self._computing_label.setVisible(False)
         has_scores = bool(self._match_scores)
         self._match_checkbox.setVisible(has_scores)
         self._match_spacer_top.setVisible(has_scores)
@@ -226,6 +240,21 @@ class PersonSearchSelect(QWidget):
             self._match_checkbox.blockSignals(True)
             self._match_checkbox.setChecked(True)
             self._match_checkbox.blockSignals(False)
+        self._refresh_list()
+
+    def set_scores_pending(self) -> None:
+        """Signal that match scores are being computed in the background.
+
+        Shows a small "computing similarity…" hint (and hides any stale scores)
+        until :meth:`set_match_scores` delivers the result, so the user knows
+        the percentages are on their way rather than missing.
+        """
+        self._match_scores = {}
+        self._scores_pending = True
+        self._computing_label.setVisible(True)
+        self._match_checkbox.setVisible(False)
+        self._match_spacer_top.setVisible(False)
+        self._match_spacer.setVisible(False)
         self._refresh_list()
 
     def current_person_id(self) -> Optional[int]:
@@ -297,6 +326,7 @@ class PersonSearchSelect(QWidget):
         self._search.setPlaceholderText(t("pss_search_placeholder"))
         self._no_results.setText(t("pss_no_results"))
         self._match_checkbox.setText(t("pss_match_sort"))
+        self._computing_label.setText(t("pss_match_computing"))
 
     # ──────────────────────────────────────────────────────────────────
     # Internal helpers
@@ -314,8 +344,13 @@ class PersonSearchSelect(QWidget):
         return scored + rest
 
     def _display_text_for(self, entry: PersonEntry) -> str:
-        """Append the match percentage when ordering by similarity."""
-        if self._match_active() and entry.person_id in self._match_scores:
+        """Append the match percentage whenever a score is known.
+
+        The percentage is informative on its own, so it is shown regardless of
+        whether the match-sort checkbox is checked — the checkbox only controls
+        the *ordering* of the list.
+        """
+        if entry.person_id in self._match_scores:
             pct = max(0, min(100, round(self._match_scores[entry.person_id] * 100)))
             return t("pss_match_percent", name=entry.display_text, pct=pct)
         return entry.display_text

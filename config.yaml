@@ -16,7 +16,7 @@ clustering:
   min_samples: 2
   metric: cosine
 storage:
-  db_path: /Users/koncsikbenedek/Downloads/csaladfa/MatyiKepek/faces.db
+  db_path: I:\local\face_local_project_2026_06_17\database\faces.db
   crops_dir: data/crops
 scan:
   image_extensions:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -55,7 +55,14 @@ class ObjectPickerDialog(QDialog):
 
         self._search = QLineEdit()
         self._search.setPlaceholderText(t("object_picker_search"))
-        self._search.textChanged.connect(self._refresh_list)
+        # Debounce the search: each keystroke otherwise fires a fresh DB query,
+        # which is costly on a large object database.  Coalesce rapid typing
+        # into a single query 200 ms after the user pauses.
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self._refresh_list)
+        self._search.textChanged.connect(lambda _t: self._search_timer.start())
         existing_layout.addWidget(self._search)
 
         self._list = QListWidget()

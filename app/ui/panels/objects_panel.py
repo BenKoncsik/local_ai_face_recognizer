@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
@@ -156,7 +156,14 @@ class ObjectsPanel(QWidget):
 
         self._name_filter = QLineEdit()
         self._name_filter.setPlaceholderText(t("objects_filter_name"))
-        self._name_filter.textChanged.connect(self.refresh)
+        # Debounce the filter: refresh() reloads the table (aggregate counts +
+        # thumbnail crops), which is costly on a large database, so coalesce
+        # rapid typing into a single reload 250 ms after the user pauses.
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(250)
+        self._filter_timer.timeout.connect(self.refresh)
+        self._name_filter.textChanged.connect(lambda _t: self._filter_timer.start())
         left_layout.addWidget(self._name_filter)
 
         self._table = QTableWidget(0, 4)

@@ -24,17 +24,57 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import numpy as np
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import Integer, case, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import RecognitionConfig
 from app.db.models import Face, FaceCorrection, Person
 
 log = logging.getLogger(__name__)
 
+
+def _keep_majority_dim(vectors: List[np.ndarray]) -> List[np.ndarray]:
+    """Return only the vectors sharing the most common dimensionality.
+
+    Embeddings from different models have different lengths and cannot be
+    stacked or averaged together; when a set mixes them, the majority model
+    wins and the rest are dropped.  A same-dimension (or empty) input is
+    returned unchanged.
+    """
+    if len(vectors) < 2:
+        return vectors
+    dims: dict[int, int] = {}
+    for v in vectors:
+        dims[v.shape[0]] = dims.get(v.shape[0], 0) + 1
+    if len(dims) == 1:
+        return vectors
+    majority_dim = max(dims, key=dims.get)
+    return [v for v in vectors if v.shape[0] == majority_dim]
+
+
 # Assignment sources that mean a human (or trusted legacy data) made the call;
 # such faces are always eligible as training examples for a person profile.
 _TRUSTED_MANUAL_SOURCES = {None, "manual", "manual_merge", "suggestion_approved"}
+
+# ---------------------------------------------------------------------------
+# Cross-call profile cache
+# ---------------------------------------------------------------------------
+# Building profiles deserialises every trusted training face's embedding, which
+# is expensive on a large database.  The person-selector popups rebuild them on
+# *every* open, so the result is memoised here keyed by a cheap DB fingerprint
+# plus the config fields that influence which faces count as training examples.
+# The cached value is plain numpy/dataclass data (no ORM objects), so it is safe
+# to reuse across sessions and threads; a stale fingerprint simply triggers a
+# rebuild.  Profiles are a best-effort *ranking* aid, so the rare fingerprint
+# collision (e.g. two faces swapping person in one step, leaving COUNT/SUM
+# unchanged) only momentarily preserves the previous ordering.
+_PROFILE_CACHE: dict = {"key": None, "profiles": None}
+
+
+def invalidate_profile_cache() -> None:
+    """Drop the memoised scoring profiles (call after bulk identity edits)."""
+    _PROFILE_CACHE["key"] = None
+    _PROFILE_CACHE["profiles"] = None
 
 
 @dataclass
@@ -70,12 +110,68 @@ class FaceVectorScorer:
     # Profile building
     # ------------------------------------------------------------------
 
+    def _training_fingerprint(self) -> tuple:
+        """Cheap DB signature that changes whenever profiles would change.
+
+        Aggregate-only (no row loading), so it is orders of magnitude cheaper
+        than rebuilding profiles.  Face rows have no ``updated_at``; assignment
+        changes are detected via ``SUM(person_id)`` combined with the row count
+        and max id, and exclusions via ``SUM(is_excluded)``.  Person renames /
+        flag flips are detected through the persons' ``updated_at``.
+        """
+        face_sig = (
+            self._session.query(
+                func.count(Face.id),
+                func.coalesce(func.max(Face.id), 0),
+                func.coalesce(func.sum(Face.person_id), 0),
+                func.coalesce(
+                    func.sum(case((Face.is_excluded == True, 1), else_=0)),  # noqa: E712
+                    0,
+                ),
+            )
+            .filter(Face.person_id.isnot(None))
+            .one()
+        )
+        person_sig = self._session.query(
+            func.count(Person.id),
+            func.coalesce(func.max(Person.id), 0),
+            func.max(Person.updated_at),
+        ).one()
+        return (tuple(face_sig), (person_sig[0], person_sig[1], str(person_sig[2])))
+
+    def _config_signature(self) -> tuple:
+        """Config fields that influence which faces are eligible for training."""
+        return (
+            int(self._config.min_examples_per_person),
+            bool(self._config.use_recognized_faces_for_training),
+            float(self._config.profile_auto_min_confidence),
+            bool(self._exclude_low_quality),
+        )
+
     def build_profiles(self) -> Dict[int, PersonRecognitionProfile]:
-        """Build scoring profiles for all known non-protected people."""
+        """Build scoring profiles for all known non-protected people.
+
+        Memoised across calls by a cheap DB fingerprint so the person-selector
+        popups do not re-deserialise every training embedding on every open.
+        """
+        key = (self._training_fingerprint(), self._config_signature())
+        if _PROFILE_CACHE["key"] == key and _PROFILE_CACHE["profiles"] is not None:
+            return _PROFILE_CACHE["profiles"]
+
+        profiles = self._build_profiles_uncached()
+        _PROFILE_CACHE["key"] = key
+        _PROFILE_CACHE["profiles"] = profiles
+        return profiles
+
+    def _build_profiles_uncached(self) -> Dict[int, PersonRecognitionProfile]:
+        # Eager-load each person's faces and their embedding blobs in two batched
+        # queries (instead of a lazy load per person / per face) so profile
+        # building touches the DB a constant number of times.
         persons: List[Person] = (
             self._session.query(Person)
             .filter(Person.is_auto_named == False)  # noqa: E712
             .filter(Person.is_protected == False)  # noqa: E712
+            .options(selectinload(Person.faces).selectinload(Face.blob))
             .all()
         )
 
@@ -87,6 +183,11 @@ class FaceVectorScorer:
                 if self._is_training_face(face)
             ]
             vectors = [v for v in vectors if v is not None]
+            # A person may carry faces from more than one embedding model after a
+            # model change (e.g. legacy 128-dim + new 512-dim). Vectors of
+            # different length cannot be stacked/averaged together, so keep only
+            # the model with the most examples for this person.
+            vectors = _keep_majority_dim(vectors)
             if len(vectors) < max(1, self._config.min_examples_per_person):
                 continue
 
@@ -151,9 +252,15 @@ class FaceVectorScorer:
         normalised = self._normalise(embedding)
         if normalised is None:
             return {}
+        # Only score profiles built from the SAME embedding model.  During a
+        # model change the DB can hold both legacy (e.g. 128-dim) and current
+        # (512-dim) vectors; a cross-dimension np.dot raises and, more
+        # fundamentally, similarities across models are meaningless.  Mismatched
+        # profiles are simply skipped, exactly like a person with no profile.
         return {
             person_id: self._score(normalised, profile)
             for person_id, profile in self.build_profiles().items()
+            if profile.centroid.shape == normalised.shape
         }
 
     def rank_persons(
@@ -177,9 +284,11 @@ class FaceVectorScorer:
             return []
         if profiles is None:
             profiles = self.build_profiles()
+        # Skip profiles from a different embedding model (see score_persons).
         ranked = [
             (profile.person_id, profile.name, self._score(normalised, profile))
             for profile in profiles.values()
+            if profile.centroid.shape == normalised.shape
         ]
         ranked.sort(key=lambda item: item[2], reverse=True)
         return ranked

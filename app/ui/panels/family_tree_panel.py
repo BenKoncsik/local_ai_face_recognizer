@@ -38,9 +38,9 @@ from app.services.family_service import FamilyService
 from app.services.family_tree_service import FamilyTreeGraph, FamilyTreeService
 from app.ui.dialogs.family_tree_editor_dialog import (
     FamilyTreeEditorDialog,
-    PersonPickerDialog,
     add_relative,
 )
+from app.ui.dialogs.person_picker_dialog import PersonPickerDialog
 from app.ui.i18n import t
 from app.ui.widgets.family_tree_view import FamilyTreeView
 
@@ -288,7 +288,7 @@ class FamilyTreePanel(QWidget):
         dialog = PersonPickerDialog(persons, title=t("ft_choose_root"), parent=self)
         if dialog.exec() != QDialog.Accepted:
             return
-        chosen = dialog.selected_id()
+        chosen = dialog.selected_person_id()
         if chosen is None:
             return
         self._root_id = chosen
