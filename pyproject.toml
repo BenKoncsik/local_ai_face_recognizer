@@ -46,6 +46,7 @@ dev = [
     "pytest>=7.4",
     "pytest-qt>=4.2",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
     "ruff>=0.3",
     "mypy>=1.8",
 ]
@@ -59,7 +60,11 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+# --timeout is a backstop: no single test may block the run for more than
+# 120s. On a hang it dumps the stack of every thread so the culprit is
+# obvious, instead of the suite freezing indefinitely. Requires pytest-timeout
+# (installed via the [dev] extra).
+addopts = "-v --timeout=120 --timeout-method=thread"
 
 [tool.ruff]
 line-length = 100

@@ -24,7 +24,6 @@ def _stub_heavy_startup(monkeypatch) -> None:
     """Prevent network / background workers from starting during smoke tests."""
     for name in (
         "_start_update_check",
-        "_start_match_worker",
         "_start_crop_repair_task",
         "_check_image_library_on_startup",
         "_restore_last_folder",

@@ -2272,6 +2272,18 @@ _STRINGS: Dict[str, Dict[str, str]] = {
         "hu": "Kikapcsolva a befejezett feladatok a listában maradnak, amíg "
               "kézzel nem törlöd a „Befejezettek törlése” gombbal.",
     },
+    "tasks_settings_adaptive": {
+        "en": "Adapt background work to the machine's load",
+        "hu": "Háttérmunka igazítása a gép terheltségéhez",
+    },
+    "tasks_settings_adaptive_note": {
+        "en": "When on, background tasks use the whole machine while it is idle "
+              "and automatically ease off (fewer threads, short pauses) when "
+              "other applications need the CPU or memory runs low.",
+        "hu": "Bekapcsolva a háttérfeladatok kihasználják a tétlen gépet, és "
+              "automatikusan visszavesznek (kevesebb szál, rövid szünetek), ha "
+              "más alkalmazásoknak kell a CPU, vagy kevés a szabad memória.",
+    },
     "settings_tab_shortcuts":   {"en": "Shortcuts",             "hu": "Billentyűparancsok"},
 
     # ── Face quality filter settings ──────────────────────────────────────

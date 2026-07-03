@@ -165,8 +165,8 @@ def test_editor_add_spouse_via_service(db, qtbot):
 
 # ── add-relative dialog (auto-filled family code) ─────────────────────────────────
 
-def _coded_person(session, name: str, code: str) -> int:
-    p = Person(name=name, is_auto_named=False, family_code=code)
+def _coded_person(session, name: str, code: str, gender: str | None = None) -> int:
+    p = Person(name=name, is_auto_named=False, family_code=code, gender=gender)
     session.add(p)
     session.flush()
     return p.id
@@ -195,7 +195,9 @@ def _autofill_exec(name: str):
 
 def test_editor_add_new_spouse_creates_coded_person(db, qtbot, monkeypatch):
     with session_scope() as session:
-        base = _coded_person(session, "Base", "C8")
+        # A spouse can only be added when the subject's gender is known;
+        # otherwise add_relative() shows a modal warning (see add_relative()).
+        base = _coded_person(session, "Base", "C8", gender="male")
 
     dlg = FamilyTreeEditorDialog(base)
     qtbot.addWidget(dlg)

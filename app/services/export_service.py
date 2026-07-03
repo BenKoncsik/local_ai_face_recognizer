@@ -320,6 +320,10 @@ class ExportService:
 
         prepared: Dict[str, tuple] = {}
         max_workers = max(1, min(8, os.cpu_count() or 4))
+        # Ease off parallelism when other apps are competing for the machine.
+        from app.tasks.resource_governor import get_resource_governor
+
+        max_workers = get_resource_governor().recommended_workers(max_workers)
         done = 0
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = [pool.submit(_prepare, p) for p in image_faces.keys()]

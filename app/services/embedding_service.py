@@ -98,6 +98,10 @@ class EmbeddingService:
                 os.cpu_count() or 1,
             ),
         )
+        # Grab fewer loader threads when the machine is busy with other work.
+        from app.tasks.resource_governor import get_resource_governor
+
+        workers = get_resource_governor().recommended_workers(workers)
 
         embedded = 0
         processed = 0

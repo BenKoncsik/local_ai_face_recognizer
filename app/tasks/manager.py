@@ -53,6 +53,7 @@ from typing import Callable, List, Optional
 from PySide6.QtCore import QObject, QTimer, Qt, QThread, Signal
 
 from app.jobs.cancellation import CancellationToken, OperationCancelled
+from app.tasks.resource_governor import get_resource_governor
 
 log = logging.getLogger(__name__)
 
@@ -122,19 +123,58 @@ class TaskState(IntEnum):
         return self.name.lower()
 
 
+#: How strongly a task yields the machine to *other* activity, by priority.
+#: Background maintenance (LOW) gives way the most; user-launched AI work (HIGH)
+#: keeps running near full speed and only eases off when the machine is slammed.
+_PRIORITY_YIELD_WEIGHT = {
+    TaskPriority.LOW: 1.0,
+    TaskPriority.NORMAL: 0.6,
+    TaskPriority.HIGH: 0.25,
+}
+
+
 class TaskContext:
     """What a task function sees: progress reporting + cooperative control."""
 
     def __init__(self, task: "BackgroundTask") -> None:
         self._task = task
         self.token: CancellationToken = task.token
+        self._last_checkpoint: Optional[float] = None
 
     def report(self, percent: int, message: str = "") -> None:
         self._task._set_progress(percent, message)
 
     def checkpoint(self) -> None:
-        """Raise on cancel; block while paused.  Call at chunk boundaries."""
+        """Raise on cancel; block while paused.  Call at chunk boundaries.
+
+        Also applies the adaptive resource throttle: when the machine is busy
+        with other work, a short cooperative sleep is inserted here so the task
+        yields CPU; when the machine is idle the sleep is zero.
+        """
         self.token.wait_if_paused()
+        self._apply_adaptive_throttle()
+
+    def _apply_adaptive_throttle(self) -> None:
+        """Sleep a load-proportional slice, yielding to other machine activity."""
+        now = time.perf_counter()
+        last = self._last_checkpoint
+        self._last_checkpoint = now
+        if last is None:
+            return  # first checkpoint: no work slice measured yet
+        weight = _PRIORITY_YIELD_WEIGHT.get(self._task.priority, 1.0)
+        delay = get_resource_governor().throttle_delay(now - last, weight)
+        if delay <= 0.0:
+            return
+        # Sleep in small slices so a cancel is observed almost immediately.
+        deadline = now + delay
+        while True:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0.0:
+                break
+            self.token.raise_if_cancelled()
+            time.sleep(min(remaining, 0.05))
+        # Exclude the sleep itself from the next work-slice measurement.
+        self._last_checkpoint = time.perf_counter()
 
 
 class _TaskThread(QThread):

@@ -28,7 +28,7 @@ class TestTranslation:
         assert i18n.t("stop") == "Leállítás"
 
     def test_t_with_format_kwargs(self):
-        text = i18n.t("force_rescan_msg", n=12)
+        text = i18n.t("folders_count", n=12)
         assert "12" in text
 
     def test_unknown_key_returns_key(self):

@@ -584,6 +584,9 @@ class DeepFaceClassifier:
             return idx, model
 
         workers = max(1, min(len(members), os.cpu_count() or 1))
+        from app.tasks.resource_governor import get_resource_governor
+
+        workers = get_resource_governor().recommended_workers(workers)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for idx, model in pool.map(fit_one, range(len(members))):
                 members[idx] = model
@@ -676,6 +679,9 @@ class DeepFaceClassifier:
         import os
 
         workers = max(1, min(n_folds, os.cpu_count() or 1))
+        from app.tasks.resource_governor import get_resource_governor
+
+        workers = get_resource_governor().recommended_workers(workers)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(run_fold, range(n_folds)))
 

@@ -906,6 +906,17 @@ class SettingsDialog(QDialog):
         )
         group_layout.addWidget(self._tasks_autocleanup_check)
 
+        self._tasks_adaptive_check = QCheckBox(t("tasks_settings_adaptive"))
+        self._tasks_adaptive_check.setChecked(
+            _qsettings().value("tasks/adaptive_throttle_enabled", True, type=bool)
+        )
+        group_layout.addWidget(self._tasks_adaptive_check)
+
+        adaptive_note = QLabel(t("tasks_settings_adaptive_note"))
+        adaptive_note.setWordWrap(True)
+        adaptive_note.setStyleSheet("color: #888; font-size: 11px;")
+        group_layout.addWidget(adaptive_note)
+
         note = QLabel(t("tasks_settings_note"))
         note.setWordWrap(True)
         note.setStyleSheet("color: #888; font-size: 11px;")
@@ -1740,6 +1751,10 @@ class SettingsDialog(QDialog):
         qs.setValue(
             "tasks/auto_cleanup_enabled",
             self._tasks_autocleanup_check.isChecked(),
+        )
+        qs.setValue(
+            "tasks/adaptive_throttle_enabled",
+            self._tasks_adaptive_check.isChecked(),
         )
         qs.setValue("rerecognition/enabled", self._rerec_enabled_check.isChecked())
         # Keep suggest threshold strictly below the auto-merge threshold.

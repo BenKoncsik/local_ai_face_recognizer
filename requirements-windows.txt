@@ -8,3 +8,7 @@
 # Requires Python 3.9-3.12. Fallback: pip install tensorflow
 -r requirements.txt
 ai-edge-litert>=1.0
+
+# Windows has no system IANA time-zone database, so zoneinfo (used by the
+# export/timeline code, e.g. Europe/Budapest) fails without this package.
+tzdata>=2024.1

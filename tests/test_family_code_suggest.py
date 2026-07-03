@@ -112,9 +112,9 @@ def test_add_spouse_with_marriage_period(db):
         b = _person(session, "Wife", "C80")
         fam = FamilyService(session)
         fam.add_spouse(a, b, start_date="1950", end_date="1990")
-        assert fam.marriage_period(a, b) == ("1950", "1990")
+        assert fam.marriage_period(a, b) == ("1950", "1990", None)
         # Symmetric lookup (order-independent).
-        assert fam.marriage_period(b, a) == ("1950", "1990")
+        assert fam.marriage_period(b, a) == ("1950", "1990", None)
 
 
 def test_set_marriage_period_updates_existing(db):
@@ -123,9 +123,9 @@ def test_set_marriage_period_updates_existing(db):
         b = _person(session, "Wife", "C80")
         fam = FamilyService(session)
         fam.add_spouse(a, b)
-        assert fam.marriage_period(a, b) == (None, None)
+        assert fam.marriage_period(a, b) == (None, None, None)
         fam.set_marriage_period(a, b, "1960", "")
-        assert fam.marriage_period(a, b) == ("1960", None)
+        assert fam.marriage_period(a, b) == ("1960", None, None)
 
 
 def test_regenerate_links_from_codes(db):
