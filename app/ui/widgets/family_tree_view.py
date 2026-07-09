@@ -360,18 +360,21 @@ class FamilyTreeView(QGraphicsView):
         sorted_gens = sorted(gens)
         for band_index, gen in enumerate(sorted_gens):
             nodes = gens[gen]
+            # Base ordering key per node: the top band has no parents to anchor
+            # to, so it sorts by name; lower bands sort by the barycentre of
+            # their parents' columns so children sit under their parents.
             if band_index == 0:
-                nodes_sorted = sorted(
-                    nodes, key=lambda n: (n.name.lower(), n.person_id)
-                )
+                base_key = {n.person_id: (n.name.lower(), n.person_id) for n in nodes}
             else:
                 def _bary(node):
                     cols = [col_of[p] for p in node.parent_ids if p in col_of]
                     return sum(cols) / len(cols) if cols else float("inf")
 
-                nodes_sorted = sorted(
-                    nodes, key=lambda n: (_bary(n), n.name.lower(), n.person_id)
-                )
+                base_key = {
+                    n.person_id: (_bary(n), n.name.lower(), n.person_id) for n in nodes
+                }
+
+            nodes_sorted = self._order_generation(nodes, base_key)
             gens[gen] = nodes_sorted
             for column, node in enumerate(nodes_sorted):
                 col_of[node.person_id] = column
@@ -389,6 +392,87 @@ class FamilyTreeView(QGraphicsView):
         max_cols = max((len(gens[g]) for g in sorted_gens), default=1)
         total_w = max(max_cols, 1) * step_x - h_gap
         return positions, total_w, gens
+
+    @staticmethod
+    def _order_generation(nodes: list, base_key: dict) -> list:
+        """Order one generation so married couples sit side by side.
+
+        Barycentre sorting alone scatters spouses: a married-in partner with no
+        parents in the tree gets an ``inf`` barycentre and lands at the far edge,
+        so their spouse line stretches across everyone else's boxes and the
+        marriage label ends up over unrelated people. Here we first group nodes
+        into spouse-connected clusters (using only spouse links *within* this
+        generation), lay each cluster out as a chain with partners adjacent, then
+        order the clusters by their strongest (smallest) base key. Non-married
+        people stay single-node clusters and keep their barycentre position.
+        """
+        ids_here = {n.person_id for n in nodes}
+        node_by_id = {n.person_id: n for n in nodes}
+
+        # Spouse adjacency restricted to this generation.
+        adj: dict[int, list[int]] = {pid: [] for pid in ids_here}
+        for n in nodes:
+            for s in n.spouse_ids:
+                if s in ids_here:
+                    adj[n.person_id].append(s)
+
+        # Connected components over the intra-generation spouse edges.
+        seen: set[int] = set()
+        clusters: list[list[int]] = []
+        for pid in sorted(ids_here, key=lambda p: base_key[p]):
+            if pid in seen:
+                continue
+            comp: list[int] = []
+            stack = [pid]
+            seen.add(pid)
+            while stack:
+                cur = stack.pop()
+                comp.append(cur)
+                for nb in adj[cur]:
+                    if nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+            clusters.append(comp)
+
+        ordered_clusters = []
+        for comp in clusters:
+            internal = FamilyTreeView._order_cluster(comp, adj, base_key)
+            ordered_clusters.append((min(base_key[p] for p in comp), internal))
+        ordered_clusters.sort(key=lambda t: t[0])
+
+        return [
+            node_by_id[pid]
+            for _, internal in ordered_clusters
+            for pid in internal
+        ]
+
+    @staticmethod
+    def _order_cluster(comp: list, adj: dict, base_key: dict) -> list:
+        """Order one spouse cluster as a chain with partners adjacent.
+
+        Walks the spouse subgraph starting from a chain endpoint (a person with
+        a single partner) so simple couples and remarriage chains keep every
+        pair side by side; a star (one person with several partners) keeps as
+        many pairs adjacent as a single row allows.
+        """
+        if len(comp) <= 1:
+            return list(comp)
+        comp_set = set(comp)
+        endpoints = [p for p in comp if len([q for q in adj[p] if q in comp_set]) == 1]
+        start = min(endpoints or comp, key=lambda p: base_key[p])
+
+        order: list[int] = []
+        visited: set[int] = set()
+        cur: Optional[int] = start
+        while cur is not None:
+            order.append(cur)
+            visited.add(cur)
+            nxts = [q for q in adj[cur] if q in comp_set and q not in visited]
+            cur = min(nxts, key=lambda q: base_key[q]) if nxts else None
+        # Anything unreachable in a single walk (star/cycle leftovers) trails by key.
+        leftovers = [p for p in comp if p not in visited]
+        order.extend(sorted(leftovers, key=lambda p: base_key[p]))
+        return order
 
     # ------------------------------------------------------------------
     # Drawing

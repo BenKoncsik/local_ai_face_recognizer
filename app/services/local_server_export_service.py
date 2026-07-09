@@ -424,6 +424,15 @@ _APACHE_VHOST = """\
 <VirtualHost *:80>
     ServerName __DOMAIN__
 
+    # Ne korlátozza a kérés méretét (pl. nagy frissítő csomagok feltöltésénél)
+    LimitRequestBody 0
+
+    # mod_proxy a Content-Length fejlécet 32 bites egészként kezeli egyes
+    # (főleg Windows/XAMPP) Apache buildeken, ami 2 GB fölötti feltöltéseknél
+    # túlcsordul és a kérés megszakad. A "proxy-sendcl 0" kikapcsolja ezt, és
+    # helyette chunked továbbítást használ, amivel a méret korlátlan.
+    SetEnv proxy-sendcl 0
+
     # Proxy a galériaszerverre (Node.js, localhost:__PORT__)
     ProxyPreserveHost On
     ProxyPass        / http://localhost:__PORT__/
@@ -753,7 +762,7 @@ $svc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
 if ($svc) { Stop-Service caddy -Force -ErrorAction SilentlyContinue; & sc.exe delete caddy | Out-Null }
 # Háttérben futó Caddy leállítása
 $caddy = (Get-Command caddy -ErrorAction SilentlyContinue)?.Source
-if ($caddy) { & $caddy stop 2>$null | Out-Null }
+if ($caddy) { try { $prevPref = $PSNativeCommandUseErrorActionPreference; $PSNativeCommandUseErrorActionPreference = $false; & $caddy stop 2>$null | Out-Null } catch {} finally { $PSNativeCommandUseErrorActionPreference = $prevPref } }
 
 # ── Caddyfile törlése ─────────────────────────────────────────────────────
 foreach ($p in @("C:\caddy\Caddyfile", "$env:ProgramData\caddy\Caddyfile")) {
@@ -1151,6 +1160,13 @@ cloudflared --config "$PWD\\cloudflared-config.yml" service install
 
 > A galéria Node szerverét ekkor is el kell indítani (`python start.py --no-browser`),
 > a tunnel csak a publikus elérést adja.
+
+> ⚠ **Feltöltési korlát:** a forgalom a Cloudflare edge-én megy át, ami
+> a fiók csomagjától függően korlátozza a kérés méretét (Free/Pro: 100 MB,
+> Business: 200 MB, Enterprise: 500 MB, ez tovább emelhető). Ez a `cloudflared`
+> vagy a galéria szerver oldaláról **nem oldható meg** — nagy (pl. több GB-os)
+> frissítő csomagokhoz inkább a Caddy vagy Apache HTTPS módot, vagy a helyi
+> hálózaton belüli sima HTTP elérést használd.
 """
 
 _README_HTTPS_SECTION = """
@@ -1419,7 +1435,7 @@ $CaddyfilePath = "$CaddyDir\Caddyfile"
 $oldSvc = Get-Service -Name "caddy" -ErrorAction SilentlyContinue
 if ($oldSvc) { Stop-Service caddy -Force -ErrorAction SilentlyContinue; & sc.exe delete caddy | Out-Null }
 # Ha már fut egy Caddy a háttérben (pl. 'caddy start'), állítsuk le, hogy ne ütközzön
-& $CaddyExe stop 2>$null | Out-Null
+try { $prevPref = $PSNativeCommandUseErrorActionPreference; $PSNativeCommandUseErrorActionPreference = $false; & $CaddyExe stop 2>$null | Out-Null } catch {} finally { $PSNativeCommandUseErrorActionPreference = $prevPref }
 
 $action    = New-ScheduledTaskAction -Execute $CaddyExe `
              -Argument "run --config `"$CaddyfilePath`"" -WorkingDirectory $CaddyDir

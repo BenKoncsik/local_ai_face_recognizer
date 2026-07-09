@@ -355,6 +355,55 @@ def test_selecting_single_parent_child_highlights_both_parents(db, qtbot):
     assert ids["dad"] in view._ancestors  # was missing before the fix
 
 
+def _column_of(view, pid):
+    """Layout column index of a person (boxes are on a fixed x grid)."""
+    step_x = view.BOX_W + view._min_spouse_gap(view._graph)
+    return round(view._node_items[pid].pos().x() / step_x)
+
+
+def test_spouses_are_placed_side_by_side(db, qtbot):
+    """Each couple occupies adjacent columns so the spouse line is short.
+
+    Reproduces the 'who is married to whom blurs together' bug: a married-in
+    spouse with no parents in the tree used to sort to the far edge, stretching
+    the spouse line across everyone else.
+    """
+    with session_scope() as session:
+        def mk(name, code, gender):
+            p = Person(name=name, is_auto_named=False, family_code=code, gender=gender)
+            session.add(p)
+            session.flush()
+            return p.id
+
+        # A top-band couple with three children, each child married to a
+        # married-in spouse who has no parents recorded in the tree.
+        gm = mk("Nagymama", "C", "female")
+        gp = mk("Nagypapa", "C0", "male")
+        fam = FamilyService(session)
+        fam.add_spouse(gm, gp)
+
+        couples = []
+        for i, code in enumerate(("C1", "C2", "C3")):
+            kid = mk(f"Gyerek{i}", code, "male")
+            partner = mk(f"Par{i}", f"{code}0", "female")
+            fam.add_parent_child(gm, kid)
+            fam.add_parent_child(gp, kid)
+            fam.add_spouse(kid, partner)
+            couples.append((kid, partner))
+
+        graph = FamilyTreeService(session).build_graph()
+
+    view = FamilyTreeView()
+    qtbot.addWidget(view)
+    view.set_graph(graph)
+
+    # Top-band couple is adjacent.
+    assert abs(_column_of(view, gm) - _column_of(view, gp)) == 1
+    # Every married pair in the child band is adjacent, not scattered.
+    for kid, partner in couples:
+        assert abs(_column_of(view, kid) - _column_of(view, partner)) == 1
+
+
 def test_selecting_parent_highlights_all_children_down(db, qtbot):
     from app.ui.widgets.family_tree_view import _DESCENDANT_BORDER
 
