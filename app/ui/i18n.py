@@ -902,6 +902,154 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "pkg_import_later":  {"en": "Imported project is ready at:\n{dest}",
                           "hu": "Az importált projekt készen áll itt:\n{dest}"},
     "pkg_error_title":   {"en": "Project package error", "hu": "Projektcsomag hiba"},
+
+    # ── Database-only package (.facedb) ───────────────────────────────────────
+    "dbpkg_group":       {"en": "Database only (.facedb)",
+                          "hu": "Csak adatbázis (.facedb)"},
+    "dbpkg_export_desc": {"en": "Export the database alone — no images, no face "
+                                "crops. Images are recorded relative to the "
+                                "library root, so the other machine can keep its "
+                                "own base folder (e.g. C:\\photos here, D:\\photos "
+                                "there) as long as the folders below it match.",
+                          "hu": "Csak az adatbázis exportálása — képek és "
+                                "arckivágások nélkül. A képek a képtár "
+                                "gyökeréhez képest tárolódnak, így a másik gépen "
+                                "lehet más az alapmappa (pl. itt C:\\kepek, ott "
+                                "D:\\kepek), ha az alatta lévő mappaszerkezet "
+                                "megegyezik."},
+    "dbpkg_export_btn":  {"en": "Export database", "hu": "Adatbázis exportálása"},
+    "dbpkg_import_desc": {"en": "Import a .facedb file: pick the base image folder "
+                                "on this machine and every path is re-based onto "
+                                "it. Images that are still not found can be "
+                                "matched by scanning a folder.",
+                          "hu": ".facedb fájl importálása: válaszd ki a gépen "
+                                "lévő alap képmappát, és minden útvonal ehhez "
+                                "igazodik. Az így sem megtalált képek mappa "
+                                "beszkennelésével párosíthatók."},
+    "dbpkg_import_btn":  {"en": "Import database", "hu": "Adatbázis importálása"},
+    "dbpkg_export_dialog": {"en": "Export database package",
+                            "hu": "Adatbázis-csomag exportálása"},
+    "dbpkg_import_dialog": {"en": "Select database package",
+                            "hu": "Adatbázis-csomag kiválasztása"},
+    "dbpkg_filter":      {"en": "Face-Local database (*.facedb)",
+                          "hu": "Face-Local adatbázis (*.facedb)"},
+    "dbpkg_export_done": {"en": "Database package", "hu": "Adatbázis-csomag"},
+    "dbpkg_export_ok":   {"en": "{images} image record(s) saved to:\n{path}",
+                          "hu": "{images} képrekord mentve ide:\n{path}"},
+    "dbpkg_export_warn": {"en": "\n\n{outside} image(s) are stored outside the "
+                                "library root, so only their original absolute "
+                                "path travels with the package.",
+                          "hu": "\n\n{outside} kép a képtár gyökerén kívül van, "
+                                "ezért náluk csak az eredeti teljes elérési út "
+                                "kerül a csomagba."},
+    "dbpkg_export_no_root": {"en": "No image library root is configured, so paths "
+                                   "cannot be made portable. Set the library root "
+                                   "in Settings first, or continue with absolute "
+                                   "paths?",
+                             "hu": "Nincs beállítva képtár-gyökér, így az útvonalak "
+                                   "nem tehetők hordozhatóvá. Állítsd be a "
+                                   "Beállításokban, vagy folytatod teljes elérési "
+                                   "utakkal?"},
+    "dbpkg_import_root": {"en": "Select the base image folder on THIS machine",
+                          "hu": "Válaszd ki a képek alapmappáját EZEN a gépen"},
+    "dbpkg_import_dest": {"en": "Choose a folder for the imported database",
+                          "hu": "Válassz mappát az importált adatbázisnak"},
+    "dbpkg_import_title": {"en": "Import database", "hu": "Adatbázis importálása"},
+    "dbpkg_import_confirm": {"en": "The database will be imported into:\n{dest}\n\n"
+                                   "Image paths will be re-based onto:\n{root}\n\n"
+                                   "Your current project will not be overwritten. "
+                                   "Continue?",
+                             "hu": "Az adatbázis ide kerül:\n{dest}\n\n"
+                                   "A képek útvonala ehhez igazodik:\n{root}\n\n"
+                                   "A jelenlegi projekt nem íródik felül. Folytatod?"},
+    "dbpkg_import_ok":   {"en": "Database imported to:\n{dest}\n\n"
+                                "{resolved} image(s) found, {unresolved} not found.\n\n"
+                                "Open it now?",
+                          "hu": "Adatbázis importálva ide:\n{dest}\n\n"
+                                "{resolved} kép megtalálva, {unresolved} nem "
+                                "található.\n\nMegnyitod most?"},
+    "dbpkg_import_later": {"en": "The imported database is ready at:\n{dest}",
+                           "hu": "Az importált adatbázis készen áll itt:\n{dest}"},
+    "dbpkg_import_opened": {"en": "The imported database is now active.",
+                            "hu": "Az importált adatbázis mostantól aktív."},
+    "dbpkg_import_unresolved": {"en": "\n\n{n} image(s) were not found at the "
+                                      "re-based location. Scan a folder now to "
+                                      "match them by file name?",
+                                "hu": "\n\n{n} kép nem található az igazított "
+                                      "helyen. Beszkennelsz most egy mappát, hogy "
+                                      "fájlnév alapján párosítsuk őket?"},
+    "dbpkg_error_title": {"en": "Database package error", "hu": "Adatbázis-csomag hiba"},
+
+    # ── Missing-image path repair (scan & match) ──────────────────────────────
+    "pathfix_group":     {"en": "Missing images", "hu": "Hiányzó képek"},
+    "pathfix_desc":      {"en": "Some records point at files that are not on this "
+                                "machine? Scan a folder and match them by file "
+                                "name and content.",
+                          "hu": "Vannak rekordok, amelyek nem létező fájlra "
+                                "mutatnak? Szkennelj be egy mappát, és párosítsd "
+                                "őket fájlnév és tartalom alapján."},
+    "pathfix_open_btn":  {"en": "Find missing images …",
+                          "hu": "Hiányzó képek keresése …"},
+    "pathfix_title":     {"en": "Find missing images", "hu": "Hiányzó képek keresése"},
+    "pathfix_intro":     {"en": "Records whose file is not where the database "
+                                "expects it are listed below. The chosen folders "
+                                "are scanned and every missing record is matched "
+                                "by file name; the recorded content hash decides "
+                                "whether a match is certain. Review the rows, then "
+                                "apply.",
+                          "hu": "Alább azok a rekordok szerepelnek, amelyek fájlja "
+                                "nincs ott, ahol az adatbázis szerint lennie "
+                                "kellene. A kiválasztott mappák beolvasásra "
+                                "kerülnek, és minden hiányzó rekord fájlnév "
+                                "alapján párosul; a tárolt tartalom-ujjlenyomat "
+                                "dönti el, hogy a találat biztos-e. Nézd át a "
+                                "sorokat, majd alkalmazd."},
+    "pathfix_folders_label": {"en": "Folders to scan", "hu": "Beolvasandó mappák"},
+    "pathfix_add_folder": {"en": "Add folder …", "hu": "Mappa hozzáadása …"},
+    "pathfix_remove_folder": {"en": "Remove", "hu": "Eltávolítás"},
+    "pathfix_verify_hash": {"en": "Verify by file content (slower, but certain)",
+                            "hu": "Ellenőrzés fájltartalommal (lassabb, de biztos)"},
+    "pathfix_verify_hash_tip": {
+        "en": "Compares the SHA-256 hash recorded at index time with the "
+              "candidate file. A match is proof, not a guess.",
+        "hu": "Az indexeléskor rögzített SHA-256 ujjlenyomatot hasonlítja össze a "
+              "jelölt fájllal. Az egyezés bizonyíték, nem tipp.",
+    },
+    "pathfix_start_btn": {"en": "Start scan", "hu": "Beolvasás indítása"},
+    "pathfix_running":   {"en": "Scanning in the background — see the Task Manager.",
+                          "hu": "Beolvasás a háttérben — lásd a Feladatkezelőt."},
+    "pathfix_cancelled": {"en": "Scan stopped.", "hu": "Beolvasás leállítva."},
+    "pathfix_need_folder": {"en": "Add at least one folder to scan.",
+                            "hu": "Adj hozzá legalább egy beolvasandó mappát."},
+    "pathfix_no_missing": {"en": "Every image record points at an existing file.",
+                           "hu": "Minden képrekord létező fájlra mutat."},
+    "pathfix_summary":   {"en": "{missing} missing · {matched} matched "
+                                "({confident} certain) · {scanned} file(s) scanned",
+                          "hu": "{missing} hiányzó · {matched} párosítva "
+                                "({confident} biztos) · {scanned} fájl beolvasva"},
+    "pathfix_col_file":  {"en": "File", "hu": "Fájl"},
+    "pathfix_col_expected": {"en": "Expected location", "hu": "Várt helye"},
+    "pathfix_col_match": {"en": "Match", "hu": "Találat"},
+    "pathfix_col_confidence": {"en": "Confidence", "hu": "Biztonság"},
+    "pathfix_skip_option": {"en": "— skip —", "hu": "— kihagyás —"},
+    "pathfix_browse_option": {"en": "Browse …", "hu": "Tallózás …"},
+    "pathfix_conf_proof": {"en": "Certain (content match)",
+                           "hu": "Biztos (tartalom egyezik)"},
+    "pathfix_conf_mismatch": {"en": "Different content!",
+                              "hu": "Eltérő tartalom!"},
+    "pathfix_conf_guess": {"en": "{score}% (name)", "hu": "{score}% (név)"},
+    "pathfix_conf_none": {"en": "No match", "hu": "Nincs találat"},
+    "pathfix_select_confident": {"en": "Select certain",
+                                 "hu": "Biztosak kijelölése"},
+    "pathfix_select_all": {"en": "Select all", "hu": "Összes kijelölése"},
+    "pathfix_select_none": {"en": "Select none", "hu": "Kijelölés törlése"},
+    "pathfix_apply_btn": {"en": "Apply selected", "hu": "Kijelöltek alkalmazása"},
+    "pathfix_nothing_selected": {"en": "No row is selected for applying.",
+                                 "hu": "Egy sor sincs kijelölve alkalmazásra."},
+    "pathfix_applied":   {"en": "{n} image(s) re-attached, {skipped} skipped.",
+                          "hu": "{n} kép újra hozzárendelve, {skipped} kihagyva."},
+    "pathfix_preview_none": {"en": "No preview", "hu": "Nincs előnézet"},
+
     "deep_model_group":         {"en": "AI recognition model",
                                  "hu": "AI felismerési modell"},
     "deep_model_export_desc":   {"en": "Save the trained model to a file so it can be "
@@ -3679,6 +3827,11 @@ _STRINGS: Dict[str, Dict[str, str]] = {
     "task_html_export":     {"en": "Collage HTML export",    "hu": "Kollázs HTML export"},
     "task_pkg_export":      {"en": "Project package export", "hu": "Projektcsomag exportálása"},
     "task_pkg_import":      {"en": "Project package import", "hu": "Projektcsomag importálása"},
+    "task_dbpkg_export":    {"en": "Database export",        "hu": "Adatbázis exportálása"},
+    "task_dbpkg_import":    {"en": "Database import",        "hu": "Adatbázis importálása"},
+    "task_path_match":      {"en": "Missing image scan",     "hu": "Hiányzó képek keresése"},
+    "task_path_apply":      {"en": "Missing image re-attach",
+                             "hu": "Hiányzó képek hozzárendelése"},
     "task_quality_reanalyze": {"en": "Face quality re-analysis",
                              "hu": "Arcminőség újraelemzése"},
     "task_json_export":     {"en": "JSON export",            "hu": "JSON export"},

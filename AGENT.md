@@ -39,6 +39,8 @@ python -m app.main                   # Run app directly (after setup)
 | Database schema change | [`app/db/models.py`](app/db/models.py) | Update ORM, handle migration |
 | Debug face clustering | [`app/clustering/clusterer.py`](app/clustering/clusterer.py) | Adjust DBSCAN epsilon in config |
 | Add export format | [`app/services/export_service.py`](app/services/export_service.py) | Extend `export_by_person()` |
+| Move a project to another machine | [`app/services/database_package_service.py`](app/services/database_package_service.py) | `.facedb` = DB only; import re-bases paths onto the local library root |
+| Re-attach moved / renamed originals | [`app/services/image_path_matcher.py`](app/services/image_path_matcher.py) | Scan folders, match by name + SHA-256, review in `ImagePathRepairDialog` |
 | Trace pipeline steps | [`app/workers/pipeline_worker.py`](app/workers/pipeline_worker.py) | Follow scan → detect → embed → cluster |
 | Add background task | [`app/tasks/manager.py`](app/tasks/manager.py) | Use `get_task_manager().submit(name, work_fn, priority=TaskPriority.HIGH)` |
 
@@ -132,6 +134,9 @@ local_ai_face_recognizer/
 │   │   ├── *_merge*_service.py    # Unknown/auto/merge suggestion workflows
 │   │   ├── *_duplicate*_service.py # Duplicate/overlap/intra-image cleanup
 │   │   ├── screen_recorder_service.py # ffmpeg screen/audio recording
+│   │   ├── project_package_service.py # Full .facepack export/import (db+crops+images)
+│   │   ├── database_package_service.py # DB-only .facedb export/import, path re-basing
+│   │   ├── image_path_matcher.py  # Find missing originals, match by name/content hash
 │   │   ├── export_service.py      # CSV/JSON/image/Astro static export
 │   │   ├── update_service.py      # Sparkle/appcast update checks
 │   │   └── geocoding/             # Provider interface + Nominatim provider

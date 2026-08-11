@@ -51,6 +51,9 @@ class ExportDialog(QDialog):
         on_collage_html_export: Optional[Callable[[], None]] = None,
         on_project_export: Optional[Callable[[], None]] = None,
         on_project_import: Optional[Callable[[], None]] = None,
+        on_db_export: Optional[Callable[[], None]] = None,
+        on_db_import: Optional[Callable[[], None]] = None,
+        on_path_repair: Optional[Callable[[], None]] = None,
         on_deep_model_export: Optional[Callable[[], None]] = None,
         on_deep_model_import: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
@@ -63,6 +66,9 @@ class ExportDialog(QDialog):
         self._on_collage_html_export_cb = on_collage_html_export
         self._on_project_export_cb = on_project_export
         self._on_project_import_cb = on_project_import
+        self._on_db_export_cb = on_db_export
+        self._on_db_import_cb = on_db_import
+        self._on_path_repair_cb = on_path_repair
         self._on_deep_model_export_cb = on_deep_model_export
         self._on_deep_model_import_cb = on_deep_model_import
         self.setWindowTitle(t("export_title"))
@@ -135,6 +141,37 @@ class ExportDialog(QDialog):
         self._project_import_btn.clicked.connect(self._on_project_import_clicked)
         pkg_layout.addWidget(self._project_import_btn)
         layout.addWidget(pkg_box)
+
+        # --- Database-only package (.facedb) ---
+        dbpkg_box = QGroupBox(t("dbpkg_group"))
+        dbpkg_layout = QVBoxLayout(dbpkg_box)
+        dbpkg_export_desc = QLabel(t("dbpkg_export_desc"))
+        dbpkg_export_desc.setWordWrap(True)
+        dbpkg_export_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        dbpkg_layout.addWidget(dbpkg_export_desc)
+        self._db_export_btn = QPushButton(f"🗄️  {t('dbpkg_export_btn')}")
+        self._db_export_btn.setEnabled(self._on_db_export_cb is not None)
+        self._db_export_btn.clicked.connect(self._on_db_export_clicked)
+        dbpkg_layout.addWidget(self._db_export_btn)
+
+        dbpkg_import_desc = QLabel(t("dbpkg_import_desc"))
+        dbpkg_import_desc.setWordWrap(True)
+        dbpkg_import_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        dbpkg_layout.addWidget(dbpkg_import_desc)
+        self._db_import_btn = QPushButton(f"📂  {t('dbpkg_import_btn')}")
+        self._db_import_btn.setEnabled(self._on_db_import_cb is not None)
+        self._db_import_btn.clicked.connect(self._on_db_import_clicked)
+        dbpkg_layout.addWidget(self._db_import_btn)
+
+        pathfix_desc = QLabel(t("pathfix_desc"))
+        pathfix_desc.setWordWrap(True)
+        pathfix_desc.setStyleSheet("color: #aaa; font-size: 11px;")
+        dbpkg_layout.addWidget(pathfix_desc)
+        self._path_repair_btn = QPushButton(f"🔍  {t('pathfix_open_btn')}")
+        self._path_repair_btn.setEnabled(self._on_path_repair_cb is not None)
+        self._path_repair_btn.clicked.connect(self._on_path_repair_clicked)
+        dbpkg_layout.addWidget(self._path_repair_btn)
+        layout.addWidget(dbpkg_box)
 
         # --- AI model export / import ---
         model_box = QGroupBox(t("deep_model_group"))
@@ -917,6 +954,24 @@ class ExportDialog(QDialog):
             return
         self.accept()
         self._on_project_import_cb()
+
+    def _on_db_export_clicked(self) -> None:
+        if self._on_db_export_cb is None:
+            return
+        self.accept()
+        self._on_db_export_cb()
+
+    def _on_db_import_clicked(self) -> None:
+        if self._on_db_import_cb is None:
+            return
+        self.accept()
+        self._on_db_import_cb()
+
+    def _on_path_repair_clicked(self) -> None:
+        if self._on_path_repair_cb is None:
+            return
+        self.accept()
+        self._on_path_repair_cb()
 
     def _on_deep_model_export_clicked(self) -> None:
         if self._on_deep_model_export_cb is None:

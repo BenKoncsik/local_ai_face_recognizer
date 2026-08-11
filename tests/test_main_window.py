@@ -39,3 +39,24 @@ def test_main_window_construct(config, qtbot, monkeypatch):
     assert window._config is config
     assert window._db_path == str(config.db_path_resolved)
     window.close()
+
+
+def test_path_repair_dialog_opens_with_the_current_folders(
+    config, qtbot, monkeypatch, tmp_path
+):
+    """The missing-image review window prefills the library / scan folders."""
+    _stub_heavy_startup(monkeypatch)
+    window = MainWindow(config=config)
+    qtbot.addWidget(window)
+
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    window._root_folders = [str(folder)]
+
+    window._open_path_repair_dialog()
+    dialog = window._path_repair_dialog
+    qtbot.addWidget(dialog)
+
+    assert str(folder) in dialog._search_roots()
+    dialog.close()
+    window.close()
