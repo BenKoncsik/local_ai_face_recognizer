@@ -827,22 +827,44 @@ jobs:
         run: |
           Compress-Archive -Path "dist\Face-Local\*" -DestinationPath "release\Face-Local-windows-portable-${{ needs.prepare.outputs.package_version }}.zip" -Force
 
-          # Per-user install target — no admin rights required.
+          # Portable Inno Setup — plain zip extraction, no installer process, no admin rights.
+          $innoVersion = "6.7.3"
           $installDir = Join-Path $env:RUNNER_TEMP "InnoSetup6"
           $isccCandidates = @(
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
             "C:\Program Files\Inno Setup 6\ISCC.exe",
+            (Join-Path $installDir "tools\ISCC.exe"),
             (Join-Path $installDir "ISCC.exe")
           )
           function Find-ISCC { $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1 }
 
           $iscc = Find-ISCC
           if (-not $iscc) {
-            Write-Host "Inno Setup 6 not found - installing via direct download (per-user, no admin required)."
+            Write-Host "Inno Setup 6 not found - downloading the portable build (Tools.InnoSetup $innoVersion from NuGet)."
+            try {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              # .nupkg is a plain zip; the .zip extension is required by Expand-Archive.
+              $isZip = Join-Path $env:RUNNER_TEMP "tools.innosetup.$innoVersion.zip"
+              if (Test-Path $isZip) { Remove-Item $isZip -Force }
+              if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+              Invoke-WebRequest -UseBasicParsing `
+                -Uri "https://api.nuget.org/v3-flatcontainer/tools.innosetup/$innoVersion/tools.innosetup.$innoVersion.nupkg" `
+                -OutFile $isZip
+              Expand-Archive -LiteralPath $isZip -DestinationPath $installDir -Force
+              # Strip any mark-of-the-web so ISCC and its DLLs are not blocked.
+              Get-ChildItem $installDir -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
+              Remove-Item $isZip -ErrorAction SilentlyContinue
+            } catch { Write-Warning "Portable Inno Setup download failed: $_" }
+            $iscc = Find-ISCC
+          }
+
+          if (-not $iscc) {
+            Write-Host "Falling back to the official Inno Setup installer (per-user, no admin required)."
             try {
               [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
               $isTmp = Join-Path $env:RUNNER_TEMP "innosetup-installer.exe"
               Invoke-WebRequest -UseBasicParsing -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile $isTmp
+              Unblock-File $isTmp -ErrorAction SilentlyContinue
               if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
               $proc = Start-Process -FilePath $isTmp `
                 -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/DIR=$installDir" `
@@ -854,7 +876,7 @@ jobs:
           }
 
           if (-not $iscc) {
-            Write-Error "Inno Setup 6 (ISCC.exe) could not be found or installed. Pre-install Inno Setup 6 on this runner, or ensure Chocolatey/winget is available in an elevated context."
+            Write-Error "Inno Setup 6 (ISCC.exe) could not be found or installed. Pre-install Inno Setup 6 on this runner (https://jrsoftware.org/isdl.php), or check that nuget.org is reachable from it."
             exit 1
           }
           Write-Host "Using ISCC: $iscc"
