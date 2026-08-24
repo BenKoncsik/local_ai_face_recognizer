@@ -1,0 +1,3492 @@
+# Test Report
+
+- Generated: 2026-08-25 00:23:55
+- Result: PASS
+- Command: `python3 -m pytest --tb=short -ra tests --junitxml=test-reports/linux-arm64/latest.junit.xml --cov=app --cov-report=term-missing:skip-covered --cov-report=json:test-reports/linux-arm64/coverage.json --cov-report=xml:test-reports/linux-arm64/coverage.xml`
+- Raw log: `test-reports/linux-arm64/latest.log`
+- JUnit XML: `test-reports/linux-arm64/latest.junit.xml`
+- Coverage JSON: `test-reports/linux-arm64/coverage.json`
+- Coverage XML: `test-reports/linux-arm64/coverage.xml`
+- Total tests: 1719
+- Pass rate: 99.83
+- Coverage: 60.81
+- Coverage covered lines: 26617
+- Coverage total lines: 43768
+- Coverage missing lines: 17151
+- Pytest summary: `=========== 1716 passed, 3 skipped, 63 warnings in 324.86s (0:05:24) ===========`
+
+## Counts
+
+- Passed: 1716
+- Failed: 0
+- Errors: 0
+- Skipped: 3
+- Warnings: 63
+
+## Failures And Errors
+
+- None.
+- Why: every collected test completed without assertion errors or unhandled exceptions.
+
+## Warnings
+
+- Total warnings reported by pytest: 63
+
+### Warning Counts By Test Module
+
+- `tests/test_deep_classifier.py`: 45
+- `tests/test_match_scoring_deep.py`: 9
+- `tests/test_deep_recognition_service.py`: 6
+
+### Warning Reasons
+
+- `PytestUnraisableExceptionWarning` at `/home/rpi5/github_runner/_work/_tool/Python/3.11.15/arm64/lib/python3.11/site-packages/_pytest/unraisableexception.py:67`
+  - Why: Exception ignored in: <function Delegate.__del__ at 0xffff79a67740>
+- `ConvergenceWarning` at `/home/rpi5/github_runner/_work/_tool/Python/3.11.15/arm64/lib/python3.11/site-packages/sklearn/neural_network/_multilayer_perceptron.py:785`
+  - Why: Stochastic Optimizer: Maximum iterations (1) reached and the optimization hasn't converged yet.
+- `ConvergenceWarning` at `/home/rpi5/github_runner/_work/_tool/Python/3.11.15/arm64/lib/python3.11/site-packages/sklearn/neural_network/_multilayer_perceptron.py:785`
+  - Why: Stochastic Optimizer: Maximum iterations (300) reached and the optimization hasn't converged yet.
+
+## Passed Tests
+
+- PASS `tests.test_accel.TestOnnxProviders::test_cuda_keeps_priority_on_windows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestOnnxProviders::test_windows_cpu_only_unchanged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestOnnxProviders::test_macos_adds_coreml_before_cpu`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestOnnxProviders::test_macos_cuda_still_wins`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestOnnxProviders::test_no_onnxruntime_falls_back_to_cpu`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestClassify::test_cuda`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestClassify::test_coreml_partial_offload`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestClassify::test_cpu_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestClassify::test_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestRegistry::test_summary_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestRegistry::test_summary_prefers_strongest`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestRegistry::test_report_onnx_classifies`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_accel.TestRegistry::test_detail_lines`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_detect_images_persists_results`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_rerun_replaces_previous_rows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_config_thresholds_are_forwarded_to_detector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_missing_model_reports_error_without_raising`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_unreadable_image_is_counted_failed_and_batch_continues`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_disabled_config_is_a_noop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_verifier_drops_unconfirmed_low_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_verification_disabled_keeps_all`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_without_detection_config_gate_is_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_verifier_keeps_confirmed_low_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_dropped_count_is_recorded_on_stats`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_landmark_geometry_flag_reaches_lazy_detector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ai_face_detection_service::test_classic_face_rows_and_flags_stay_untouched`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestSquareCrop::test_output_size_is_exact`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestSquareCrop::test_aspect_ratio_preserved_for_tall_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestSquareCrop::test_box_at_edge_is_padded_not_distorted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestSquareCrop::test_degenerate_box_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestAlign5pt::test_landmarks_map_to_template`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestAlign5pt::test_wrong_landmark_count_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestMakeFaceCrop::test_legacy_mode_matches_old_behaviour`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestMakeFaceCrop::test_aligned_falls_back_to_square_without_landmarks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestMakeFaceCrop::test_aligned_with_landmarks_warps_to_template`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_alignment.TestMakeFaceCrop::test_template_unchanged_module_constant`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestAppQsettings::test_returns_ini_backed_settings`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestAppQsettings::test_same_file_on_repeated_calls`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestMigrateLegacySettings::test_no_op_when_new_file_exists`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestMigrateLegacySettings::test_no_op_when_legacy_store_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestMigrateLegacySettings::test_migrates_keys_from_legacy_store`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_app_settings.TestMigrateLegacySettings::test_second_call_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_astro_export_worker.TestAstroExportWorker::test_emits_finished_ok`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_astro_export_worker.TestAstroExportWorker::test_reports_progress`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_astro_export_worker.TestAstroExportWorker::test_node_error_kind`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_astro_export_worker.TestAstroExportWorker::test_generic_error_kind`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_audio_level_meter::test_level_to_fraction_clamps_and_scales`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_build_release_workflow::test_release_artifact_download_inline_python_compiles`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_bulk_reassign::test_bulk_move_some_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_bulk_reassign::test_bulk_move_is_atomic_with_missing_target`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_bulk_reassign::test_bulk_move_skips_missing_and_already_assigned`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_bulk_reassign::test_undo_restores_original_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_bulk_reassign::test_undo_recreates_emptied_unknown_cluster`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_empty_unknown_person_is_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_unknown_person_with_a_face_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_protected_unknown_person_is_never_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_named_person_without_faces_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_multiple_empty_unknown_persons_all_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_cleanup_is_a_noop_when_nothing_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cleanup_empty_unknown_persons::test_reassigning_last_face_cleans_up_source_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_lazy::test_only_visible_rows_load`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_lazy::test_widgets_without_loader_are_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_merge::test_merged_collapses_multi_group_to_one_tile`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_merge::test_expanding_group_splices_members`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_merge::test_unmerged_mode_shows_every_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_merge::test_toggle_handler_flips_expansion`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_smoke::test_show_sort_and_merge_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_sort::test_date_ascending_orders_oldest_first_unknown_last`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_sort::test_date_descending_orders_newest_first_unknown_last`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_sort::test_original_order_preserved`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_cluster_panel_sort::test_quality_orders_best_first_unscored_as_usable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestCosineDistance::test_identical_vectors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestCosineDistance::test_orthogonal_vectors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestCosineDistance::test_opposite_vectors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestClusterEmbeddings::test_two_clear_clusters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestClusterEmbeddings::test_empty_input`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestClusterEmbeddings::test_single_face_becomes_noise`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestClusterEmbeddings::test_same_pair_constraint_merges_clusters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestCentroid::test_centroid_of_identical_vectors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering.TestCentroid::test_centroid_is_unit_length`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering_service.TestOrphanCleanup::test_run_removes_orphan_auto_persons`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_clustering_service.TestOrphanCleanup::test_run_does_not_orphan_assigned_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_returns_collage_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_cfx_extension_accepted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_collage_uid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_format_parsed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_orientation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_album_title`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_album_date`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_bg_color`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_spacing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_count`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_geometry`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_theta_and_scale`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_theme`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_uid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_node_src_raw`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_missing_src_marked`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_source_file_stored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParseCollageFile::test_file_not_found_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestParsePartialXml::test_partial_xml_recovered`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_drive_prefix_stripped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_lowercase_drive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_no_drive_prefix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_resolve_existing_file_relative_to_collage`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_resolve_by_filename_fallback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestPathResolution::test_returns_none_if_not_found`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_full_canvas_no_zoom_face_center`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_node_in_top_left_quarter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_zoom_clips_face_outside_view`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_zoom_100_square_full_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_returns_none_for_zero_dimensions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_returns_none_for_zero_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_pixel_bbox_helper`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_parser.TestProjectFaceToCollage::test_wide_image_cover_scale`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_import_collage_persists_nodes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_import_collage_returns_existing_without_overwrite`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_import_collage_overwrite_reimports`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_import_collage_links_existing_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_list_and_get_collages`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_get_nodes_and_update_metadata`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_update_node_metadata_missing_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_relink_images_after_scan`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_relink_images_missing_collage_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_get_faces_for_node_and_projected_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_render_collage_image_returns_canvas`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_render_collage_image_with_source_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_collage_service::test_export_annotated_collage_writes_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_false_positive_gate_keys_load`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_multistage_and_verify_all_keys_round_trip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_multistage_defaults`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_false_positive_gate_defaults`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_load_config_resolves_relative_paths_against_config_location`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_config::test_frozen_bundle_defaults_use_user_data_dir`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_coral_detector.TestPureHelpers::test_find_edgetpu_lib_returns_string`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_coral_detector.TestPureHelpers::test_set_input_expands_batch_dim`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_coral_detector.TestPureHelpers::test_get_detections_parses_ssd_output`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_coral_detector.TestPureHelpers::test_get_detections_filters_low_scores`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestImageModel::test_create_and_retrieve`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestImageModel::test_unique_file_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestFaceEmbedding::test_embedding_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestFaceEmbedding::test_null_embedding_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestPersonModel::test_create_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database.TestPersonModel::test_cascade_delete_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_export_contains_only_database_and_manifest`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_export_derives_missing_relative_paths_without_touching_live_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_export_reports_images_outside_the_library_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_validate_rejects_wrong_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_validate_rejects_archive_without_manifest`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_validate_accepts_a_real_package`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_import_rebases_paths_onto_a_different_base_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_import_counts_files_missing_at_the_rebased_location`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_import_clears_crop_paths_that_have_no_local_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_import_refuses_a_non_empty_destination`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_export_import_then_match_reattaches_a_moved_photo`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_database_package_service::test_import_rejects_a_traversal_member`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestDecisionToDict::test_serialises_compact_summary`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestDecisionToDict::test_limits_ranked_lists_to_eight`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestComputeLayerActivations::test_returns_relu_hidden_layers`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestComputeLayerActivations::test_empty_for_unfitted_mlp`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestComputeLayerActivations::test_empty_for_non_mlp_object`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestComputeDecisionPath::test_traces_winner_through_hidden_layers`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_debug_info.TestComputeDecisionPath::test_returns_none_without_activations`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestTraining::test_train_produces_ensemble_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestTraining::test_empty_dataset_stays_untrained`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestTraining::test_single_person_uses_prototype_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestTraining::test_progress_callback_fires`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPrediction::test_known_person_is_recognized`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPrediction::test_each_person_maps_to_itself`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPrediction::test_stranger_is_rejected_as_outlier`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPrediction::test_missing_embedding_is_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPrediction::test_zero_vector_is_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestClassProbabilities::test_distribution_covers_all_people_and_sums_to_one`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestClassProbabilities::test_winner_matches_prediction`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestClassProbabilities::test_untrained_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestClassProbabilities::test_missing_embedding_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestClassProbabilities::test_prototype_mode_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestDecisionPath::test_debug_info_carries_winner_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestDecisionPath::test_prototype_mode_has_no_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPersistence::test_save_and_load_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPersistence::test_load_missing_file_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestPersistence::test_load_corrupt_file_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestOpenSetSafety::test_sim_floor_never_below_configured_min`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestOpenSetSafety::test_small_cohort_stays_in_prototype_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestOpenSetSafety::test_ambiguous_face_between_two_lookalikes_is_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestOpenSetSafety::test_imbalanced_tiny_cohort_does_not_avalanche`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestContinualLearning::test_more_examples_increase_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_classifier.TestContinualLearning::test_fingerprint_changes_with_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_pipeline_worker::test_invalid_mode_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_pipeline_worker::test_valid_modes_construct`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_pipeline_worker::test_rebuild_reset_deletes_stale_model_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_pipeline_worker::test_ai_stage_threads_detection_config`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_pipeline_worker::test_rebuild_reset_keeps_human_decisions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_unknown_face_is_assigned_and_logged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_debug_sample_face_reflects_current_model`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_debug_sample_face_none_without_model`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_assignment_decision_graph_is_lazy`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_assignment_records_decision_graph_with_debug`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_named_faces_are_never_touched`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_stranger_face_stays_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_low_confidence_detection_is_never_assigned`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_correction_veto_blocks_reassignment`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_unknown_group_face_can_be_promoted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_unchanged_data_reuses_model`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestTrainAndRecognize::test_changed_hidden_layers_force_retrain`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_confirm_marks_face_as_trusted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_confirm_assignments_batch_confirms_many`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_revert_assignments_batch_rejects_many`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_correct_assignments_batch_moves_many`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_correct_assignments_to_new_person_batch`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_correct_moves_face_and_records_corrections`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_correct_to_new_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_revert_restores_previous_state`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_revert_all_open_spares_reviewed_rows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_list_auto_assignments_returns_dto`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_force_retrains_even_when_data_unchanged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_review_list_survives_train_only_run`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestReviewActions::test_stale_assignment_is_hidden`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestStaleModelGuards::test_delete_model_removes_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestStaleModelGuards::test_recognition_skipped_when_all_people_vanished`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deep_recognition_service.TestStaleModelGuards::test_face_skipped_when_predicted_person_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_artistic_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_stable_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_no_extra_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_not_deoldified_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_case_insensitive_upper`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_case_insensitive_mixed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_complex_name_from_requirements`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_empty_stem_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalStem::test_stem_with_spaces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_jpg_uppercase_artistic`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_jpg_lowercase_stable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_no_extra_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_not_deoldified_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_complex_name_from_requirements`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_valami_stable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_jpeg_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_png_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractOriginalFilename::test_preserves_original_extension_case`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_simple_deoldified_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_deoldified_path_with_artistic`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_normal_path_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_filename_only_deoldified`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_filename_only_normal`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestIsDeoldifiedPath::test_case_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindOriginalForDeoldified::test_finds_original_exact_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindOriginalForDeoldified::test_finds_original_uppercase_extension_variant`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindOriginalForDeoldified::test_returns_none_when_original_not_in_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindOriginalForDeoldified::test_finds_original_in_different_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindOriginalForDeoldified::test_returns_none_for_non_deoldified_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindDeoldifiedForOriginal::test_finds_colorized_variant`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindDeoldifiedForOriginal::test_returns_none_when_no_colorized_in_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindDeoldifiedForOriginal::test_different_folder_is_matched`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindDeoldifiedForOriginal::test_different_stem_not_matched`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestPairingWithFaceData::test_original_has_faces_colorized_has_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestSyncPairData::test_copies_faces_and_metadata_into_empty_side`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestSyncPairData::test_skips_when_both_sides_have_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestSyncPairData::test_skips_when_both_sides_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestSyncPairData::test_copies_from_color_to_bw_when_bw_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestSyncPairData::test_metadata_only_counts_as_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractVariantLabel::test_artistic`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractVariantLabel::test_stable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractVariantLabel::test_plain_deoldified`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractVariantLabel::test_not_deoldified`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestExtractVariantLabel::test_case_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestFindAllDeoldifiedForOriginal::test_returns_every_variant_sorted_by_label`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestGetComparisonGroup::test_group_from_original_orders_bw_first`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestGetComparisonGroup::test_group_from_a_colorized_variant_is_identical`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_deoldified_pairing_service.TestGetComparisonGroup::test_no_group_for_lone_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_detection_service_persists_landmarks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_detection_service_uses_face_id_for_crop_naming`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_redetection_does_not_duplicate_manual_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_adaptive_escalation_rescues_faded_photo`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_adaptive_escalation_disabled_stays_strict`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detection_service::test_adaptive_escalation_skipped_when_strict_succeeds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestDetectionDataclass::test_clamp_within_bounds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestDetectionDataclass::test_as_tuple`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestDetectionDataclass::test_x2_y2`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestFactoryFallback::test_cpu_fallback_when_no_coral_config`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestFactoryFallback::test_cpu_fallback_when_coral_probe_fails`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestFactoryFallback::test_yunet_preferred_when_available`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestFaceDetectorInterface::test_detect_returns_list`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestFaceDetectorInterface::test_repr`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestCompositeDetector::test_secondary_adds_non_overlapping_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestCompositeDetector::test_collapses_primary_duplicate_via_anchor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestCompositeDetector::test_secondary_with_center_inside_primary_not_added`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_detectors.TestCompositeDetector::test_get_reaches_member_detector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_diagnostics.TestTFLiteDiagnostics::test_ok_true_when_active_backend_present`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_diagnostics.TestTFLiteDiagnostics::test_ok_false_without_backend`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_diagnostics.TestCheckTfliteBackend::test_reports_missing_model`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_diagnostics.TestCheckTfliteBackend::test_uses_first_available_backend_for_interpreter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_diagnostics.TestPrintDiagnostics::test_prints_summary`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_display_utils.TestEnumerateDisplays::test_returns_recording_display_info_list`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_display_utils.TestEnumerateDisplays::test_survives_broken_qgui`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_display_utils.TestActiveWindowBounds::test_returns_geometry_for_top_level_window`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_display_utils.TestActiveWindowBounds::test_none_for_missing_widget`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_display_utils.TestActiveWindowBounds::test_none_on_failure`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestResolveDriveFileId::test_returns_file_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestResolveDriveFileId::test_missing_record_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDownload::test_creates_parent_and_downloads`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveThumbRunnable::test_uses_existing_local_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveThumbRunnable::test_downloads_when_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveThumbRunnable::test_failed_without_remote_record`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveFetchRunnable::test_ready_when_already_local`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveFetchRunnable::test_downloads_and_emits_ready`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveFetchRunnable::test_silent_failure_suppresses_signal`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_drive_image_worker.TestDriveFetchRunnable::test_non_silent_failure_emits`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_lists_known_face_overlapping_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_small_unknown_nested_in_large_known_is_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_distant_unknown_is_not_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_two_known_faces_are_never_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_two_unknown_faces_are_never_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_unknown_overlapping_multiple_known_faces_is_listed_once`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_delete_unknown_faces_deletes_only_still_unknown_records`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[None]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[  ]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[?]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[??]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[???]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Unknown]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[unknown]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[UNKNOWN]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Unknown 96]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Unknown_96]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[unknown 1]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Unknown_003]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Ismeretlen]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[ismeretlen]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[Ismeretlen 5]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_true[ismeretlen_2]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_false[Alice]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_false[Bob Smith]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_false[Kov\xe1cs B\xe9la]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_false[John]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_is_placeholder_name_false[Anna-M\xe1ria]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_auto_named_person_overlapping_known_is_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_auto_named_person_can_be_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_same_person_overlapping_duplicates_are_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_same_auto_named_cluster_overlapping_duplicates_are_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_protected_catch_all_overlaps_are_not_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_same_person_non_overlapping_not_listed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_embedding_same_face_two_unknown_clusters_is_found`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_embedding_overlapping_different_people_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_embedding_same_face_no_overlap_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_duplicate_unknown_face_finder::test_embedding_named_face_is_kept_as_reference`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_embedding_service::test_embed_face_single`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_embedding_service::test_embed_manual_face_makes_face_comparable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_embedding_service::test_reembed_all_clears_and_recomputes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_exif_write::test_write_gps_and_date_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_exif_write::test_gps_and_date_coexist`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_exif_write::test_write_gps_survives_windows_lock`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_exif_write::test_write_gps_quality_preserved_no_recompress_blowup`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_exif_write::test_missing_file_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_face_bbox_for_export_clamps_pixel_boxes_to_image_bounds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_face_bbox_for_export_accepts_normalized_legacy_boxes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_exif_gps_dms_conversion_handles_direction_refs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_legacy_export_html_is_removed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_bundle_structure`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_family_tree_bundle`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_compare_group_with_multiple_variants`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_no_compare_group_for_lone_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_faces_use_percentage_boxes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_includes_faceless_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_writes_map_and_slideshow_parity_pages`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_objects_bbox_and_point`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_handles_image_with_no_objects`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_object_collection_records`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_slideshow_carries_objects_and_panel_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_export_astro_multiple_occurrences_same_object`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_assemble_update_package_without_csv`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_export_service::test_assemble_update_package_with_allowlist`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_crop_service::test_duplicate_crop_paths_are_repaired_per_face_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_crop_service::test_save_crop_for_face_does_not_reuse_another_face_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_crop_service::test_legacy_noncanonical_crop_path_is_migrated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_crop_service::test_rapid_reassignments_keep_face_crop_sources_stable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_date_service::test_photo_date_takes_priority`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_date_service::test_falls_back_to_estimated_and_flags_it`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_date_service::test_unknown_when_no_source`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_date_service::test_cache_returns_same_value_per_image_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_explain_missing_face_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_no_embedding_verdict`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_strong_named_match_is_eligible`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_weak_match_left_for_clustering`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_unknown_centroids_are_scored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_diagnostics_service::test_adaptive_threshold_lower_for_small_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_plausible_face_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_impossible_unassigned_is_droppable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_impossible_auto_assigned_is_droppable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_impossible_manual_assignment_is_flagged_not_dropped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_impossible_legacy_null_source_assignment_is_flagged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_manual_backend_face_is_never_dropped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_landmark_less_face_is_not_scanned`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_delete_faces_removes_rows_and_blobs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_geometry_cleanup_service::test_scan_and_delete_convenience`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_similar_faces_group_together`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_faces_without_embedding_are_singletons`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_group_order_is_stable_and_members_keep_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_representative_prefers_higher_quality`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_threshold_controls_granularity`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_deoldified_variants_stack_despite_embedding_drift`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_same_photo_different_people_not_merged_by_pairing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_grouping_service::test_pair_key_matches_browser_pairing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_payload_known_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_payload_excludes_name_when_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_payload_unknown_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_protected_person_treated_as_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_notes_included_when_enabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_notes_excluded_when_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_empty_face_list_valid_payload`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_export_embeds_exif_comment_and_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_export_xmp_when_exif_comment_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_existing_exif_preserved`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_raw_format_falls_back_to_sidecar`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_prefer_sidecar_only_never_touches_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_readonly_image_falls_back_to_sidecar`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_missing_image_record_returns_failed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_missing_file_on_disk_returns_failed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_batch_summary_counts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_no_overwrite_skips_when_block_exists`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_windows_lock_on_replace_still_embeds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_png_xmp_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_cancel_stops_before_next_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_service::test_no_cancel_processes_all`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_worker.TestFaceMetadataExportWorker::test_emits_summary_on_success`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_worker.TestFaceMetadataExportWorker::test_reports_progress`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_worker.TestFaceMetadataExportWorker::test_emits_failed_on_crash`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_metadata_export_worker.TestFaceMetadataExportWorker::test_cancel_delegates_to_token`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_high_quality_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_flags_low_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_flags_too_small`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_flags_bad_aspect_ratio`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_flags_blurry_crop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_evaluate_and_update_writes_orm_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_laplacian_variance_missing_file_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_laplacian_variance_invalid_image_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_laplacian_variance_sharp_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_quality_service::test_batch_evaluate_all_persists_and_reports_progress`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_timeline_view::test_empty_when_no_dates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_timeline_view::test_one_marker_per_dated_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_timeline_view::test_bounds_use_birth_and_death`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_timeline_view::test_bounds_fall_back_to_photo_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_timeline_view::test_merged_group_marker_has_count_badge`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_rejects_when_no_face_refound`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_confirms_overlapping_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_refines_oversized_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_adopts_landmarks_for_landmark_less_detection`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_rejects_geometrically_implausible_crop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verify_geometry_gate_honours_disable_flag`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_verifier_unavailable_passes_through`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_detection_service_drops_unverified_low_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_detection_service_keeps_verified_low_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_detection_service_exempts_high_confidence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_face_verification_service::test_config_loads_verification_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_root_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_child_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_great_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_stepchild_detected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_own_child_not_stepchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_father`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_mother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_paternal_grandfather`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_paternal_grandmother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_maternal_grandfather`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_ancestor_maternal_grandmother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_sibling`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_sibling_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_sibling_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_friend`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_case_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_no_path_before_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_b_with_digits_after`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_t_with_zero_sibling`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_f_with_digit_3`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_child_off_root_marker`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_spouse_of_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_valid_spouse_of_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_valid_stepchild_via_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParseExtendedCode::test_invalid_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_root_person_cikky`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_spouse_of_cikky`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_8th_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_8th_child_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_8th_child_1st_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_grandchild_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_great_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_own_child_not_stepchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeBasePaths::test_stepchild_annotation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_father`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_mother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_paternal_grandfather`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_paternal_grandmother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_maternal_grandfather`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_maternal_grandmother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_spouse_father`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_spouse_mother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_child_spouse_father`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_grandchild_spouse_mother`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_deep_ancestor_depth3`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeAncestors::test_deep_ancestor_depth4`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeSiblings::test_first_sibling`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeSiblings::test_second_sibling`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeSiblings::test_sibling_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeSiblings::test_sibling_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeFriends::test_single_friend`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeFriends::test_multi_comma`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeFriends::test_multi_space`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDescribeFriends::test_multi_comma_space`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_expand_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_expand_short_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_expand_backwards_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_describe_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_describe_two_element_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestRangeNotation::test_describe_single_element_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_simple_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_ancestor_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_sibling_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_friend_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_valid_multi_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_invalid_b_with_number`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_invalid_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestValidateExtendedCode::test_lowercase_normalised`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_all_four_roots_registered`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_cikky`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_gabor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_jerne`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_ildi`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_root_descendant`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_root_ancestor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestDefaultRootPersons::test_root_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestCustomRootNames::test_override_root_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestCustomRootNames::test_unknown_root_shows_letter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestCustomRootNames::test_i_and_j_roots`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_parse_first_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_parse_second_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_parse_spouse_brought_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_describe_first_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_describe_second_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_describe_spouse_brought_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_root_spouse_h`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_zero_spouse_still_valid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_validate_h_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestMultiSpouseSuffix::test_invalid_h_zero_spouse_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_parse_brace`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_parse_brace_first_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_describe_brace_second_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_describe_brace_first_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_brace_canonical_form`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_brace_must_precede_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestParentBraces::test_brace_not_before_spouse_zero`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_parse_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_parse_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_parse_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_parse_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_root_case_preserved`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_numeric_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_grandchild`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_short_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_describe_external_ancestor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_validate_external_field`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_validate_external_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_validate_external_rejects_internal`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_validate_external_rejects_empty_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_interpreter.TestExternalCodes::test_main_field_rejects_external`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_builtin_scheme_mirrors_legacy_grammar`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_custom_letters_validate_and_describe`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_legacy_letters_rejected_under_custom_scheme`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_unlisted_roots_allowed_when_enabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_disabled_extras_are_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_enabled_extras_work_with_custom_letters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_disabled_marker_means_letter_is_invalid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_active_scheme_drives_default_validation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_code_is_relational_marker`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_code_is_relational_marker_custom_letters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_scheme_problems_detects_mistakes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_scheme_example_codes_use_scheme_letters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_store_save_list_get_delete`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_store_rejects_builtin_mutation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_store_duplicate_creates_editable_copy`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_store_active_scheme_persistence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_load_active_falls_back_when_file_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_store_export_import_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_import_rejects_foreign_json`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_person_dialog_valid_code_is_canonicalised`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_person_dialog_invalid_code_saved_with_inline_marker`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_person_dialog_marker_toggles_live`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_person_dialog_flags_preexisting_invalid_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_person_dialog_help_follows_active_scheme`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_schemes::test_scheme_dialog_smoke`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_empty_family_code_is_accepted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_family_code_examples_are_parsed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_invalid_family_code_is_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_spec_defined_simple_codes_are_accepted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_range_friend_code_is_valid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_extended_family_codes_are_accepted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_invalid_extended_family_codes_are_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_extended_codes_have_no_simple_tree_derivation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_duplicate_family_code_is_allowed_at_db_level`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_service_reports_duplicate_family_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_friend_codes_are_not_unique`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_friend_codes_can_be_duplicated_at_db_level`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_identity_codes_not_unique_at_db_level_but_service_warns`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_migration_converts_legacy_unconditional_unique_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_identity_codes_remain_unique`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_family_code_relationships_are_derived`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_service::test_legacy_persons_without_family_code_survive_migration`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_first_spouse_uses_zero_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_further_marriages_are_numbered`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_spouse_of_a_spouse_record_is_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_child_uses_next_free_digit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_child_of_spouse_resolves_to_base`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_child_of_numbered_spouse_is_braced`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_parent_code_is_derived`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_no_code_yields_no_suggestion`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_suggesters_follow_active_scheme`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_add_spouse_with_marriage_period`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_set_marriage_period_updates_existing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_code_suggest::test_regenerate_links_from_codes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_spouse_is_canonical_and_not_duplicated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_parent_child_validation_and_sibling_derivation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_search_images_for_two_people_modes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_relationship_filter_blocks_unmatched_pairs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_search_images_by_comma_name_terms_and_allow_others`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_parse_braced_child_derives_both_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_parse_numbered_spouse_is_spouse_of_base`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_short_child_form_has_no_second_parent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_link_derived_parents_braced_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_link_derived_parents_numbered_spouse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_link_skips_missing_second_parent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_is_parent_child_derives_second_parent_without_rows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_update_person_auto_links_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_service::test_search_images_by_criteria_detail_filters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_renders_hierarchy`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_non_member_filter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_lists_relationships`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_remove_relationship`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_member_toggle`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_add_spouse_via_service`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_add_dialog_prefills_spouse_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_add_new_spouse_creates_coded_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_add_child_links_both_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_editor_save_own_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_shows_whole_forest_by_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_regenerate_button`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_add_dialog_offers_only_opposite_gender`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_quick_add_spouse_stores_dates_and_gender`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_focus_shows_lineage_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_selection_populates_detail`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_panel::test_panel_quick_add_child`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_build_tree_assigns_generations`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_build_tree_edges_reference_included_nodes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_build_tree_generation_limits`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_build_graph_assigns_forest_generations`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_build_lineage_excludes_collateral_relatives`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_node_thumbnail_falls_back_to_face_crop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_coparent_inferred_for_single_parent_linked_children`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_coparent_not_inferred_when_two_real_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_coparent_not_inferred_with_ambiguous_remarriage`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_graph_carries_marriage_dates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_lone_person_tree`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_non_members_excluded_when_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_non_member_root_still_included`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_lowest_common_ancestor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_relationship_path_kinds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_relationship_path_unrelated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_render_tree_json_shape`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_settings_singleton_and_update`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_service::test_is_family_tree_member_defaults_true`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_set_graph_draws_one_box_per_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_set_graph_empty_is_safe`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_boxes_positioned_by_generation`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_selected_and_focus_use_distinct_colors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_zoom_in_out_reset`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_photos_are_loaded_lazily`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_generation_numbers_in_left_gutter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_selection_marks_ancestors_and_descendants`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_siblings_share_one_parent_bus`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_selecting_child_highlights_only_its_path_up`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_couple_has_no_extra_bridge_line`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_marriage_date_label_is_drawn`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_single_parent_siblings_share_one_bus`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_selecting_single_parent_child_highlights_both_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_spouses_are_placed_side_by_side`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_family_tree_view::test_selecting_parent_highlights_all_children_down`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1954.03.12-Precision.EXACT-earliest0-latest0-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1954-03-12-Precision.EXACT-earliest1-latest1-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1954.03-Precision.MONTH-earliest2-latest2-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1954-Precision.YEAR-earliest3-latest3-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1920 k\xf6r\xfcl-Precision.YEAR-earliest4-latest4-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[kb. 1920-Precision.YEAR-earliest5-latest5-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[~1920-Precision.YEAR-earliest6-latest6-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1920?-Precision.YEAR-earliest7-latest7-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[cca 1920-Precision.YEAR-earliest8-latest8-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1969-1976-Precision.RANGE-earliest9-latest9-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1969\u20131976-Precision.RANGE-earliest10-latest10-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1970-es \xe9vek-Precision.DECADE-earliest11-latest11-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1970s-Precision.DECADE-earliest12-latest12-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1945 el\u0151tt-Precision.BEFORE-None-latest13-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1945 ut\xe1n-Precision.AFTER-earliest14-None-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[2008.05.03 14:22:01-Precision.EXACT-earliest15-latest15-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[2008:05:03 14:22:01-Precision.EXACT-earliest16-latest16-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[2008.05.03 14.22.01-Precision.EXACT-earliest17-latest17-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[2008:05:03-Precision.EXACT-earliest18-latest18-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_parse_matrix[1954-03-12T09:30-Precision.EXACT-earliest19-latest19-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_unknown[]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_unknown[   ]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_unknown[None]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_unknown[no date here]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_unknown[??]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_messy_year_extraction`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_estimated_with_question_mark_combo`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_sort_key_orders_chronologically`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_range_unordered_input_normalised`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_fuzzy_date::test_display_labels`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_connectivity.TestIsOnline::test_returns_true_when_socket_connects`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_connectivity.TestIsOnline::test_returns_false_on_os_error`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_connectivity.TestRequireOnline::test_passes_when_online`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_connectivity.TestRequireOnline::test_raises_gdrive_offline_error_when_offline`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestInMemoryStore::test_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestInMemoryStore::test_list_accounts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestInMemoryStore::test_delete_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestGoogleCredentialStoreFallback::test_save_and_load`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestGoogleCredentialStoreFallback::test_secret_not_in_plaintext_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestGoogleCredentialStoreFallback::test_account_index_lists_email`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestGoogleCredentialStoreFallback::test_delete_removes_credential`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_credential_store.TestGoogleCredentialStoreFallback::test_roundtrip_survives_new_instance`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncOpen::test_downloads_db_into_cache`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncOpen::test_cleans_up_cache_on_download_failure`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncOpen::test_raises_when_offline`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncSync::test_uploads_local_copy`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncSync::test_raises_without_open_session`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncSync::test_raises_when_local_file_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_db_sync.TestGDriveDbSyncClose::test_releases_active_reference`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_missing_file_is_silent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_loads_whitelisted_vars`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_ignores_unknown_vars`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_does_not_overwrite_existing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_strips_quotes_and_export_prefix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_ignores_comments_and_blanks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_dotenv_loader.TestLoadDotenv::test_malformed_lines_are_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestFromRaw::test_builds_drive_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestFromRaw::test_invalid_size_becomes_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestBuildDriveClient::test_returns_client_for_stored_account`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestBuildDriveClient::test_raises_when_no_credentials`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_account_property`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_list_folder_returns_drive_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_find_child_returns_none_when_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_get_metadata`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_create_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_upload_file_creates_new_remote_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_upload_file_updates_existing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_upload_file_missing_source_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_download_file_writes_bytes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_delete_file_ignores_404`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_client.TestGoogleDriveClient::test_offline_raises_without_retry`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_empty_folder_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_single_image_is_indexed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_image_downloaded_to_mirror`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_non_image_not_indexed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_remote_image_record_created`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_image_file_path_is_in_mirror`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestDriveScanBasic::test_multiple_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestSkipReservedFolders::test_database_folder_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestSkipReservedFolders::test_metadata_folder_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestSkipReservedFolders::test_images_in_regular_subfolder_included`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestIncrementalScan::test_unchanged_file_not_redownloaded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestIncrementalScan::test_changed_file_redownloaded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_drive_scan_service.TestIncrementalScan::test_second_scan_same_image_no_duplicate_records`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_recognised_inputs[https://drive.google.com/drive/folders/1aBcDeFgHiJkLmNoPqRsTuVwXyZ?usp=sharing-1aBcDeFgHiJkLmNoPqRsTuVwXyZ]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_recognised_inputs[https://drive.google.com/drive/u/0/folders/abcdef1234567890-abcdef1234567890]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_recognised_inputs[https://drive.google.com/open?id=ZyXwVuTsRqPoNmLkJiHgFeDcBa987654-ZyXwVuTsRqPoNmLkJiHgFeDcBa987654]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_recognised_inputs[1a2b3c4d5e6f7g8h9i0j-1a2b3c4d5e6f7g8h9i0j]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_recognised_inputs[   abcdef1234567890   -abcdef1234567890]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[  ]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[not-a-url]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[ftp://example.com/folder]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[https://example.com/something]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_folder_url.TestParseFolderInput::test_invalid_inputs_return_none[https://drive.google.com/drive/]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestBundledConstants::test_scopes_include_drive_and_profile`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestBundledConstants::test_redirect_host_is_localhost`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestBundledConstants::test_client_id_is_non_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestIsConfigured::test_false_when_secret_is_placeholder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestIsConfigured::test_true_when_both_values_are_real`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestClientConfig::test_installed_client_shape`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_config.TestClientConfig::test_env_override_for_client_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_raises_config_error_when_not_configured`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_raises_offline_error_when_unreachable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_raises_config_error_when_oauthlib_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_success_returns_stored_credential`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_cancelled_flow_raises_oauth_cancelled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRunLoginFlow::test_generic_failure_raises_runtime_error`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRestoreCredentialsObject::test_rebuilds_google_credentials`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestRestoreCredentialsObject::test_invalid_expiry_is_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestFetchAccountEmail::test_returns_email_from_userinfo`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_oauth_flow.TestFetchAccountEmail::test_falls_back_when_userinfo_fails`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestGDrivePrefs::test_is_ready_requires_account_and_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestLoadSave::test_load_returns_defaults`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestLoadSave::test_save_and_load_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestLoadSave::test_load_normalises_empty_strings_to_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestUpdateLastSync::test_writes_explicit_timestamp`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestUpdateLastSync::test_writes_utc_now_when_omitted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_preferences.TestClearAccount::test_clears_account_and_folder_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestOpen::test_first_open_creates_folder_structure`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestOpen::test_existing_db_is_downloaded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLocking::test_fresh_lock_blocks_second_session`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLocking::test_stale_lock_is_overridden`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLocking::test_close_releases_lock`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestSync::test_sync_uploads_dirty_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestSync::test_sync_no_op_when_clean`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestSync::test_failed_upload_keeps_local_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLockInfoStaleDetection::test_recent_heartbeat_is_fresh`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLockInfoStaleDetection::test_old_heartbeat_is_stale`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_project_session.TestLockInfoStaleDetection::test_garbled_heartbeat_treated_as_stale`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestImageRef::test_local_ref_not_remote`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestImageRef::test_remote_ref_is_remote`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestImageRef::test_suffix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestImageRef::test_frozen`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider::test_local_is_storage_provider`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider::test_gdrive_is_storage_provider`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_description_is_root_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_repr`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_iter_images_finds_jpg_png`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_iter_images_excludes_non_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_iter_images_empty_extensions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_iter_images_local_path_set`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_open_image_yields_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_open_image_raises_if_no_local_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestLocalStorageProvider::test_iter_images_case_insensitive_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_description_is_folder_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_description_fallback_to_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_repr`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_iter_images_finds_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_iter_images_skips_folders`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_iter_images_ref_has_remote_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_iter_images_ref_has_size`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_open_image_downloads_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_open_image_cleans_up_after_context`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_open_image_records_download_call`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_open_image_raises_without_remote_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_gdrive_storage_provider.TestGoogleDriveStorageProvider::test_open_image_cleans_up_on_exception`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[True-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[False-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[1-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[true-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[YES-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[on-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[0-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool[off-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_read_bool_missing_uses_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_create_geocoding_service_force_offline`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_create_geocoding_service_force_online`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_create_geocoding_service_reads_settings_when_not_forced`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_factory::test_create_geocoding_service_provider_failure_stays_offline`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_online_suggest_then_cache_hit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_offline_uses_local_suggestions_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_offline_never_calls_provider`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_provider_error_degrades_gracefully`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_geocode_cached`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_service::test_record_address_use_upsert`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker::test_to_dicts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker.TestSettlementSuggestWorker::test_emits_settlements`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker.TestSettlementSuggestWorker::test_emits_failed_on_error`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker.TestStreetSuggestWorker::test_emits_streets`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker.TestGeocodeWorker::test_emits_geocode_result`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_geocoding_worker.TestGeocodeWorker::test_emits_none_when_not_found`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_github_release::test_build_release_notes_includes_issue_links_and_commit_comments`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_github_release::test_build_release_notes_handles_no_issue_references`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_github_release::test_find_previous_release_tag_prefers_latest_github_release`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_github_release::test_collect_commit_notes_reads_all_commits_since_previous_release`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_selecting_group_lists_members`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_remove_member_updates_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_name_edit_auto_saves_on_focus_out`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_switching_group_persists_pending_edit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_save_button_persists`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_invalid_name_not_persisted_silently_on_switch`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_member_images_passes_person_image_paths`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_group_manager_widget::test_member_detail_opens_editor_and_refreshes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestTranslation::test_t_english_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestTranslation::test_t_hungarian`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestTranslation::test_t_with_format_kwargs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestTranslation::test_unknown_key_returns_key`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestTranslation::test_current_language`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestLanguagePrefs::test_set_language_persists`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestLanguagePrefs::test_set_language_rejects_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestLanguagePrefs::test_load_prefs_reads_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_i18n.TestLanguagePrefs::test_load_prefs_ignores_invalid_language`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestScan::test_fragments_of_same_person_are_proposed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestScan::test_dissimilar_persons_not_proposed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestScan::test_named_and_protected_persons_excluded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestScan::test_diff_correction_suppresses_pair`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestApply::test_apply_merges_transitive_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service.TestApply::test_apply_ignores_unknown_person_ids`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_repair_service::test_scan_then_apply_roundtrip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_rename_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_rename_protected_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_merge_persons_moves_faces_and_deletes_source`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_merge_persons_respects_merge_exclusions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_merge_same_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_remove_face_from_cluster_splits_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_reassign_face_moves_to_target`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_delete_person_unassigns_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_delete_person_hard_deletes_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_delete_protected_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_exclude_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_set_face_uncertainty_and_note`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_set_face_merge_excluded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_set_and_clear_person_thumbnail`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_record_same_and_different`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_list_persons_and_get_faces_for_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_cleanup_empty_unknown_persons`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_merge_all_excluded_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_reassign_faces_bulk`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_identity_service::test_restore_face_assignments`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnorePersonForever::test_ignored_person_does_not_reappear_after_rerun`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnorePersonForever::test_plain_delete_lets_person_reappear`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnorePersonForever::test_named_person_cannot_be_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnorePersonForever::test_protected_person_cannot_be_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnoreFaceForever::test_single_face_ignore_keeps_person_with_remaining_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnoreFaceForever::test_ignoring_last_face_removes_empty_unknown_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnoreFaceForever::test_named_person_face_cannot_be_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestIgnoreFaceForever::test_unassigned_face_can_be_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestSuppressionThreshold::test_dissimilar_new_face_is_not_suppressed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestSuppressionThreshold::test_disabled_filter_suppresses_nothing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestUnignore::test_unignore_makes_face_recognisable_again`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestUnignore::test_unignore_missing_entry_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ignored_face_service.TestListMetadata::test_entry_keeps_thumbnail_and_source_snapshot`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_cursor_reset::test_reset_after_resize_drag_restores_cross`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_cursor_reset::test_exit_edit_resets_cursor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_cursor_reset::test_cancel_resets_cursor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_cursor_reset::test_reset_drains_application_override_cursor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_compare_composite_left_right`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_ensure_compare_bgr_resizes_right_to_left_shape`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_picker_change_recomposes_with_chosen_variant`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_combos_visible_only_in_compare_with_three_members`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_clear_for_new_image_keeps_remembered_mode_and_split`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_compare_dragged_updates_split_and_recomposites`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_drag_while_not_in_compare_only_records_split`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_deoldified_compare::test_label_compare_divider_x_requires_pixmap`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_place_create::test_create_typed_place_button`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_place_create::test_create_typed_place_without_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_place_create::test_create_typed_place_from_rename_field`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_empty_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_groups_by_parent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_display_name_is_leaf`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_total_counts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_face_counts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_folders_excluded_faces_not_counted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_images_returns_only_matching_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_images_does_not_include_subfolders`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_images_face_stats`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_images_empty_folder`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_list_images_thumbnail_cache_key`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_get_image_faces_returns_tuples`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_get_image_faces_excludes_excluded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_get_image_faces_missing_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_assignment_does_not_change_other_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_browser_service::test_face_count_after_reassignment_stays_consistent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestFromPosix::test_simple`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestFromPosix::test_backslash`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestFromPosix::test_deep`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestFromPosix::test_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestFromPosix::test_unicode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_not_configured_by_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_set_and_get`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_set_invalid_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_persists_to_json`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_loads_from_json`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestLibraryRootAccess::test_missing_root_returns_path_not_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_under_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_deep_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_outside_root_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_no_root_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_forward_slashes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMakeRelative::test_unicode_filename`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestResolvePath::test_relative_path_with_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestResolvePath::test_legacy_absolute_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestResolvePath::test_relative_without_root_falls_through_to_file_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestResolvePath::test_no_path_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestIsPathUnderRoot::test_under`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestIsPathUnderRoot::test_not_under`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestIsPathUnderRoot::test_no_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestDetectCommonRoot::test_detects_common_prefix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestDetectCommonRoot::test_no_records_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestDetectCommonRoot::test_ignores_already_migrated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_basic_migration`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_uses_posix_separators`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_skips_outside_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_validate_missing_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_no_validate_accepts_missing_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_persists_library_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestMigration::test_progress_callback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestSingleton::test_init_and_get`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestSingleton::test_reinit_on_db_change`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestSingleton::test_resolve_image_path_no_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestSingleton::test_resolve_image_path_with_root`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestSingleton::test_resolve_none_when_no_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestScanServiceIntegration::test_relink_by_relative_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_library_service.TestScanServiceIntegration::test_backfills_relative_path_on_existing_records`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_single_person_list_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_multi_persons_list_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_multi_persons_cols_mode`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_cols_mode_auto_expands_columns`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_empty_persons`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_no_gps_exports_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_gps_from_exif`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_gps_image_coords_take_priority_over_exif`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_no_exif_fallback_to_filename_date`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_no_date_returns_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_location_from_place`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_anonymous_place_not_exported_as_location`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_utf8_accents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_escaping_comma_in_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_selective_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_places_date_location_gps_before_person_columns`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_multiple_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_csv_progress_callback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_basic`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_gps_numeric`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_utf8_accents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_cols_mode_separate_person_columns`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_uses_same_column_order_as_csv`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_normalizes_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_metadata_export_service::test_export_xlsx_large_batch`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_find_missing_lists_only_records_without_a_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_hash_match_is_confident`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_same_name_different_content_is_demoted_and_not_confident`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_without_hash_verification_deeper_path_ranks_first`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_no_candidate_when_the_name_is_nowhere`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_progress_and_checkpoint_are_called`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_apply_updates_absolute_and_relative_paths`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_matcher::test_apply_refuses_to_point_two_records_at_one_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_repair_dialog::test_folders_are_prefilled_and_deduplicated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_repair_dialog::test_confident_rows_are_pre_checked_and_others_are_not`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_repair_dialog::test_decisions_only_include_checked_rows_with_a_candidate`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_repair_dialog::test_select_helpers_toggle_rows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_image_path_repair_dialog::test_rows_carry_their_image_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSplitUnknownHealing::test_two_unknowns_on_one_image_are_merged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSplitUnknownHealing::test_whole_losing_unknown_is_absorbed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSafety::test_different_people_not_merged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSafety::test_diff_correction_blocks_merge`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSafety::test_two_named_persons_conflict_skipped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSafety::test_unknown_pulled_into_named_anchor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_consistency_service.TestSafety::test_disabled_config_is_noop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_overlapping_duplicate_of_assigned_face_is_removed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_duplicate_of_manual_face_is_removed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_non_overlapping_same_person_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_overlapping_different_person_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_duplicate_across_different_images_is_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_two_unassigned_duplicates_keeps_the_better_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_two_unassigned_different_people_overlap_are_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_disabled_config_is_a_noop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_intra_image_duplicate_service::test_multiple_duplicates_all_removed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobSpecOrdering::test_scoped_jobs_sort_before_full_jobs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobSpecOrdering::test_same_priority_uses_fifo_sequence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobSpecOrdering::test_job_id_is_generated_when_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobStatusPercent::test_zero_when_total_not_positive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobStatusPercent::test_rounds_processed_fraction`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_job_types.TestJobStatusPercent::test_caps_at_one_hundred`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_empty_input`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_single_label_prefers_above_center`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_selected_face_wins_overlap`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_zero_size_label_uses_face_origin`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_leader_line_when_placement_not_adjacent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_label_placement.TestPlaceLabels::test_clamps_position_within_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_canonical_frontal_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_mildly_tilted_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_small_face_same_ratios`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_profile_face_bunched_eyes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_three_quarter_view_nose_toward_eye`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_wide_set_eyes_baby_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestPlausibleGeometryPasses::test_profile_face_with_tilt`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_vertical_eye_line`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_nose_above_eyes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_mouth_collapsed_onto_eyes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_inter_ocular_too_narrow`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_inter_ocular_too_wide`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_nose_off_to_the_side`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_mouth_corners_swapped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestImplausibleGeometryRejected::test_scrambled_collinear_landmarks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestFailOpen::test_none_landmarks_pass`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestFailOpen::test_wrong_count_passes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestFailOpen::test_non_finite_passes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestFailOpen::test_coincident_eyes_degenerate_passes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_landmark_geometry.TestFailOpen::test_zero_size_box_passes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestSetupLogging::test_adds_stderr_handler`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestSetupLogging::test_optional_file_handler`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestSetupLogging::test_second_call_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestSetupLogging::test_quiets_noisy_third_party_loggers`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestQLogHandler::test_emits_formatted_message`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_logging_setup.TestQLogHandler::test_format_matches_setup_logging`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_main::test_parse_args_defaults`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_main::test_parse_args_debug_and_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_main::test_main_module_importable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_main_window::test_main_window_construct`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_main_window::test_path_repair_dialog_opens_with_the_current_folders`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_set_person_thumbnail_marks_manual`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_set_person_thumbnail_wrong_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_set_person_thumbnail_missing_crop_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_clear_manual_person_thumbnail_resets_to_auto`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_auto_thumbnail_not_overwritten_by_face_crop_refresh`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_exclude_face_clears_manual_thumbnail_fallback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_set_place_thumbnail_marks_manual`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_set_place_thumbnail_missing_file_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_ensure_thumbnail_skips_manual`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_ensure_thumbnail_falls_back_when_manual_file_gone`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_clear_manual_place_thumbnail`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_reassign_face_invalidates_manual_thumbnail`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_merge_places_inherits_manual_thumbnail_flag`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_manual_thumbnail::test_merge_places_keeps_target_manual_thumbnail`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_normalised_unit_vector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_normalised_none_and_zero`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_person_centroid_from_face_embeddings`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_person_centroid_none_without_embeddings`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_fallback_scores_ranks_similar_people`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_embedding_uses_recognition_service`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_embedding_falls_back_to_centroids`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_face_missing_face_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_face_uses_embedding`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_faces_averages_selected_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_match_scores_for_person_uses_profile_centroid`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring::test_overlay_deep_without_model_keeps_scores`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring_deep.TestDeepProbabilities::test_returns_distribution_for_known_query`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring_deep.TestDeepProbabilities::test_no_config_uses_default_dir_and_misses`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring_deep.TestDeepProbabilities::test_disabled_engine_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring_deep.TestOverlay::test_overrides_known_keeps_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_match_scoring_deep.TestOverlay::test_no_model_returns_scores_unchanged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_move_project_issues_ready::test_resolve_owner_type_uses_repository_owner_for_organizations`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_move_project_issues_ready::test_resolve_owner_type_uses_repository_owner_for_users`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_move_project_issues_ready::test_referenced_issue_numbers_falls_back_to_checked_out_commit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_move_project_issues_ready::test_resolve_status_options_returns_requested_option_ids`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_move_project_issues_ready::test_move_project_issues_by_status_moves_only_issue_items_with_source_status`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_disabled_falls_back_to_single_verifier_keep`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_disabled_falls_back_to_single_verifier_drop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_too_few_technologies_falls_back_to_yunet`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_quorum_confirms_keeps_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_single_confirmation_drops_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_quorum_without_yunet_keeps_original_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_all_reject_drops_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_weighted_technology_keeps_face_alone`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_lone_yunet_still_dropped_with_weighted_tech_present`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_min_confirmations_three`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_real_opencv_technologies_are_available`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_multi_stage_face_validator::test_insightface_abstains_when_unavailable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_nominatim_provider::test_parse_settlements_dedup_and_names`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_nominatim_provider::test_parse_streets`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_nominatim_provider::test_geocode_downgrades_level_when_house_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_nominatim_provider::test_geocode_full_address_level`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_nominatim_provider::test_geocode_empty_result`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_create_and_find`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_create_empty_name_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_get_or_create_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_update_object`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_delete_cascades_occurrences`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_add_occurrence_idempotent_same_point`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_same_object_multiple_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_add_occurrence_bbox`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_thumbnail_specs_and_manual`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_update_occurrence_bbox`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_update_and_remove_occurrence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_occurrences_for_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_list_objects_counts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_list_objects_name_filter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_search_by_name_description_note_accent_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_person_links_roles`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_person_link_protected_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_person_link_bad_role_rejected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_remove_person_link`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_merge_preserves_everything`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_merge_dedups_duplicate_occurrence`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_merge_self_is_noop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_universal_search_finds_object_images`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_object_service::test_search_suggestions_include_objects`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_assigned_box_wins_over_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_two_unknown_boxes_keep_one`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_two_different_named_persons_are_untouchable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_non_overlapping_boxes_are_kept`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_embedding_guard_protects_close_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_nested_box_is_resolved_by_containment`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_unknown_group_box_loses_to_named`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_overlap_resolution_service.TestOverlapResolution::test_manual_box_beats_assigned_auto_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestPerfRecord::test_avg_ms`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestPerfRecord::test_avg_ms_zero_when_no_samples`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestRecordAndTimedBlock::test_record_accumulates_stats`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestRecordAndTimedBlock::test_timed_block_records_elapsed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestRecordAndTimedBlock::test_timed_decorator_records_function`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestRecordAndTimedBlock::test_slow_operation_logs_warning`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestPerfCounter::test_hit_miss_and_hit_rate`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestPerfCounter::test_hit_rate_zero_without_samples`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestResetAndReport::test_reset_clears_records_and_counters`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestResetAndReport::test_report_includes_operations_and_rss`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestMemoryMb::test_returns_non_negative_float`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_perf.TestAttachSqlTiming::test_records_sql_total`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_hard_delete_removes_person_and_all_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_hard_deleted_person_does_not_reappear_after_recluster`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_other_persons_and_faces_are_untouched`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_missing_crop_file_does_not_crash`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_delete_with_ignore_snapshots_embeddings_and_deletes_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_ignored_person_suppressed_on_redetection`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_delete_without_ignore_adds_nothing_to_ignore_list`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_protected_person_cannot_be_deleted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_full_delete.TestFullDelete::test_default_mode_still_unassigns_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_create_returns_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_create_trims_whitespace`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_create_empty_name_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_duplicate_name_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_duplicate_name_case_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_list_groups_alphabetical`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_rename_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_rename_to_existing_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_delete_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_get_or_create_returns_existing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_renames_and_adds_note`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_note_only_keeps_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_empty_description_clears_it`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_empty_name_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_duplicate_name_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_same_name_allowed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestCreateGroup::test_update_group_missing_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_set_person_groups_single`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_set_person_multiple_groups`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_remove_person_from_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_clear_all_groups`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_multiple_persons_same_group`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_protected_person_cannot_have_groups`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_member_count_in_list`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_cascade_delete_group_removes_memberships`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestMembership::test_duplicate_group_ids_deduplicated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_add_creates_membership`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_add_is_idempotent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_add_protected_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_add_unknown_group_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_remove_deletes_membership`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_group_service.TestAddRemoveMember::test_remove_non_member_returns_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestNormalize::test_lowercase`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestNormalize::test_accent_stripped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestNormalize::test_mixed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestNormalize::test_no_accents_unchanged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestNormalize::test_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonEntry::test_normalized_computed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonEntry::test_display_text_defaults_to_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonEntry::test_display_text_custom`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonEntry::test_search_uses_name_not_display_text`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_empty_query_returns_all`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_whitespace_only_returns_all`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_case_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_case_insensitive_upper`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_accent_insensitive_panni`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_partial_match`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_no_results`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_max_results`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_prefix_ranked_first`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_no_cross_contamination_same_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_accent_o_variants`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_accent_o_with_accented_query`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_not_found_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersons::test_subset_not_modified`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_empty_query_returns_all_in_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_preserves_incoming_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_does_not_rerank_by_prefix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_filters_accent_insensitive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_no_results`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestFilterEntries::test_max_results`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectReset::test_preselect_best_match_selects_top_when_match_sorted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectReset::test_preselect_returns_false_without_match_sort`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectReset::test_clear_selection_drops_previous_target`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectReset::test_set_current_by_id_scrolls_selection_into_view`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectReset::test_set_current_by_id_missing_target_scrolls_to_top`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectMatchSort::test_default_sort_orders_list_by_score_desc`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectMatchSort::test_default_sort_does_not_persist_global_preference`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectMatchSort::test_search_preserves_score_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectMatchSort::test_no_default_sort_keeps_name_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectMatchSort::test_percentage_shown_when_match_sorted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonIsUnknown::test_named_person_is_not_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonIsUnknown::test_auto_named_is_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonIsUnknown::test_protected_is_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonIsUnknown::test_missing_attributes_default_false`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersonsHideUnknown::test_base_list_hides_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersonsHideUnknown::test_base_list_keeps_unknown_when_flag_off`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersonsHideUnknown::test_search_reveals_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestSearchPersonsHideUnknown::test_search_for_named_unaffected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectUnknown::test_base_list_hides_unknown_by_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectUnknown::test_search_reveals_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectUnknown::test_opt_out_shows_unknown_in_base`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_search.TestPersonSearchSelectUnknown::test_match_sort_keeps_unknown_visible`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_persons_with_counts`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_persons_thumbnail_fallback_to_crop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_persons_filter_by_name_and_code`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_update_person_normalises_empty_strings`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_rename_rejects_empty_and_protected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_set_thumbnail_from_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_set_thumbnail_missing_crop_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_set_thumbnail_wrong_person_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_set_thumbnail_face_not_found_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_face_crops_orders_by_confidence_and_skips_excluded`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_images_for_person_returns_distinct_sorted_paths`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_persons_includes_groups_and_flags`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_list_persons_thumbnail_fallback_skips_excluded_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_rename_person_clears_auto_named`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_update_person_ignores_unknown_and_name_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_update_person_writes_all_editable_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_update_person_with_family_code_links_derived_parents`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_link_derived_parents_swallows_errors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_person_service::test_require_person_raises_for_missing_id`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_persons_panel_refresh::test_mark_stale_refreshes_when_visible`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_persons_panel_refresh::test_mark_stale_defers_until_shown_when_hidden`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_build_display_name_levels`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_build_place_label_keeps_original_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_classify_settlement_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_classify_with_street`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_classify_full_address`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_create_place_from_full_address`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_create_requires_settlement`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_set_manual_coordinates_overrides_source`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_update_place_address_rebuilds_display`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_custom_name_survives_address_save`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_update_place_address_without_name_falls_back_to_display`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_search_matches_structured_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_find_places_by_settlement`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_address::test_migrate_display_name_backfill`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_search_select::test_enter_on_unmatched_query_requests_create`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_search_select::test_enter_on_matching_query_selects_existing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_search_select::test_enter_on_empty_query_does_nothing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_search_select::test_double_click_emits_place_double_clicked`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_search_select::test_double_click_without_selection_is_silent`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_place_create_and_image_link`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_assign_existing_place_by_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_scan_processes_exif_gps_without_blocking_import`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_exif_gps_processing_error_does_not_abort_scan`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_merge_places_moves_images_and_preserves_source_data`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_merge_anonymous_place_clears_is_anonymous`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_merge_anonymous_target_clears_is_anonymous`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_name_place_persists_across_sessions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_list_persons_for_place_uses_face_assignments`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_place_filters_by_date_and_image_count`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_service::test_image_browser_filters_by_place`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_normalize_place_type_falls_back_to_area`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_default_radius_for_each_type`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_create_place_defaults_to_area`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_create_place_explicit_type_and_radius`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_coordinates_updates_place`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_coordinates_clears_when_both_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_coordinates_rejects_partial`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_coordinates_rejects_out_of_range`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_find_nearby_filters_by_type`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_find_nearby_use_place_radius`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_exif_prefers_exact_over_area`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_exif_falls_back_to_area_when_no_exact`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_exif_creates_anonymous_exact_when_nothing_matches`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_parent_and_descendants`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_parent_rejects_cycles`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_place_type_resets_radius_to_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_set_place_type_explicit_radius_wins`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_list_places_type_filter_and_summary`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_place_types::test_migrate_place_types_backfills_nulls`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_post_buffer_release::test_build_release_post_text_includes_successful_platforms_and_url`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_post_buffer_release::test_select_target_channel_prefers_named_match`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_post_buffer_release::test_empty_buffer_post_mode_falls_back_to_default`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_post_x_release::test_build_release_post_text_includes_successful_platforms_and_url`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_post_x_release::test_build_release_post_text_trims_variants_to_fit_limit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_export_creates_facepack_with_expected_layout`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_export_handles_pre_1980_timestamp`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_restores_pre_1980_timestamp`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_external_image_with_windows_path_and_long_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_export_skips_foreign_windows_path_without_crashing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_is_foreign_windows_path_detection`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_safe_file_exists_swallows_oserror`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_safe_component_truncates_to_byte_budget`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_export_appends_extension_when_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_export_reports_missing_image_without_aborting`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_validate_rejects_wrong_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_validate_rejects_missing_manifest`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_validate_rejects_bad_manifest_json`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_validate_accepts_real_package`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_round_trip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_rejects_wrong_extension`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_rejects_non_empty_destination`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_refuses_path_traversal_archive`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_remaps_crop_paths`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_remaps_image_paths_with_relative_path`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_import_remaps_legacy_absolute_only_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_sanitize_component_handles_windows_illegal_names`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_sanitize_archive_path_splits_both_separators`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_safe_extract_sanitizes_illegal_member_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_project_package_service::test_remap_image_paths_matches_sanitized_extraction`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_metadata::test_begin_writes_pessimistic_record`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_metadata::test_finalize_clean_exit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_metadata::test_finalize_crashed_keeps_flag_and_errors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_metadata::test_resolution_omitted_when_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_metadata::test_monitors_and_layout_round_trip`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_format_timestamp_zero`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_format_timestamp_whole_seconds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_format_timestamp_fractional_seconds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_format_timestamp_negative_clamped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_format_timestamp_rounding`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_basic_srt_output`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_person_line_omitted_when_no_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_consecutive_identical_states_collapse`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_person_change_on_same_image_starts_new_block`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_partial_written_after_each_note`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_finalize_removes_partial`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_empty_timeline`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_recording_timeline_log::test_custom_person_prefix`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageCreation::test_can_create_remote_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageCreation::test_remote_image_repr`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageCreation::test_defaults`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageCreation::test_all_fields`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_image_remote_image_backref`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_remote_image_to_image_backref`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_image_without_remote_has_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_cascade_delete_removes_remote_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_one_to_one_uniqueness`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_remote_image_model.TestRemoteImageRelationship::test_deleted_remote_flag_update`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestClassification::test_strong_match_is_auto`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestClassification::test_partial_match_is_suggest`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestClassification::test_far_match_is_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestClassification::test_named_faces_are_never_candidates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestApplyAndUndo::test_auto_merge_moves_face_logs_and_cleans_up`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestApplyAndUndo::test_undo_restores_face_and_recreates_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_service.TestApplyAndUndo::test_latest_undoable_batch_tracks_state`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestEmitProgress::test_throttles_intermediate_updates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestEmitProgress::test_routes_through_task_context`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestExecute::test_nothing_to_do`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestExecute::test_classifies_and_applies_auto`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestExecute::test_cancel_mid_loop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestRun::test_run_emits_result`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestRun::test_run_cancelled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestRun::test_run_failure_emits_failed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestRun::test_run_in_task_uses_ctx_token`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestAiFaceDetection::test_skipped_when_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestAiFaceDetection::test_populates_stats_when_enabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_rerecognition_worker.TestAiFaceDetection::test_detection_config_is_threaded_to_service`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_ramp_clamps_and_interpolates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_no_throttle_when_idle`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_throttle_proportional_to_work_slice`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_throttle_scales_with_weight`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_workers_scale_down_with_load`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_disabled_override_means_full_speed`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_checkpoint_sleeps_under_load`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_checkpoint_no_sleep_when_idle`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_resource_governor::test_throttle_aborts_on_cancel`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_retroactive_verification_service::test_high_confidence_faces_are_exempt`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_retroactive_verification_service::test_verify_all_drops_exemption`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_retroactive_verification_service::test_manual_and_assigned_faces_are_flagged_not_dropped`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_modes_dialog::test_dialog_has_two_tabs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_modes_dialog::test_dialog_builds_with_all_cards`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_modes_dialog::test_workflow_signal_emitted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_modes_dialog::test_maintenance_signal_emitted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestHashFile::test_consistent_hash`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestHashFile::test_different_content_different_hash`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestScanService::test_scan_finds_correct_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestScanService::test_rescan_skips_unchanged`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestScanService::test_modified_file_requeued`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_scan_service.TestScanService::test_custom_extensions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_quality_presets`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_macos_args_mic_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_macos_args_with_system_audio_mixes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_windows_args_mic_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_windows_args_with_system_audio_mixes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_volume_and_mute_controls`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_meter_adds_stdout_tap`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_no_audio_uses_an`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_unsupported_platform_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_forced_keyframes_at_segment_boundary`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_cursor_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_concat_list_escapes_quotes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_concat_args`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_parse_avfoundation_devices`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_parse_dshow_audio_devices`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_pick_microphone_prefers_builtin_over_continuity`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_pick_system_audio`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_selected_displays_modes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_displays_bounding_box`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_mode_from_value_defaults_to_all`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_windows_all_is_bounding_box_crop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_windows_selected_single_monitor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_windows_active_window_uses_bounds`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_capture_screen_indices_skips_cameras`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_macos_all_uses_primary_av_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_macos_falls_back_when_av_index_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_macos_selected_uses_av_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_resolve_region_macos_active_window_falls_back_to_primary`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_effective_fps_reduces_for_multi_monitor`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_build_args_windows_with_crop_region`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_build_args_windows_with_window_title`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_build_args_macos_region_overrides_screen_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_parse_meter_peak_db`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_parse_ffprobe_audio_present`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_parse_ffprobe_audio_missing_and_zero_duration`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_audio_diagnostics_explains_missing_system_audio`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_audio_diagnostics_reports_mute`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_probe_devices_honors_explicit_mic_override`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_args::test_format_display_label`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_is_macos_and_windows`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_build_audio_filtergraph_single_source`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_build_audio_filtergraph_mixes_two_sources`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_build_audio_filtergraph_meter_tap`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_build_audio_filtergraph_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_match_name_exact_and_substring`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_match_av_index`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_resolve_system_audio_macos_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_resolve_system_audio_macos_explicit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_is_loopback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_resolve_ffmpeg_explicit`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_resolve_ffprobe_next_to_ffmpeg`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_list_audio_devices_empty_without_ffmpeg`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_list_audio_devices_macos`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_probe_screen_indices_non_macos`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_validate_recording_audio_missing_ffprobe`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_validate_recording_audio_missing_file`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service::test_validate_recording_audio_parses_probe_output`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service.TestScreenRecorderService::test_initial_state`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service.TestScreenRecorderService::test_start_pause_resume_stop`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service.TestScreenRecorderService::test_fail_when_ffmpeg_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service.TestScreenRecorderService::test_segment_paths_sorted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_screen_recorder_service.TestScreenRecorderService::test_audio_validation_summary_error`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestGrayscaleHelpers::test_is_grayscale_detects_bw`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestGrayscaleHelpers::test_is_grayscale_rejects_color`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestGrayscaleHelpers::test_enhance_grayscale_returns_bgr`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestSFaceEmbedder::test_missing_model_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestSFaceEmbedder::test_embed_returns_unit_vector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sface_embedder.TestSFaceEmbedder::test_grayscale_input_enhanced`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_context_derived_from_category`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_same_key_allowed_across_pages`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_conflict_within_same_page`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_global_shortcut_conflicts_across_pages`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_active_context_gates_firing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_context::test_no_scoping_fallback_is_context_agnostic`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_normalize_key_ignores_modifier_only`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_all_shortcuts_and_get`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_def_defaults_and_context`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_def_global_context`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_register_and_bind_fires_handler`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_unregister_removes_qshortcut`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_set_key_updates_binding`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_enabled_and_capturing_gate`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_shortcut_service_find_conflict_and_save`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_get_shortcut_service_returns_singleton`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_is_input_widget[lineedit-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_shortcut_service::test_is_input_widget[plain-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestBundlePath::test_returns_none_when_not_frozen`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestBundlePath::test_returns_app_root_when_frozen`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestIsSparkleAvailable::test_false_off_macos`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestIsSparkleAvailable::test_false_on_macos_when_not_frozen`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestIsSparkleAvailable::test_false_when_helper_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestIsSparkleAvailable::test_true_when_helper_present`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestStartBackgroundUpdateCheck::test_false_off_macos`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestStartBackgroundUpdateCheck::test_false_when_not_in_bundle`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestStartBackgroundUpdateCheck::test_launches_helper_when_available`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestCheckForUpdates::test_false_off_macos`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_sparkle_bridge.TestCheckForUpdates::test_launches_manual_check`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_subtitle_path_for_video_uses_same_basename`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_exact_recording_srt_is_selected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_language_suffix_is_not_selected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_unrelated_subtitle_is_not_selected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_dotted_language_suffix_is_not_selected`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_case_difference_still_matches`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_only_exact_match_is_selected_among_multiple_srt_files`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_subtitle_service::test_missing_matching_subtitle_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestCentroid::test_centroid_is_unit_length`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestCentroid::test_centroid_of_identical_vectors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestCentroid::test_centroid_normalises_inputs`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestCentroid::test_centroid_empty_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestGenerateSuggestions::test_unknown_matched_to_correct_person`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestGenerateSuggestions::test_no_suggestion_below_threshold`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestGenerateSuggestions::test_config_threshold_controls_output`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestGenerateSuggestions::test_multiple_matches_are_ranked`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestGenerateSuggestions::test_no_named_persons_yields_no_suggestions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestFaceFiltering::test_excluded_and_unembedded_faces_ignored`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestFaceFiltering::test_person_with_only_excluded_faces_is_not_a_candidate`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestApproveReject::test_rejected_pair_is_not_resuggested`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestApproveReject::test_reject_records_different_correction`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_suggestion_service.TestApproveReject::test_approve_merges_unknown_into_named`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_priority_ordering`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_high_priority_preempts_running_low`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_preempted_task_auto_resumes`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_non_pausable_low_is_not_preempted`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_manual_pause_frees_slot_and_resume_waits`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_resume_reclaims_slot_from_lower_priority`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_set_priority_reorders_queue`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_counts_and_active_count`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_transient_task_not_kept_in_history`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_cancel_queued_task`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_task_manager::test_auto_cleanup_finished_tasks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestLoadTfliteBackendSelection::test_ai_edge_litert_preferred`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestLoadTfliteBackendSelection::test_tflite_runtime_fallback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestLoadTfliteBackendSelection::test_tensorflow_fallback`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestLoadTfliteBackendSelection::test_no_backend_raises_import_error`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestLoadTfliteBackendSelection::test_error_message_includes_attempted_backends`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestEmbedBatch::test_batch_matches_serial`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestEmbedBatch::test_empty_batch_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_tflite_embedder.TestHOGFallback::test_embed_returns_normalized_vector`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_theme.TestTheme::test_apply_palette_sets_colors`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_theme.TestTheme::test_apply_theme_sets_stylesheet`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_cache::test_missing_path_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_cache::test_loads_and_caches`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_cache::test_different_size_is_separate_entry`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_cache::test_mtime_change_invalidates`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_worker.TestThumbnailRunnable::test_emits_ready_with_scaled_image`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_worker.TestThumbnailRunnable::test_failed_when_image_missing`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_worker.TestThumbnailRunnable::test_failed_on_zero_dimensions`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_thumbnail_worker.TestThumbnailRunnable::test_failed_on_exception`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[ai_visualization_window]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[auto_assignments_tab]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[auto_merge_review_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[collage_node_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[export_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[face_diagnostics_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[family_code_scheme_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[gdrive_settings_tab]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[group_manager_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[identity_repair_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[ignored_faces_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[image_library_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[manual_face_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[merge_decision_graph_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[merge_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[move_faces_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[object_info_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[object_merge_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[object_picker_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[overlapping_unknown_faces_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[person_info_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[place_edit_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[place_merge_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[rename_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[rerecognition_history_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[rerecognition_review_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[scan_modes_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[settings_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[shortcuts_settings_tab]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[suggestion_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[suggestion_viewer]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[task_manager_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[tpu_status_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_dialog_module_smoke[update_dialog]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_dialogs_smoke::test_overlapping_match_dataclass_importable`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[collage_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[family_search_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[groups_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[locations_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[log_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[objects_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[preview_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_panel_module_smoke[sidebar_panel]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_preview_panel_accepts_config`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_objects_panel_imports_cleanly`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_panels_smoke::test_collage_panel_has_empty_state`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[address_autocomplete_edit]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[audio_level_meter]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[collapsible_section]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[face_timeline_view]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[flow_layout]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[group_chip_select]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[object_gallery_widget]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[person_search_select]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[place_gallery_widget]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[place_map_picker_widget]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[place_map_widget]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[place_search_select]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[recording_controls]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[selectable_face_grid]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_widget_module_smoke[universal_search_bar]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_place_search_select_accepts_places`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_ui_widgets_smoke::test_universal_search_bar_empty_tokens`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_scatter_moves_siblings_keeps_selected_manual`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_pending_records_source_and_cleans_unknown`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_named_source_does_not_scatter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_protected_catchall_does_not_scatter`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_auto_confirm_high_similarity_clears_only_matching`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_auto_confirm_needs_reference_face`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_auto_confirm_disabled_keeps_pending`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_confirm_auto_merge_clears_markers`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_move_auto_merge_clears_markers`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_bulk_reassign_clears_pending`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_list_and_count_pending`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_pending_face_gets_decision_graph`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_list_pending_exposes_decision_and_bbox`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_decision_recorded_when_auto_merge_disabled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_old_row_without_decision_is_tolerated`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_merge_service::test_delete_face_removes_row`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_person_reset_service::test_reset_deletes_auto_named_persons_and_unassigns_their_faces`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_unknown_person_reset_service::test_reset_is_a_noop_without_auto_named_persons`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_parse_version[1.2.3-expected0]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_parse_version[v2.0.1-expected1]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_parse_version[bad-expected2]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_parse_version[1.2-expected3]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_is_newer[1.2.3-1.2.2-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_is_newer[1.2.3-1.2.3-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_is_newer[1.2.2-1.2.3-False]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_is_newer[v2.0.0-1.9.9-True]`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_pick_asset_macos_dmg_preferred`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_pick_asset_windows_exe_preferred`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_pick_asset_linux_arch_match`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_pick_asset_no_match_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_fetch_latest_release_success`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_fetch_latest_release_network_error_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_update_service::test_fetch_latest_release_no_matching_asset_returns_none`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_missing_model_raises`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_backend_name`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_none_result_returns_empty`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_landmarks_parsed_in_arcface_order`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_input_size_and_threshold_pushed_to_net`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetParsing::test_small_faces_filtered`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetGeometry::test_geometry_keeps_valid_landmarks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetGeometry::test_geometry_rejects_scrambled_landmarks`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetGeometry::test_geometry_disabled_keeps_scrambled`
+  - Why: All assertions and fixtures completed successfully.
+- PASS `tests.test_yunet_detector.TestYuNetRealModel::test_loads_and_runs`
+  - Why: All assertions and fixtures completed successfully.
+
+## Skipped Tests
+
+- SKIP `tests.test_coral_detector.TestCoralDetectorLive::test_detect_on_blank_image`
+  - Why: Coral Edge TPU unavailable
+- SKIP `tests.test_coral_detector.TestCoralDetectorLive::test_missing_model_raises`
+  - Why: Coral Edge TPU unavailable
+- SKIP `tests.test_face_metadata_export_service::test_macos_finder_comment_writes_xattr`
+  - Why: macOS Finder comment
